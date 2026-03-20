@@ -1,0 +1,14 @@
+{
+  "name": "polymarket-movers",
+  "version": "1.0.0",
+  "description": "Paid by Polymarket Phase 2 dashboard",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.22.1"
+  }
+}
