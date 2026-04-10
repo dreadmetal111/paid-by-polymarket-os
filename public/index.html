@@ -117,49 +117,37 @@
 
     <section class="panel">
       <div class="panel-header">
-        <h2>🔐 Account &amp; Live Mode</h2>
-        <button id="refreshAccount">Refresh</button>
+        <h2>⭐ Top Opportunities</h2>
+        <button id="refreshOpportunities">Refresh</button>
       </div>
-      <div id="accountStatePanel">
-        <p class="loading">Loading account state...</p>
-      </div>
-    </section>
-
-    <section class="panel">
-      <div class="panel-header">
-        <h2>⚙️ Account Controls</h2>
-      </div>
-      <div id="accountControlsPanel">
-        <p class="loading">Loading account controls...</p>
+      <div id="topOpportunities" class="market-grid">
+        <p class="loading">Loading opportunities...</p>
       </div>
     </section>
 
     <section class="panel">
       <div class="panel-header">
-        <h2>📊 Performance Dashboard</h2>
-        <button id="refreshPerformance">Refresh</button>
+        <h2>📈 Biggest Movers</h2>
+        <button id="refreshMovers">Refresh</button>
       </div>
-      <div id="performanceStatsPanel">
-        <p class="loading">Loading performance stats...</p>
-      </div>
-    </section>
-
-    <section class="panel">
-      <div class="panel-header">
-        <h2>💼 Paper Portfolio</h2>
-        <button id="refreshPaperPortfolio">Refresh</button>
-      </div>
-      <div id="paperPortfolioStatsPanel">
-        <p class="loading">Loading paper portfolio...</p>
+      <div id="biggestMovers" class="market-grid">
+        <p class="loading">Loading biggest movers...</p>
       </div>
     </section>
 
     <section class="panel">
       <div class="panel-header">
-        <h2>🎛 Portfolio Controls</h2>
+        <h2>🔥 Hot Markets</h2>
+        <div class="filters">
+          <input id="minVolume" type="number" placeholder="Min Vol ($)" />
+          <input id="minPrice" type="number" step="0.01" placeholder="Min Price (0.1)" />
+          <input id="maxPrice" type="number" step="0.01" placeholder="Max Price (0.9)" />
+          <button id="applyFilters">Apply</button>
+          <button id="refreshHot">Refresh</button>
+        </div>
       </div>
-      <div id="paperPortfolioControlsPanel">
-        <p class="loading">Loading controls...</p>
+      <div id="hotMarkets" class="market-grid">
+        <p class="loading">Loading hot markets...</p>
       </div>
     </section>
 
@@ -204,6 +192,36 @@
 
     <section class="panel">
       <div class="panel-header">
+        <h2>📊 Performance Dashboard</h2>
+        <button id="refreshPerformance">Refresh</button>
+      </div>
+      <div id="performanceStatsPanel">
+        <p class="loading">Loading performance stats...</p>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header">
+        <h2>💼 Paper Portfolio</h2>
+        <button id="refreshPaperPortfolio">Refresh</button>
+      </div>
+      <div id="paperPortfolioStatsPanel">
+        <p class="loading">Loading paper portfolio...</p>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header">
+        <h2>📈 Signal Tracking</h2>
+        <button id="refreshSignals">Refresh</button>
+      </div>
+      <div id="signalLogPanel" class="alerts-list">
+        <p class="loading">Loading tracked signals...</p>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header">
         <h2>🟢 Open Positions</h2>
       </div>
       <div id="openPositionsPanel" class="alerts-list">
@@ -222,57 +240,29 @@
 
     <section class="panel">
       <div class="panel-header">
-        <h2>📈 Signal Tracking</h2>
-        <button id="refreshSignals">Refresh</button>
+        <h2>🔐 Account &amp; Live Mode</h2>
+        <button id="refreshAccount">Refresh</button>
       </div>
-      <div id="signalLogPanel" class="alerts-list">
-        <p class="loading">Loading tracked signals...</p>
-      </div>
-    </section>
-
-    <section class="panel">
-      <div class="panel-header">
-        <h2>⭐ Top Opportunities</h2>
-        <button id="refreshOpportunities">Refresh</button>
-      </div>
-      <div id="topOpportunities" class="market-grid">
-        <p class="loading">Loading opportunities...</p>
+      <div id="accountStatePanel">
+        <p class="loading">Loading account state...</p>
       </div>
     </section>
 
-    <section class="panel">
+    <section class="panel dev-tools-panel">
       <div class="panel-header">
-        <h2>🚨 Alerts</h2>
-        <button id="refreshAlerts">Refresh</button>
+        <h2>⚙️ Account Controls</h2>
       </div>
-      <div id="alertsPanel" class="alerts-list">
-        <p class="loading">Loading alerts...</p>
+      <div id="accountControlsPanel">
+        <p class="loading">Loading account controls...</p>
       </div>
     </section>
 
-    <section class="panel">
+    <section class="panel dev-tools-panel">
       <div class="panel-header">
-        <h2>🔥 Hot Markets</h2>
-        <div class="filters">
-          <input id="minVolume" type="number" placeholder="Min Vol ($)" />
-          <input id="minPrice" type="number" step="0.01" placeholder="Min Price (0.1)" />
-          <input id="maxPrice" type="number" step="0.01" placeholder="Max Price (0.9)" />
-          <button id="applyFilters">Apply</button>
-          <button id="refreshHot">Refresh</button>
-        </div>
+        <h2>🎛 Portfolio Controls</h2>
       </div>
-      <div id="hotMarkets" class="market-grid">
-        <p class="loading">Loading hot markets...</p>
-      </div>
-    </section>
-
-    <section class="panel">
-      <div class="panel-header">
-        <h2>📈 Biggest Movers</h2>
-        <button id="refreshMovers">Refresh</button>
-      </div>
-      <div id="biggestMovers" class="market-grid">
-        <p class="loading">Loading biggest movers...</p>
+      <div id="paperPortfolioControlsPanel">
+        <p class="loading">Loading controls...</p>
       </div>
     </section>
   </main>
