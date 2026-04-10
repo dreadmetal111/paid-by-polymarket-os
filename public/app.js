@@ -81,7 +81,7 @@ function renderSignalLogItem(signal) {
     <div class="alert-item">
       <div class="alert-message">${signal.actionSignal}: ${signal.question}</div>
       <div class="alert-time">Logged: ${formatTimestamp(signal.createdAt)}</div>
-      <div class="alert-time">Reason: ${signal.actionReason}</div>
+      <div class="alert-time">Why it stood out: ${signal.actionReason}</div>
       <div class="alert-time">Confidence: ${signal.confidenceScore}/100</div>
       <div class="alert-time">Entry: ${formatProbability(signal.entryYesPrice)}</div>
       <div class="alert-time">Current: ${formatProbability(signal.currentYesPrice)}</div>
@@ -117,7 +117,7 @@ function renderPerformanceStats(stats) {
   return `
     <div class="market-grid">
       <article class="market-card">
-        <h3>Portfolio Stats</h3>
+        <h3>Performance Summary</h3>
         <div class="market-meta">
           <div class="meta-box"><span class="meta-label">Total Signals</span><span class="meta-value">${stats.totalSignals ?? 0}</span></div>
           <div class="meta-box"><span class="meta-label">Active</span><span class="meta-value">${stats.activeSignals ?? 0}</span></div>
@@ -127,7 +127,7 @@ function renderPerformanceStats(stats) {
       </article>
 
       <article class="market-card">
-        <h3>Edge Stats</h3>
+        <h3>Edge Summary</h3>
         <div class="market-meta">
           <div class="meta-box"><span class="meta-label">Win Rate</span><span class="meta-value">${winRatePct}%</span></div>
           <div class="meta-box"><span class="meta-label">Avg Performance</span><span class="meta-value">${avgPerfLabel}</span></div>
@@ -164,7 +164,7 @@ function renderAccountPanel(account) {
       </article>
 
       <article class="market-card">
-        <h3>Live Mode Readiness</h3>
+        <h3>Live Readiness</h3>
         <div class="market-meta">
           <div class="meta-box"><span class="meta-label">Can Enable Live</span><span class="meta-value">${account.canEnableLiveMode ? "YES" : "NO"}</span></div>
           <div class="meta-box"><span class="meta-label">Builder Ready</span><span class="meta-value">${account.builderReady ? "YES" : "NO"}</span></div>
@@ -188,7 +188,7 @@ function renderAccountControls() {
   return `
     <div class="market-grid">
       <article class="market-card">
-        <h3>Connect Account</h3>
+        <h3>Advanced Setup</h3>
         <div class="market-meta">
           <div class="meta-box">
             <span class="meta-label">Wallet Address</span>
@@ -221,7 +221,7 @@ function renderAccountControls() {
       </article>
 
       <article class="market-card">
-        <h3>Builder Settings</h3>
+        <h3>Builder Routing Settings</h3>
         <div class="market-meta">
           <div class="meta-box">
             <span class="meta-label">Builder API Configured</span>
@@ -239,7 +239,7 @@ function renderAccountControls() {
           </div>
           <div class="meta-box">
             <span class="meta-label">Save</span>
-            <button id="saveBuilderSettingsBtn">Save Builder Settings</button>
+            <button id="saveBuilderSettingsBtn">Save Settings</button>
           </div>
           <div class="meta-box">
             <span class="meta-label">Disconnect</span>
@@ -268,7 +268,7 @@ function renderPaperPortfolioStats(stats) {
       </article>
 
       <article class="market-card">
-        <h3>Paper Portfolio Summary</h3>
+        <h3>Paper Trading Summary</h3>
         <div class="market-meta">
           <div class="meta-box"><span class="meta-label">Total Positions</span><span class="meta-value">${stats.totalPositions ?? 0}</span></div>
           <div class="meta-box"><span class="meta-label">Open</span><span class="meta-value">${stats.openPositions ?? 0}</span></div>
@@ -305,7 +305,7 @@ function renderPaperPositionItem(position) {
       <div class="alert-message">${position.actionSignal}: ${position.question}</div>
       <div class="alert-time">Source: ${position.source || "AUTO"}</div>
       <div class="alert-time">Opened: ${formatTimestamp(position.openedAt)}</div>
-      <div class="alert-time">Reason: ${position.actionReason}</div>
+      <div class="alert-time">Why it was opened: ${position.actionReason}</div>
       <div class="alert-time">Confidence: ${position.confidenceScore}/100</div>
       <div class="alert-time">Size: ${formatMoney(position.positionSizeDollars || 0)}</div>
       <div class="alert-time">Entry: ${formatProbability(position.entryYesPrice)}</div>
@@ -323,7 +323,7 @@ function renderPaperPositionItem(position) {
 function renderManualTradeControls() {
   return `
     <div class="market-card">
-      <h3>Manual Paper Trade</h3>
+      <h3>Manual Paper Entry</h3>
       <div class="market-meta">
         <div class="meta-box"><span class="meta-label">Market ID</span><input id="manualMarketId" type="text" placeholder="Enter market ID" /></div>
         <div class="meta-box"><span class="meta-label">Signal Side</span>
@@ -342,7 +342,7 @@ function renderManualTradeControls() {
 function renderResetControls() {
   return `
     <div class="market-card">
-      <h3>Reset Paper Portfolio</h3>
+      <h3>Portfolio Reset</h3>
       <div class="market-meta">
         <div class="meta-box"><span class="meta-label">Starting Bankroll</span><input id="resetStartingBankroll" type="number" min="1" step="1" placeholder="1000" /></div>
         <div class="meta-box"><span class="meta-label">Default Position Size</span><input id="resetDefaultPositionSize" type="number" min="1" step="1" placeholder="50" /></div>
@@ -369,7 +369,7 @@ function renderTradeTicket(quote) {
         <div class="meta-box"><span class="meta-label">Estimated Max Loss</span><span class="meta-value">${formatMoney(quote.estimatedMaxLoss)}</span></div>
         <div class="meta-box"><span class="meta-label">Potential Profit</span><span class="meta-value">${formatMoney(quote.estimatedProfitIfCorrect)}</span></div>
         <div class="meta-box"><span class="meta-label">Confidence</span><span class="meta-value">${quote.confidenceScore}/100</span></div>
-        <div class="meta-box"><span class="meta-label">Reason</span><span class="meta-value">${quote.actionReason}</span></div>
+        <div class="meta-box"><span class="meta-label">Why this trade</span><span class="meta-value">${quote.actionReason}</span></div>
       </div>
 
       ${liveBlocked ? `<div class="alert-item"><div class="alert-message">Live mode is blocked.</div><div class="alert-time">Connect an account and clear readiness blockers first.</div></div>` : ""}
@@ -413,13 +413,12 @@ function renderHotCard(market) {
       </div>
 
       <div class="market-meta">
-        <div class="meta-box"><span class="meta-label">Market ID</span><span class="meta-value">${market.id}</span></div>
         <div class="meta-box"><span class="meta-label">Yes Price</span><span class="meta-value">${formatProbability(market.yesPriceLive)}</span></div>
         <div class="meta-box"><span class="meta-label">24h Volume</span><span class="meta-value">${formatMoney(market.volume24hr)}</span></div>
         <div class="meta-box"><span class="meta-label">Liquidity</span><span class="meta-value">${formatMoney(market.liquidity)}</span></div>
         <div class="meta-box"><span class="meta-label">Confidence</span><span class="meta-value">${market.confidenceScore ?? "—"}/100</span></div>
-        <div class="meta-box"><span class="meta-label">Action</span><span class="meta-value">${market.actionSignal ?? "WATCH"}</span></div>
-        <div class="meta-box"><span class="meta-label">Reason</span><span class="meta-value">${market.actionReason ?? "No reason yet"}</span></div>
+        <div class="meta-box"><span class="meta-label">Signal</span><span class="meta-value">${market.actionSignal ?? "WATCH"}</span></div>
+        <div class="meta-box"><span class="meta-label">Why it matters</span><span class="meta-value">${market.actionReason ?? "No reason yet"}</span></div>
       </div>
 
       <div class="market-footer">
@@ -428,8 +427,8 @@ function renderHotCard(market) {
       </div>
 
       <div class="market-footer" style="margin-top: 12px;">
-        <button class="trade-action-btn" data-market-id="${market.id}" data-side="BUY YES">Quote BUY YES</button>
-        <button class="trade-action-btn" data-market-id="${market.id}" data-side="BUY NO">Quote BUY NO</button>
+        <button class="trade-action-btn" data-market-id="${market.id}" data-side="BUY YES">Preview BUY YES</button>
+        <button class="trade-action-btn" data-market-id="${market.id}" data-side="BUY NO">Preview BUY NO</button>
       </div>
     </article>
   `;
@@ -444,7 +443,7 @@ function renderMoverCard(market) {
 
       <div class="market-meta">
         <div class="meta-box"><span class="meta-label">Current Price</span><span class="meta-value">${formatProbability(market.yesPriceLive)}</span></div>
-        <div class="meta-box"><span class="meta-label">1h Ago</span><span class="meta-value">${formatProbability(market.pastPrice)}</span></div>
+        <div class="meta-box"><span class="meta-label">Recent Price</span><span class="meta-value">${formatProbability(market.pastPrice)}</span></div>
         <div class="meta-box"><span class="meta-label">Price Change</span><span class="meta-value ${changeClass}">${formatChangeAsProbability(market.priceChange)}</span></div>
         <div class="meta-box"><span class="meta-label">Percent Change</span><span class="meta-value ${changeClass}">${formatPercentChange(market.percentChange)}</span></div>
       </div>
@@ -459,9 +458,11 @@ function renderMoverCard(market) {
 
 function applyHotFilters() {
   const container = document.getElementById("hotMarkets");
-  const minVolume = Number(document.getElementById("minVolume").value) || 0;
-  const minPrice = Number(document.getElementById("minPrice").value) || 0;
-  const maxPrice = Number(document.getElementById("maxPrice").value) || 1;
+  if (!container) return;
+
+  const minVolume = Number(document.getElementById("minVolume")?.value) || 0;
+  const minPrice = Number(document.getElementById("minPrice")?.value) || 0;
+  const maxPrice = Number(document.getElementById("maxPrice")?.value) || 1;
 
   const filtered = hotMarketsCache.filter((market) =>
     market.volume24hr >= minVolume &&
@@ -470,7 +471,7 @@ function applyHotFilters() {
   );
 
   if (filtered.length === 0) {
-    container.innerHTML = `<p class="empty">No markets match filters.</p>`;
+    container.innerHTML = `<p class="empty">No markets match your filters.</p>`;
     return;
   }
 
@@ -713,7 +714,7 @@ async function loadAlerts() {
     if (!data.ok || !Array.isArray(data.alerts)) throw new Error("Invalid alerts response");
 
     if (data.alerts.length === 0) {
-      container.innerHTML = `<p class="empty">No alerts yet. Let the scanner run.</p>`;
+      container.innerHTML = `<p class="empty">No priority alerts right now.</p>`;
       return;
     }
 
@@ -906,7 +907,7 @@ async function loadBiggestMovers() {
     if (!data.ok || !Array.isArray(data.markets)) throw new Error("Invalid biggest movers response");
 
     if (data.markets.length === 0) {
-      container.innerHTML = `<p class="empty">No movers found yet.</p>`;
+      container.innerHTML = `<p class="empty">Mover data is warming up. Check back shortly.</p>`;
       return;
     }
 
