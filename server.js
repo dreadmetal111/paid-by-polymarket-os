@@ -1,10 +1,19 @@
 import express from "express";
 import cors from "cors";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
 app.use(cors());
 app.use(express.json());
-app.use(express.static("public"));
+app.use(express.static(path.join(__dirname, "public")));
+
+app.get("/", (_, res) => {
+  res.sendFile(path.join(__dirname, "public", "index.html"));
+});
 
 const GAMMA = "https://gamma-api.polymarket.com";
 const CLOB = "https://clob.polymarket.com";
@@ -16,6 +25,7 @@ const CLOB = "https://clob.polymarket.com";
 let signalLog = [];
 let signalLogTimestamps = new Map();
 let paperPortfolio = [];
+let priceHistory = new Map();
 
 let paperBankroll = {
   startingBankroll: 1000,
@@ -37,6 +47,8 @@ let accountState = {
 };
 
 const SIGNAL_LOG_COOLDOWN_MS = 30 * 60 * 1000;
+const PRICE_HISTORY_WINDOW_MS = 2 * 60 * 60 * 1000;
+const MOVER_LOOKBACK_MS = 30 * 60 * 1000;
 
 // ===============================
 // HELPERS
@@ -383,12 +395,16 @@ function updatePaperPortfolio(currentMarkets) {
         status = "CLOSED";
         closeReason = "Take Profit (+5 pts)";
         closedAt = nowIso();
-        paperBankroll.cash = round4(paperBankroll.cash + position.positionSizeDollars + pnlDollars);
+        paperBankroll.cash = round4(
+          paperBankroll.cash + position.positionSizeDollars + pnlDollars
+        );
       } else if (pnlPoints <= -0.05) {
         status = "CLOSED";
         closeReason = "Stop Loss (-5 pts)";
         closedAt = nowIso();
-        paperBankroll.cash = round4(paperBankroll.cash + position.positionSizeDollars + pnlDollars);
+        paperBankroll.cash = round4(
+          paperBankroll.cash + position.positionSizeDollars + pnlDollars
+        );
       }
     }
 
@@ -488,6 +504,8 @@ function resetPaperPortfolio(startingBankroll = 1000, defaultPositionSize = 50) 
   signalLog = [];
   signalLogTimestamps = new Map();
   paperPortfolio = [];
+  priceHistory = new Map();
+
   paperBankroll = {
     startingBankroll: round4(startingBankroll),
     cash: round4(startingBankroll),
@@ -502,12 +520,8 @@ function getPaperPortfolioStats() {
   const closedLosses = closed.filter((p) => p.pnlPoints < 0);
 
   const avgOpenPnl = round4(avg(open.map((p) => p.pnlPoints || 0)));
-  const realizedPnl = round4(
-    closed.reduce((sum, p) => sum + (p.pnlDollars || 0), 0)
-  );
-  const unrealizedPnlDollars = round4(
-    open.reduce((sum, p) => sum + (p.pnlDollars || 0), 0)
-  );
+  const realizedPnl = round4(closed.reduce((sum, p) => sum + (p.pnlDollars || 0), 0));
+  const unrealizedPnlDollars = round4(open.reduce((sum, p) => sum + (p.pnlDollars || 0), 0));
 
   const closedWinRate = closed.length
     ? Number((closedWins.length / closed.length).toFixed(4))
@@ -660,6 +674,99 @@ function maybeLogSignals(markets) {
   }
 
   signalLog = signalLog.slice(0, 300);
+}
+
+// ===============================
+// ALERTS + MOVER HISTORY
+// ===============================
+
+function updatePriceHistory(markets) {
+  const now = Date.now();
+
+  for (const market of markets) {
+    if (market.yesPriceLive === null || market.yesPriceLive === undefined) continue;
+
+    const existing = priceHistory.get(market.id) || [];
+    const next = [
+      ...existing,
+      {
+        timestamp: now,
+        price: Number(market.yesPriceLive),
+      },
+    ].filter((row) => now - row.timestamp <= PRICE_HISTORY_WINDOW_MS);
+
+    priceHistory.set(market.id, next);
+  }
+}
+
+function getPastPrice(marketId, lookbackMs = MOVER_LOOKBACK_MS) {
+  const rows = priceHistory.get(marketId) || [];
+  if (!rows.length) return null;
+
+  const target = Date.now() - lookbackMs;
+  let best = rows[0];
+
+  for (const row of rows) {
+    if (Math.abs(row.timestamp - target) < Math.abs(best.timestamp - target)) {
+      best = row;
+    }
+  }
+
+  return typeof best.price === "number" ? best.price : null;
+}
+
+function buildAlerts(limit = 8) {
+  return signalLog
+    .slice()
+    .sort((a, b) => new Date(b.updatedAt || b.createdAt) - new Date(a.updatedAt || a.createdAt))
+    .filter((s) => s.actionSignal === "BUY YES" || s.actionSignal === "BUY NO")
+    .slice(0, limit)
+    .map((s) => ({
+      id: s.id,
+      message: `${s.actionSignal}: ${s.question} — ${s.actionReason}`,
+      timestamp: s.updatedAt || s.createdAt || nowIso(),
+    }));
+}
+
+function buildBiggestMovers(markets, limit = 8) {
+  const movers = markets.map((m) => {
+    const currentPrice = m.yesPriceLive;
+
+    if (currentPrice === null || currentPrice === undefined) {
+      return {
+        ...m,
+        pastPrice: null,
+        priceChange: 0,
+        percentChange: 0,
+      };
+    }
+
+    const historicalPrice = getPastPrice(m.id);
+    const pastPrice =
+      historicalPrice === null || historicalPrice === undefined
+        ? currentPrice
+        : historicalPrice;
+
+    const priceChange = round4(currentPrice - pastPrice);
+    const percentChange =
+      pastPrice > 0 ? round4(priceChange / pastPrice) : 0;
+
+    return {
+      ...m,
+      pastPrice: round4(pastPrice),
+      priceChange,
+      percentChange,
+    };
+  });
+
+  return movers
+    .slice()
+    .sort((a, b) => {
+      const changeDiff = Math.abs(b.priceChange) - Math.abs(a.priceChange);
+      if (changeDiff !== 0) return changeDiff;
+      return (b.volume24hr || 0) - (a.volume24hr || 0);
+    })
+    .slice(0, limit);
 }
 
 // ===============================
@@ -821,6 +928,8 @@ async function buildMarkets() {
 async function runEngine() {
   const markets = await buildMarkets();
 
+  updatePriceHistory(markets);
+
   const top = markets
     .slice()
     .sort((a, b) => b.confidenceScore - a.confidenceScore)
@@ -845,6 +954,31 @@ app.get("/api/liveMarkets", async (_, res) => {
     res.status(500).json({
       ok: false,
       error: err.message || "Failed to fetch markets",
+    });
+  }
+});
+
+app.get("/api/alerts", (_, res) => {
+  try {
+    const alerts = buildAlerts();
+    res.json({ ok: true, alerts });
+  } catch (err) {
+    res.status(500).json({
+      ok: false,
+      error: err.message || "Failed to load alerts",
+    });
+  }
+});
+
+app.get("/api/biggestMovers", async (_, res) => {
+  try {
+    const markets = await buildMarkets();
+    const movers = buildBiggestMovers(markets);
+    res.json({ ok: true, markets: movers });
+  } catch (err) {
+    res.status(500).json({
+      ok: false,
+      error: err.message || "Failed to load biggest movers",
     });
   }
 });
@@ -1138,6 +1272,18 @@ const PORT = process.env.PORT || 3001;
 
 app.listen(PORT, async () => {
   console.log(`Running on http://localhost:${PORT}`);
-  await runEngine();
-  setInterval(runEngine, 60000);
+
+  try {
+    await runEngine();
+  } catch (err) {
+    console.error("Initial engine run failed:", err.message || err);
+  }
+
+  setInterval(async () => {
+    try {
+      await runEngine();
+    } catch (err) {
+      console.error("Scheduled engine run failed:", err.message || err);
+    }
+  }, 60000);
 });
