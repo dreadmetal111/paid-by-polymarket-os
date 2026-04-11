@@ -1,6 +1,7 @@
 let hotMarketsCache = [];
 let currentTradeTicket = null;
 let accountStateCache = null;
+let currentLivePreparation = null;
 
 function formatProbability(value) {
   if (value === null || value === undefined || Number.isNaN(value)) return "—";
@@ -48,6 +49,10 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
+function formatJsonBlock(value) {
+  return escapeHtml(JSON.stringify(value ?? {}, null, 2));
+}
+
 function getCurrentTradeMode() {
   const modeSelect = document.getElementById("tradeModeSelect");
   return modeSelect?.value || "PAPER";
@@ -67,6 +72,18 @@ function getMarketSignals(market) {
   if ((market.confidenceScore || 0) >= 80) signals.push("🎯 High Confidence");
 
   return signals;
+}
+
+function parseJsonText(value, label) {
+  try {
+    const parsed = JSON.parse(value);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error();
+    }
+    return parsed;
+  } catch {
+    throw new Error(`${label} must be valid JSON`);
+  }
 }
 
 function renderAlertItem(alert) {
@@ -179,6 +196,8 @@ function renderAccountPanel(account) {
           <div class="meta-box"><span class="meta-label">Builder Ready</span><span class="meta-value">${account.builderReady ? "YES" : "NO"}</span></div>
           <div class="meta-box"><span class="meta-label">Builder API</span><span class="meta-value">${account.builderApiConfigured ? "READY" : "NOT READY"}</span></div>
           <div class="meta-box"><span class="meta-label">Relayer</span><span class="meta-value">${account.relayerReady ? "READY" : "NOT READY"}</span></div>
+          <div class="meta-box"><span class="meta-label">Signed Handoff</span><span class="meta-value">${account.signedOrderHandoffEnabled ? "READY" : "NOT READY"}</span></div>
+          <div class="meta-box"><span class="meta-label">Real Live Submit</span><span class="meta-value">${account.realLiveSubmitEnabled ? "ON" : "SAFE FALLBACK"}</span></div>
         </div>
         <div class="alert-item" style="margin-top: 10px;">
           <div class="alert-message">Live Mode</div>
@@ -193,7 +212,7 @@ function renderAccountPanel(account) {
   `;
 }
 
-function renderAccountControls() {
+function renderAccountControls(account = {}) {
   return `
     <div class="market-grid">
       <article class="market-card">
@@ -230,30 +249,21 @@ function renderAccountControls() {
       </article>
 
       <article class="market-card">
-        <h3>Builder Routing Settings</h3>
+        <h3>Builder Server Status</h3>
         <div class="market-meta">
-          <div class="meta-box">
-            <span class="meta-label">Builder API Configured</span>
-            <select id="builderApiConfigured">
-              <option value="false">false</option>
-              <option value="true">true</option>
-            </select>
-          </div>
-          <div class="meta-box">
-            <span class="meta-label">Relayer Ready</span>
-            <select id="relayerReady">
-              <option value="false">false</option>
-              <option value="true">true</option>
-            </select>
-          </div>
-          <div class="meta-box">
-            <span class="meta-label">Save</span>
-            <button id="saveBuilderSettingsBtn">Save Settings</button>
-          </div>
-          <div class="meta-box">
-            <span class="meta-label">Disconnect</span>
-            <button id="disconnectAccountBtn">Disconnect Account</button>
-          </div>
+          <div class="meta-box"><span class="meta-label">Config Source</span><span class="meta-value">${account.builderConfigSource || "SERVER_ENV"}</span></div>
+          <div class="meta-box"><span class="meta-label">Builder API</span><span class="meta-value">${account.builderApiConfigured ? "READY" : "NOT READY"}</span></div>
+          <div class="meta-box"><span class="meta-label">Relayer</span><span class="meta-value">${account.relayerReady ? "READY" : "NOT READY"}</span></div>
+          <div class="meta-box"><span class="meta-label">Live Routing</span><span class="meta-value">${account.liveRoutingEnabled ? "ON" : "OFF"}</span></div>
+          <div class="meta-box"><span class="meta-label">Signed Handoff</span><span class="meta-value">${account.signedOrderHandoffEnabled ? "READY" : "NOT READY"}</span></div>
+          <div class="meta-box"><span class="meta-label">Real Submit</span><span class="meta-value">${account.realLiveSubmitEnabled ? "ON" : "SAFE FALLBACK"}</span></div>
+        </div>
+        <div class="alert-item">
+          <div class="alert-message">Builder readiness is now read-only.</div>
+          <div class="alert-time">This status comes from Render environment variables and backend checks, not frontend toggles.</div>
+        </div>
+        <div style="margin-top: 14px;">
+          <button id="disconnectAccountBtn">Disconnect Account</button>
         </div>
       </article>
     </div>
@@ -385,70 +395,73 @@ function renderTradeTicket(quote) {
 
       <div class="market-footer">
         <button id="executePaperTradeBtn" ${mode === "LIVE" ? "style='display:none;'" : ""}>Execute Paper Trade</button>
-        <button id="prepareLiveTradeBtn">${mode === "LIVE" ? "Run Builder Dry Run" : "Preview Live Trade"}</button>
+        <button id="prepareLiveTradeBtn">${mode === "LIVE" ? "Prepare Signed Handoff" : "Preview Live Trade"}</button>
       </div>
     </div>
   `;
 }
 
-function renderLivePreparation(preparation) {
-  const ticket = preparation.ticket || {};
-  const dryRun = preparation.dryRunRouting || {};
-  const requestPlan = dryRun.requestPlan || {};
-  const builderAttribution = dryRun.builderAttribution || {};
-  const readinessChecks = dryRun.readinessChecks || {};
-  const orderDraft = dryRun.orderDraft || {};
-  const blockedReasons = dryRun.blockedReasons || [];
-  const warnings = dryRun.warnings || [];
-  const nextSteps = preparation.nextSteps || [];
-
-  const orderDraftJson = escapeHtml(JSON.stringify(orderDraft, null, 2));
-
-  const blockedHtml = blockedReasons.length
-    ? `
-      <article class="market-card">
-        <h3>Blocked By</h3>
-        <div class="alerts-list">
-          ${blockedReasons.map((reason) => `<div class="alert-item"><div class="alert-message">${reason}</div></div>`).join("")}
-        </div>
-      </article>
-    `
-    : "";
-
-  const warningsHtml = warnings.length
-    ? `
-      <article class="market-card">
-        <h3>Dry-Run Notes</h3>
-        <div class="alerts-list">
-          ${warnings.map((warning) => `<div class="alert-item"><div class="alert-message">${warning}</div></div>`).join("")}
-        </div>
-      </article>
-    `
-    : "";
-
-  const nextStepsHtml = nextSteps.length
-    ? `
-      <article class="market-card">
-        <h3>Next Steps</h3>
-        <div class="alerts-list">
-          ${nextSteps.map((step) => `<div class="alert-item"><div class="alert-message">${step}</div></div>`).join("")}
-        </div>
-      </article>
-    `
-    : "";
+function renderSignedOrderSubmitResult(response, isError = false) {
+  const result = response?.result || {};
+  const summary = result.requestSummary || {};
+  const clobResponse = result.clobResponse || null;
 
   return `
     <div class="market-grid">
       <article class="market-card">
-        <h3>Builder Dry Run Status</h3>
+        <h3>${isError ? "Signed Handoff Error" : "Signed Handoff Result"}</h3>
+        <div class="market-meta">
+          <div class="meta-box"><span class="meta-label">Status</span><span class="meta-value">${result.status || (isError ? "ERROR" : "DONE")}</span></div>
+          <div class="meta-box"><span class="meta-label">Forwarded</span><span class="meta-value">${response?.forwarded ? "YES" : "NO"}</span></div>
+          <div class="meta-box"><span class="meta-label">Dry-Run Fallback</span><span class="meta-value">${response?.dryRunFallback ? "YES" : "NO"}</span></div>
+          <div class="meta-box"><span class="meta-label">Real Submission</span><span class="meta-value">${summary.realSubmissionAttempted ? "YES" : "NO"}</span></div>
+          <div class="meta-box"><span class="meta-label">Builder Attribution</span><span class="meta-value">${summary.builderAttributionAttached ? "YES" : "NO"}</span></div>
+          <div class="meta-box"><span class="meta-label">User L2 Auth</span><span class="meta-value">${summary.userL2AuthAttached ? "YES" : "NO"}</span></div>
+        </div>
+        <div class="alert-item">
+          <div class="alert-message">${result.message || response?.error || "No response message provided."}</div>
+        </div>
+      </article>
+
+      <article class="market-card">
+        <h3>Request Summary</h3>
+        <div class="alert-item">
+          <pre style="margin:0; white-space:pre-wrap; word-break:break-word; font-size:0.82rem; line-height:1.5; color:#cbd5e1;">${formatJsonBlock(summary)}</pre>
+        </div>
+      </article>
+    </div>
+
+    ${clobResponse ? `
+      <div class="market-grid" style="margin-top: 18px;">
+        <article class="market-card">
+          <h3>CLOB Response</h3>
+          <div class="alert-item">
+            <pre style="margin:0; white-space:pre-wrap; word-break:break-word; font-size:0.82rem; line-height:1.5; color:#cbd5e1;">${formatJsonBlock(clobResponse)}</pre>
+          </div>
+        </article>
+      </div>
+    ` : ""}
+  `;
+}
+
+function renderLivePreparation(preparation) {
+  const ticket = preparation.ticket || {};
+  const handoff = preparation.signedOrderHandoff || {};
+  const blockedReasons = handoff.blockedReasons || [];
+  const nextSteps = preparation.nextSteps || [];
+
+  return `
+    <div class="market-grid">
+      <article class="market-card">
+        <h3>Signed Handoff Status</h3>
         <div class="market-meta">
           <div class="meta-box"><span class="meta-label">Mode</span><span class="meta-value">${preparation.mode || "LIVE"}</span></div>
           <div class="meta-box"><span class="meta-label">Status</span><span class="meta-value">${preparation.status || "—"}</span></div>
-          <div class="meta-box"><span class="meta-label">Dry Run</span><span class="meta-value">${preparation.dryRun ? "YES" : "NO"}</span></div>
           <div class="meta-box"><span class="meta-label">Builder Ready</span><span class="meta-value">${preparation.builderReady ? "YES" : "NO"}</span></div>
+          <div class="meta-box"><span class="meta-label">Submission Mode</span><span class="meta-value">${handoff.submissionMode || "SAFE_FALLBACK_ONLY"}</span></div>
         </div>
         <div class="alert-item">
-          <div class="alert-message">${preparation.message || "Live preparation response received."}</div>
+          <div class="alert-message">${preparation.message || "Live preparation complete."}</div>
           <div class="alert-time">Question: ${ticket.question || "—"}</div>
           <div class="alert-time">Side: ${ticket.side || "—"}</div>
           <div class="alert-time">Size: ${formatMoney(ticket.sizeDollars || 0)}</div>
@@ -457,47 +470,63 @@ function renderLivePreparation(preparation) {
       </article>
 
       <article class="market-card">
-        <h3>Routing Summary</h3>
-        <div class="market-meta">
-          <div class="meta-box"><span class="meta-label">Route ID</span><span class="meta-value">${dryRun.routeId || "—"}</span></div>
-          <div class="meta-box"><span class="meta-label">Stage</span><span class="meta-value">${dryRun.stage || "—"}</span></div>
-          <div class="meta-box"><span class="meta-label">Target</span><span class="meta-value">${requestPlan.targetBaseUrl || "—"}${requestPlan.targetPath || ""}</span></div>
-          <div class="meta-box"><span class="meta-label">Method</span><span class="meta-value">${requestPlan.method || "POST"}</span></div>
-          <div class="meta-box"><span class="meta-label">Builder Headers</span><span class="meta-value">${requestPlan.builderHeadersAttachedServerSide ? "SERVER ONLY" : "NO"}</span></div>
-          <div class="meta-box"><span class="meta-label">User Signing</span><span class="meta-value">${requestPlan.userOrderSignatureRequired ? "REQUIRED" : "NOT REQUIRED"}</span></div>
-          <div class="meta-box"><span class="meta-label">Real Submission</span><span class="meta-value">${requestPlan.realSubmissionAttempted ? "YES" : "NO"}</span></div>
-          <div class="meta-box"><span class="meta-label">Secrets Exposed</span><span class="meta-value">${requestPlan.builderSecretsExposedToClient ? "YES" : "NO"}</span></div>
-        </div>
-      </article>
-    </div>
-
-    <div class="market-grid" style="margin-top: 18px;">
-      <article class="market-card">
-        <h3>Readiness Checks</h3>
-        <div class="market-meta">
-          <div class="meta-box"><span class="meta-label">Account Connected</span><span class="meta-value">${readinessChecks.accountConnected ? "YES" : "NO"}</span></div>
-          <div class="meta-box"><span class="meta-label">Live Mode Enabled</span><span class="meta-value">${readinessChecks.liveModeEnabled ? "YES" : "NO"}</span></div>
-          <div class="meta-box"><span class="meta-label">Can Enable Live</span><span class="meta-value">${readinessChecks.canEnableLiveMode ? "YES" : "NO"}</span></div>
-          <div class="meta-box"><span class="meta-label">Builder API</span><span class="meta-value">${readinessChecks.builderApiConfigured ? "READY" : "NOT READY"}</span></div>
-          <div class="meta-box"><span class="meta-label">Relayer</span><span class="meta-value">${readinessChecks.relayerReady ? "READY" : "NOT READY"}</span></div>
-          <div class="meta-box"><span class="meta-label">Builder Ready</span><span class="meta-value">${readinessChecks.builderReady ? "YES" : "NO"}</span></div>
-          <div class="meta-box"><span class="meta-label">Builder Attribution</span><span class="meta-value">${builderAttribution.configured ? "CONFIGURED" : "NOT CONFIGURED"}</span></div>
-          <div class="meta-box"><span class="meta-label">Live Routing Flag</span><span class="meta-value">${builderAttribution.liveRoutingEnabled ? "ON" : "OFF"}</span></div>
-        </div>
-      </article>
-
-      <article class="market-card">
-        <h3>Order Draft</h3>
+        <h3>Signable Order Payload</h3>
         <div class="alert-item">
-          <div class="alert-message">Server-Side Dry-Run Payload</div>
-          <div class="alert-time">No real order was signed or submitted.</div>
-          <pre style="margin:12px 0 0; white-space:pre-wrap; word-break:break-word; font-size:0.82rem; line-height:1.5; color:#cbd5e1;">${orderDraftJson}</pre>
+          <div class="alert-message">Create and sign this order on the user side.</div>
+          <div class="alert-time">This app does not move the user private key to the server.</div>
+          <pre style="margin:12px 0 0; white-space:pre-wrap; word-break:break-word; font-size:0.82rem; line-height:1.5; color:#cbd5e1;">${formatJsonBlock(handoff.signableOrder)}</pre>
         </div>
       </article>
     </div>
 
     <div class="market-grid" style="margin-top: 18px;">
-      ${blockedHtml || warningsHtml || nextStepsHtml ? `${blockedHtml}${warningsHtml}${nextStepsHtml}` : ""}
+      <article class="market-card">
+        <h3>Submit Signed Order Handoff</h3>
+        <div class="alert-item">
+          <div class="alert-message">Paste signed order JSON</div>
+          <textarea
+            id="signedOrderInput"
+            rows="10"
+            placeholder="Paste signed order JSON here"
+            style="width:100%; margin-top:10px; padding:12px; border-radius:12px; border:1px solid #1e293b; background:#020817; color:#f8fafc; font-size:0.9rem; line-height:1.5;"
+          ></textarea>
+        </div>
+        <div class="alert-item" style="margin-top: 12px;">
+          <div class="alert-message">Paste user L2 auth JSON</div>
+          <div class="alert-time">Expected keys: address, apiKey, secret, passphrase</div>
+          <textarea
+            id="userAuthInput"
+            rows="8"
+            placeholder="Paste user auth JSON here"
+            style="width:100%; margin-top:10px; padding:12px; border-radius:12px; border:1px solid #1e293b; background:#020817; color:#f8fafc; font-size:0.9rem; line-height:1.5;"
+          ></textarea>
+          <pre style="margin:12px 0 0; white-space:pre-wrap; word-break:break-word; font-size:0.8rem; line-height:1.45; color:#94a3b8;">${formatJsonBlock(handoff.userAuthSchema)}</pre>
+        </div>
+        <div style="margin-top: 14px;">
+          <button id="submitSignedOrderBtn">Submit Signed Order Handoff</button>
+        </div>
+      </article>
+
+      <article class="market-card">
+        <h3>Handoff Notes</h3>
+        <div class="alerts-list">
+          ${(handoff.notes || []).map((note) => `
+            <div class="alert-item">
+              <div class="alert-message">${note}</div>
+            </div>
+          `).join("")}
+          ${(blockedReasons || []).map((reason) => `
+            <div class="alert-item">
+              <div class="alert-message">${reason}</div>
+            </div>
+          `).join("")}
+          ${(nextSteps || []).map((step) => `
+            <div class="alert-item">
+              <div class="alert-message">${step}</div>
+            </div>
+          `).join("")}
+        </div>
+      </article>
     </div>
   `;
 }
@@ -592,6 +621,26 @@ async function postJson(url, body) {
   return data;
 }
 
+async function postJsonDetailed(url, body) {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+  let data;
+  try {
+    data = await res.json();
+  } catch {
+    throw new Error("Server returned a non-JSON response");
+  }
+
+  return {
+    httpOk: res.ok,
+    data,
+  };
+}
+
 async function handleConnectAccount() {
   try {
     const walletAddress = document.getElementById("connectWalletAddress")?.value?.trim();
@@ -622,22 +671,6 @@ async function handleDisconnectAccount() {
     await loadAccountState();
   } catch (err) {
     alert(err.message || "Failed to disconnect account");
-  }
-}
-
-async function handleSaveBuilderSettings() {
-  try {
-    const builderApiConfigured = document.getElementById("builderApiConfigured")?.value === "true";
-    const relayerReady = document.getElementById("relayerReady")?.value === "true";
-
-    await postJson("/api/account/builder-settings", {
-      builderApiConfigured,
-      relayerReady,
-    });
-
-    await loadAccountState();
-  } catch (err) {
-    alert(err.message || "Failed to save builder settings");
   }
 }
 
@@ -706,7 +739,9 @@ async function handleQuoteTrade(marketId, side) {
     });
 
     currentTradeTicket = data.quote;
+    currentLivePreparation = null;
     renderTradeTicketPanel();
+    renderTradeExecutionResult(`<p class="empty">No execution prep run yet.</p>`);
   } catch (err) {
     alert(err.message || "Failed to quote trade");
   }
@@ -740,9 +775,48 @@ async function handlePrepareLiveTrade() {
       sizeDollars: currentTradeTicket.sizeDollars,
     });
 
+    currentLivePreparation = data.preparation;
     renderTradeExecutionResult(renderLivePreparation(data.preparation));
+    bindLiveHandoffControls();
   } catch (err) {
     alert(err.message || "Failed to prepare live trade");
+  }
+}
+
+async function handleSubmitSignedOrderHandoff() {
+  try {
+    if (!currentTradeTicket) throw new Error("No trade ticket selected");
+    if (!currentLivePreparation?.signedOrderHandoff) {
+      throw new Error("Prepare the live handoff first");
+    }
+
+    const signedOrderRaw = document.getElementById("signedOrderInput")?.value?.trim();
+    const userAuthRaw = document.getElementById("userAuthInput")?.value?.trim();
+
+    if (!signedOrderRaw) throw new Error("Paste signed order JSON first");
+    if (!userAuthRaw) throw new Error("Paste user L2 auth JSON first");
+
+    const signedOrder = parseJsonText(signedOrderRaw, "Signed order");
+    const userAuth = parseJsonText(userAuthRaw, "User auth");
+
+    const response = await postJsonDetailed("/api/trade/submit-signed", {
+      marketId: currentTradeTicket.marketId,
+      side: currentTradeTicket.side,
+      sizeDollars: currentTradeTicket.sizeDollars,
+      signedOrder,
+      userAuth,
+      orderType: currentLivePreparation.signedOrderHandoff.orderType || "GTC",
+      postOnly: !!currentLivePreparation.signedOrderHandoff.postOnly,
+    });
+
+    if (!response.httpOk || response.data?.ok === false) {
+      renderTradeExecutionResult(renderSignedOrderSubmitResult(response.data, true));
+      return;
+    }
+
+    renderTradeExecutionResult(renderSignedOrderSubmitResult(response.data, false));
+  } catch (err) {
+    alert(err.message || "Failed to submit signed-order handoff");
   }
 }
 
@@ -788,16 +862,19 @@ function bindDynamicPortfolioControls() {
   });
 }
 
+function bindLiveHandoffControls() {
+  const submitBtn = document.getElementById("submitSignedOrderBtn");
+  if (submitBtn) submitBtn.onclick = handleSubmitSignedOrderHandoff;
+}
+
 function bindAccountControls() {
   const connectBtn = document.getElementById("connectAccountBtn");
   const disconnectBtn = document.getElementById("disconnectAccountBtn");
-  const saveBuilderBtn = document.getElementById("saveBuilderSettingsBtn");
   const liveToggle = document.getElementById("liveModeToggle");
   const tradeModeSelect = document.getElementById("tradeModeSelect");
 
   if (connectBtn) connectBtn.onclick = handleConnectAccount;
   if (disconnectBtn) disconnectBtn.onclick = handleDisconnectAccount;
-  if (saveBuilderBtn) saveBuilderBtn.onclick = handleSaveBuilderSettings;
   if (liveToggle) liveToggle.onchange = (e) => handleLiveModeToggle(e.target.checked);
   if (tradeModeSelect) tradeModeSelect.onchange = () => renderTradeTicketPanel();
 }
@@ -885,7 +962,7 @@ async function loadAccountState() {
 
     accountStateCache = data.account;
     stateContainer.innerHTML = renderAccountPanel(data.account);
-    controlsContainer.innerHTML = renderAccountControls();
+    controlsContainer.innerHTML = renderAccountControls(data.account);
     bindAccountControls();
   } catch (err) {
     console.error("Account state load error:", err);

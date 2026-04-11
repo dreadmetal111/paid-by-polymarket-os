@@ -1,14 +1,16 @@
 import express from "express";
 import cors from "cors";
 import path from "node:path";
+import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
+import { BuilderConfig } from "@polymarket/builder-signing-sdk";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: "1mb" }));
 app.use(express.static(path.join(__dirname, "public")));
 
 app.get("/", (_, res) => {
@@ -19,6 +21,9 @@ const GAMMA = "https://gamma-api.polymarket.com";
 const CLOB = "https://clob.polymarket.com";
 const RELAYER =
   process.env.POLYMARKET_RELAYER_BASE_URL || "https://relayer-v2.polymarket.com";
+
+const DEFAULT_ORDER_TYPE = "GTC";
+const DEFAULT_POST_ONLY = false;
 
 // ===============================
 // MEMORY + STORAGE
@@ -40,7 +45,7 @@ let accountState = {
   walletAddress: "",
   walletType: "NONE", // NONE | EOA | POLYMARKET_PROXY
   proxyWalletAddress: "",
-  signatureType: 0, // placeholder for future polymarket auth
+  signatureType: 0,
   funderAddress: "",
   liveModeEnabled: false,
   lastUpdated: null,
@@ -62,6 +67,18 @@ function safeJsonParse(value, fallback = []) {
   }
 }
 
+function tryParseJsonObject(value) {
+  const parsed = typeof value === "string" ? JSON.parse(value) : value;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Expected a JSON object");
+  }
+  return parsed;
+}
+
+function safeJsonStringify(value) {
+  return JSON.stringify(value ?? {});
+}
+
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
@@ -79,8 +96,64 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+function nowTs() {
+  return Math.floor(Date.now() / 1000);
+}
+
 function normalizeAddress(value) {
   return String(value || "").trim();
+}
+
+function normalizeBoolean(value, fallback = false) {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") return value.toLowerCase() === "true";
+  return fallback;
+}
+
+function sanitizeBase64(secret) {
+  return String(secret || "")
+    .replace(/-/g, "+")
+    .replace(/_/g, "/")
+    .replace(/[^A-Za-z0-9+/=]/g, "");
+}
+
+function toUrlSafeBase64(base64Value) {
+  return String(base64Value).replace(/\+/g, "-").replace(/\//g, "_");
+}
+
+function buildPolyHmacSignature(secret, timestamp, method, requestPath, body = "") {
+  const message = `${timestamp}${method.toUpperCase()}${requestPath}${body || ""}`;
+  const key = Buffer.from(sanitizeBase64(secret), "base64");
+  const signature = crypto.createHmac("sha256", key).update(message).digest("base64");
+  return toUrlSafeBase64(signature);
+}
+
+function buildUserL2Headers(userAuth, method, requestPath, bodyString) {
+  const address = normalizeAddress(userAuth.address);
+  const apiKey = String(userAuth.apiKey || "").trim();
+  const secret = String(userAuth.secret || "").trim();
+  const passphrase = String(userAuth.passphrase || "").trim();
+
+  if (!address || !apiKey || !secret || !passphrase) {
+    throw new Error("userAuth must include address, apiKey, secret, and passphrase");
+  }
+
+  const timestamp = nowTs();
+  const signature = buildPolyHmacSignature(
+    secret,
+    timestamp,
+    method,
+    requestPath,
+    bodyString
+  );
+
+  return {
+    POLY_ADDRESS: address,
+    POLY_SIGNATURE: signature,
+    POLY_TIMESTAMP: String(timestamp),
+    POLY_API_KEY: apiKey,
+    POLY_PASSPHRASE: passphrase,
+  };
 }
 
 function getBuilderEnvStatus() {
@@ -89,6 +162,8 @@ function getBuilderEnvStatus() {
   const passphrase = String(process.env.POLY_BUILDER_PASSPHRASE || "").trim();
   const liveRoutingEnabled =
     String(process.env.PBP_ENABLE_BUILDER_LIVE_ROUTING || "false").toLowerCase() === "true";
+  const realLiveSubmitEnabled =
+    String(process.env.PBP_ENABLE_REAL_LIVE_SUBMIT || "false").toLowerCase() === "true";
 
   const hasApiKey = !!apiKey;
   const hasSecret = !!secret;
@@ -103,8 +178,62 @@ function getBuilderEnvStatus() {
     hasPassphrase,
     liveRoutingEnabled,
     relayerReady,
+    realLiveSubmitEnabled,
     relayerBaseUrl: RELAYER,
     usesServerSideSigning: true,
+  };
+}
+
+function getBuilderConfig() {
+  const status = getBuilderEnvStatus();
+
+  if (!status.configured) {
+    return null;
+  }
+
+  return new BuilderConfig({
+    localBuilderCreds: {
+      key: process.env.POLY_BUILDER_API_KEY,
+      secret: process.env.POLY_BUILDER_SECRET,
+      passphrase: process.env.POLY_BUILDER_PASSPHRASE,
+    },
+  });
+}
+
+async function buildBuilderHeaders(method, requestPath, bodyString) {
+  const builderConfig = getBuilderConfig();
+  if (!builderConfig) {
+    throw new Error("Builder credentials are not configured on the server");
+  }
+
+  return builderConfig.generateBuilderHeaders(
+    method.toUpperCase(),
+    requestPath,
+    bodyString
+  );
+}
+
+function summarizeSignedOrder(signedOrder) {
+  if (!signedOrder || typeof signedOrder !== "object") return null;
+
+  const signature =
+    signedOrder.signature ||
+    signedOrder.sig ||
+    signedOrder.orderSignature ||
+    null;
+
+  return {
+    hasSignature: !!signature,
+    signatureLength: signature ? String(signature).length : 0,
+    keys: Object.keys(signedOrder),
+  };
+}
+
+function buildOrderSubmissionBody(signedOrder, orderType = DEFAULT_ORDER_TYPE, postOnly = DEFAULT_POST_ONLY) {
+  return {
+    order: signedOrder,
+    orderType,
+    postOnly: !!postOnly,
   };
 }
 
@@ -222,6 +351,8 @@ function getAccountReadiness() {
     builderReady,
     builderConfigSource: "SERVER_ENV",
     liveRoutingEnabled: builderEnv.liveRoutingEnabled,
+    realLiveSubmitEnabled: builderEnv.realLiveSubmitEnabled,
+    signedOrderHandoffEnabled: true,
     blockers: [
       !hasWallet ? "Missing wallet address" : null,
       !hasProxyIfNeeded ? "Missing proxy wallet address" : null,
@@ -292,7 +423,7 @@ function updateLiveMode(enabled) {
 }
 
 // Kept for frontend compatibility.
-// Builder readiness now comes from server env vars only.
+// Builder readiness comes from server env vars only.
 function updateBuilderSettings() {
   accountState.lastUpdated = nowIso();
   return getAccountReadiness();
@@ -644,7 +775,7 @@ function getTokenIdForSide(market, side) {
   return side === "BUY YES" ? market.tokenIds[0] || null : market.tokenIds[1] || null;
 }
 
-function buildBuilderDryRunRouting(market, side, sizeDollars) {
+function buildSignedOrderHandoff(market, side, sizeDollars) {
   const quote = buildTradeQuote(market, side, sizeDollars, "LIVE");
   const readiness = getAccountReadiness();
   const builderEnv = getBuilderEnvStatus();
@@ -661,64 +792,63 @@ function buildBuilderDryRunRouting(market, side, sizeDollars) {
     !tokenID ? "Outcome token ID is missing for this side" : null,
   ].filter(Boolean);
 
-  const readyForDryRun = blockedReasons.length === 0;
+  const signableOrder = {
+    tokenID,
+    side: "BUY",
+    price: round4(quote.selectedPrice),
+    size: round4(quote.estimatedShares),
+    tickSize: market.minimumTickSize || "0.01",
+    negRisk: !!market.negRisk,
+    feeRateBps: 0,
+    taker: null,
+    expiration: 0,
+  };
 
   return {
-    dryRun: true,
-    routeId: "BUILDER_ROUTE_DRY_RUN_V1",
-    stage: readyForDryRun ? "READY_TO_SIGN_AND_FORWARD" : "BLOCKED",
-    blocked: !readyForDryRun,
+    enabled: true,
+    blocked: blockedReasons.length > 0,
     blockedReasons,
-    requestPlan: {
-      transport: "SERVER_ONLY",
+    submissionEnabled: builderEnv.realLiveSubmitEnabled,
+    submissionMode: builderEnv.realLiveSubmitEnabled ? "LIVE_SUBMIT_ENABLED" : "SAFE_FALLBACK_ONLY",
+    submitPath: "/api/trade/submit-signed",
+    submitMethod: "POST",
+    orderType: DEFAULT_ORDER_TYPE,
+    postOnly: DEFAULT_POST_ONLY,
+    signableOrder,
+    routingTarget: {
+      baseUrl: CLOB,
+      path: "/order",
       method: "POST",
-      targetBaseUrl: CLOB,
-      targetPath: "/order",
-      builderHeadersAttachedServerSide: true,
-      userCredentialsRequired: true,
-      userOrderSignatureRequired: true,
-      builderSecretsExposedToClient: false,
-      realSubmissionAttempted: false,
     },
-    builderAttribution: {
-      configured: builderEnv.configured,
-      liveRoutingEnabled: builderEnv.liveRoutingEnabled,
-      relayerReady: builderEnv.relayerReady,
-      relayerBaseUrl: builderEnv.relayerBaseUrl,
-      serverSideOnly: true,
-      headerValues: "REDACTED",
+    clientRequirements: {
+      signedOrderRequired: true,
+      userL2AuthRequired: true,
+      builderSecretsStayServerSide: true,
     },
-    readinessChecks: {
-      accountConnected: readiness.isConnected,
-      liveModeEnabled: readiness.liveModeEnabled,
-      canEnableLiveMode: readiness.canEnableLiveMode,
-      builderApiConfigured: readiness.builderApiConfigured,
-      relayerReady: readiness.relayerReady,
-      builderReady: readiness.builderReady,
-    },
-    orderDraft: {
+    orderSummary: {
       marketId: market.id,
       question: market.question,
-      tokenID,
       outcome,
-      side: "BUY",
-      price: round4(quote.selectedPrice),
-      sizeShares: round4(quote.estimatedShares),
+      tokenID,
+      selectedPrice: round4(quote.selectedPrice),
       sizeDollars: round4(quote.sizeDollars),
-      estimatedCost: round4(quote.estimatedCost),
-      estimatedMaxLoss: round4(quote.estimatedMaxLoss),
-      estimatedMaxPayout: round4(quote.estimatedMaxPayout),
-      estimatedProfitIfCorrect: round4(quote.estimatedProfitIfCorrect),
-      orderType: "GTC",
-      timeInForce: "GTC",
+      estimatedShares: round4(quote.estimatedShares),
       walletAddress: readiness.walletAddress || null,
-      proxyWalletAddress: readiness.proxyWalletAddress || null,
       funderAddress: readiness.funderAddress || null,
       signatureType: readiness.signatureType ?? 0,
     },
-    warnings: [
-      "DRY RUN ONLY — no live order was signed or submitted.",
-      "Builder attribution can be attached server-side, but real live trading still requires user authentication/signing.",
+    userAuthSchema: {
+      address: "<user-wallet-address>",
+      apiKey: "<user-api-key>",
+      secret: "<user-api-secret>",
+      passphrase: "<user-api-passphrase>",
+    },
+    notes: [
+      "The user signs the order payload client-side or in an external wallet/SDK flow.",
+      "The backend receives the signed order plus user L2 auth and forwards it with builder attribution headers.",
+      builderEnv.realLiveSubmitEnabled
+        ? "Real live submission is enabled on the server."
+        : "Real live submission is disabled on the server, so signed-order submit will fall back safely.",
     ],
   };
 }
@@ -726,24 +856,28 @@ function buildBuilderDryRunRouting(market, side, sizeDollars) {
 function buildExecutionPreparation(market, side, sizeDollars) {
   const quote = buildTradeQuote(market, side, sizeDollars, "LIVE");
   const readiness = getAccountReadiness();
-  const dryRunRouting = buildBuilderDryRunRouting(market, side, sizeDollars);
+  const signedOrderHandoff = buildSignedOrderHandoff(market, side, sizeDollars);
 
   return {
-    dryRun: true,
+    dryRun: !signedOrderHandoff.submissionEnabled,
     builderReady: readiness.builderReady,
     mode: "LIVE",
-    status: dryRunRouting.blocked ? "DRY_RUN_BLOCKED" : "DRY_RUN_READY",
-    message: dryRunRouting.blocked
-      ? "Builder dry run is blocked by readiness checks. Review the blockers below."
-      : "Builder dry run prepared. The backend assembled the order draft and routing plan, but no real order was submitted.",
+    status: signedOrderHandoff.blocked
+      ? "SIGNED_HANDOFF_BLOCKED"
+      : "SIGNED_HANDOFF_READY",
+    message: signedOrderHandoff.blocked
+      ? "Signed-order handoff is blocked by readiness checks."
+      : signedOrderHandoff.submissionEnabled
+        ? "Signed-order handoff is ready. The backend can accept a signed order plus user L2 auth and forward it with builder attribution."
+        : "Signed-order handoff is ready, but real submit is disabled on the server, so the fallback remains safe.",
     accountReadiness: readiness,
-    dryRunRouting,
+    signedOrderHandoff,
     ticket: quote,
-    nextSteps: dryRunRouting.blocked
-      ? dryRunRouting.blockedReasons
+    nextSteps: signedOrderHandoff.blocked
+      ? signedOrderHandoff.blockedReasons
       : [
-          "Add user authentication/signing for real live orders",
-          "Forward the signed order with builder attribution headers from the server",
+          "Sign the order payload with the user wallet or SDK",
+          "Send the signed order plus user L2 auth bundle to the backend handoff route",
         ],
   };
 }
@@ -982,6 +1116,8 @@ async function fetchMarkets() {
         tokenIds: safeJsonParse(m.clobTokenIds, []),
         active: m.active,
         closed: m.closed,
+        minimumTickSize: String(m.minimum_tick_size ?? "0.01"),
+        negRisk: Boolean(m.neg_risk ?? event.neg_risk ?? false),
       }))
     )
     .filter((m) => m.active && !m.closed && m.tokenIds.length >= 2);
@@ -1329,6 +1465,163 @@ app.post("/api/trade/prepare", async (req, res) => {
   }
 });
 
+app.post("/api/trade/submit-signed", async (req, res) => {
+  try {
+    const {
+      marketId,
+      side,
+      sizeDollars,
+      signedOrder,
+      userAuth,
+      orderType = DEFAULT_ORDER_TYPE,
+      postOnly = DEFAULT_POST_ONLY,
+    } = req.body || {};
+
+    if (!marketId || !side || !sizeDollars) {
+      throw new Error("marketId, side, and sizeDollars are required");
+    }
+
+    const parsedSignedOrder = tryParseJsonObject(signedOrder);
+    const parsedUserAuth = tryParseJsonObject(userAuth);
+
+    const markets = await buildMarkets();
+    const market = markets.find((m) => String(m.id) === String(marketId));
+
+    if (!market) throw new Error("Market not found");
+
+    const preparation = buildExecutionPreparation(
+      market,
+      side,
+      Number(sizeDollars)
+    );
+
+    if (preparation.signedOrderHandoff?.blocked) {
+      return res.status(400).json({
+        ok: false,
+        error: "Signed-order handoff is blocked",
+        result: {
+          status: "HANDOFF_BLOCKED",
+          blockedReasons: preparation.signedOrderHandoff.blockedReasons,
+        },
+      });
+    }
+
+    const requestPath = "/order";
+    const requestMethod = "POST";
+    const submissionBody = buildOrderSubmissionBody(
+      parsedSignedOrder,
+      orderType,
+      postOnly
+    );
+    const bodyString = safeJsonStringify(submissionBody);
+
+    const userHeaders = buildUserL2Headers(
+      parsedUserAuth,
+      requestMethod,
+      requestPath,
+      bodyString
+    );
+    const builderHeaders = await buildBuilderHeaders(
+      requestMethod,
+      requestPath,
+      bodyString
+    );
+
+    const builderEnv = getBuilderEnvStatus();
+
+    if (!builderEnv.realLiveSubmitEnabled) {
+      return res.json({
+        ok: true,
+        forwarded: false,
+        dryRunFallback: true,
+        result: {
+          status: "HANDOFF_DRY_RUN_FALLBACK",
+          message:
+            "Signed-order handoff is wired, but real live submission is disabled on the server. No order was forwarded.",
+          requestSummary: {
+            target: `${CLOB}${requestPath}`,
+            method: requestMethod,
+            orderType,
+            postOnly: !!postOnly,
+            signedOrderSummary: summarizeSignedOrder(parsedSignedOrder),
+            builderAttributionAttached: true,
+            userL2AuthAttached: true,
+            realSubmissionAttempted: false,
+          },
+        },
+      });
+    }
+
+    const clobRes = await fetch(`${CLOB}${requestPath}`, {
+      method: requestMethod,
+      headers: {
+        "Content-Type": "application/json",
+        ...userHeaders,
+        ...builderHeaders,
+      },
+      body: bodyString,
+    });
+
+    const raw = await clobRes.text();
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      parsed = { raw };
+    }
+
+    if (!clobRes.ok) {
+      return res.status(400).json({
+        ok: false,
+        forwarded: false,
+        error: "CLOB rejected signed-order handoff",
+        result: {
+          status: "FORWARD_REJECTED",
+          message: "The signed order was handed off, but the CLOB rejected the request.",
+          requestSummary: {
+            target: `${CLOB}${requestPath}`,
+            method: requestMethod,
+            orderType,
+            postOnly: !!postOnly,
+            signedOrderSummary: summarizeSignedOrder(parsedSignedOrder),
+            builderAttributionAttached: true,
+            userL2AuthAttached: true,
+            realSubmissionAttempted: true,
+          },
+          clobResponse: parsed,
+        },
+      });
+    }
+
+    return res.json({
+      ok: true,
+      forwarded: true,
+      dryRunFallback: false,
+      result: {
+        status: "FORWARDED_TO_CLOB",
+        message:
+          "Signed order handed off successfully. The backend forwarded the signed order with builder attribution attached.",
+        requestSummary: {
+          target: `${CLOB}${requestPath}`,
+          method: requestMethod,
+          orderType,
+          postOnly: !!postOnly,
+          signedOrderSummary: summarizeSignedOrder(parsedSignedOrder),
+          builderAttributionAttached: true,
+          userL2AuthAttached: true,
+          realSubmissionAttempted: true,
+        },
+        clobResponse: parsed,
+      },
+    });
+  } catch (err) {
+    res.status(400).json({
+      ok: false,
+      error: err.message || "Failed to submit signed order handoff",
+    });
+  }
+});
+
 app.post("/api/trade/execute", async (req, res) => {
   try {
     const { marketId, side, sizeDollars, mode } = req.body || {};
@@ -1368,7 +1661,7 @@ app.post("/api/trade/execute", async (req, res) => {
       ok: true,
       mode: "LIVE",
       message:
-        "DRY RUN ONLY — the backend prepared the builder-attributed routing draft, but no real order was submitted.",
+        "Live mode now uses signed-order handoff architecture. No direct live execution occurs here without a signed order handoff request.",
       preparation,
     });
   } catch (err) {
@@ -1390,7 +1683,7 @@ app.listen(PORT, async () => {
 
   console.log(`Running on http://localhost:${PORT}`);
   console.log(
-    `[Builder] configured=${builderEnv.configured} liveRoutingEnabled=${builderEnv.liveRoutingEnabled} relayerReady=${builderEnv.relayerReady}`
+    `[Builder] configured=${builderEnv.configured} liveRoutingEnabled=${builderEnv.liveRoutingEnabled} relayerReady=${builderEnv.relayerReady} realLiveSubmitEnabled=${builderEnv.realLiveSubmitEnabled}`
   );
 
   try {
