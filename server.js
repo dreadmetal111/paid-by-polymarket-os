@@ -17,6 +17,8 @@ app.get("/", (_, res) => {
 
 const GAMMA = "https://gamma-api.polymarket.com";
 const CLOB = "https://clob.polymarket.com";
+const RELAYER =
+  process.env.POLYMARKET_RELAYER_BASE_URL || "https://relayer-v2.polymarket.com";
 
 // ===============================
 // MEMORY + STORAGE
@@ -41,8 +43,6 @@ let accountState = {
   signatureType: 0, // placeholder for future polymarket auth
   funderAddress: "",
   liveModeEnabled: false,
-  builderApiConfigured: false,
-  relayerReady: false,
   lastUpdated: null,
 };
 
@@ -81,6 +81,31 @@ function nowIso() {
 
 function normalizeAddress(value) {
   return String(value || "").trim();
+}
+
+function getBuilderEnvStatus() {
+  const apiKey = String(process.env.POLY_BUILDER_API_KEY || "").trim();
+  const secret = String(process.env.POLY_BUILDER_SECRET || "").trim();
+  const passphrase = String(process.env.POLY_BUILDER_PASSPHRASE || "").trim();
+  const liveRoutingEnabled =
+    String(process.env.PBP_ENABLE_BUILDER_LIVE_ROUTING || "false").toLowerCase() === "true";
+
+  const hasApiKey = !!apiKey;
+  const hasSecret = !!secret;
+  const hasPassphrase = !!passphrase;
+  const configured = hasApiKey && hasSecret && hasPassphrase;
+  const relayerReady = configured && liveRoutingEnabled;
+
+  return {
+    configured,
+    hasApiKey,
+    hasSecret,
+    hasPassphrase,
+    liveRoutingEnabled,
+    relayerReady,
+    relayerBaseUrl: RELAYER,
+    usesServerSideSigning: true,
+  };
 }
 
 // ===============================
@@ -168,16 +193,20 @@ function getActionSignal(m) {
 // ===============================
 
 function getAccountReadiness() {
+  const builderEnv = getBuilderEnvStatus();
+
   const hasWallet = !!accountState.walletAddress;
   const hasProxyIfNeeded =
     accountState.walletType !== "POLYMARKET_PROXY" || !!accountState.proxyWalletAddress;
 
   const canEnableLiveMode = hasWallet && hasProxyIfNeeded;
+  const builderApiConfigured = builderEnv.configured;
+  const relayerReady = builderEnv.relayerReady;
 
   const builderReady =
     canEnableLiveMode &&
-    accountState.builderApiConfigured &&
-    accountState.relayerReady;
+    builderApiConfigured &&
+    relayerReady;
 
   return {
     isConnected: accountState.isConnected,
@@ -187,15 +216,21 @@ function getAccountReadiness() {
     proxyWalletAddress: accountState.proxyWalletAddress,
     signatureType: accountState.signatureType,
     funderAddress: accountState.funderAddress,
-    builderApiConfigured: accountState.builderApiConfigured,
-    relayerReady: accountState.relayerReady,
+    builderApiConfigured,
+    relayerReady,
     canEnableLiveMode,
     builderReady,
+    builderConfigSource: "SERVER_ENV",
+    liveRoutingEnabled: builderEnv.liveRoutingEnabled,
     blockers: [
       !hasWallet ? "Missing wallet address" : null,
       !hasProxyIfNeeded ? "Missing proxy wallet address" : null,
-      !accountState.builderApiConfigured ? "Builder API not configured" : null,
-      !accountState.relayerReady ? "Relayer not ready" : null,
+      !builderEnv.hasApiKey ? "Builder API key missing on server" : null,
+      !builderEnv.hasSecret ? "Builder secret missing on server" : null,
+      !builderEnv.hasPassphrase ? "Builder passphrase missing on server" : null,
+      builderEnv.configured && !builderEnv.liveRoutingEnabled
+        ? "Builder live routing is disabled on server"
+        : null,
     ].filter(Boolean),
     lastUpdated: accountState.lastUpdated,
   };
@@ -237,8 +272,6 @@ function disconnectAccount() {
     signatureType: 0,
     funderAddress: "",
     liveModeEnabled: false,
-    builderApiConfigured: false,
-    relayerReady: false,
     lastUpdated: nowIso(),
   };
 
@@ -258,17 +291,9 @@ function updateLiveMode(enabled) {
   return getAccountReadiness();
 }
 
-function updateBuilderSettings({ builderApiConfigured, relayerReady }) {
-  if (typeof builderApiConfigured === "boolean") {
-    accountState.builderApiConfigured = builderApiConfigured;
-  }
-
-  if (typeof relayerReady === "boolean") {
-    accountState.relayerReady = relayerReady;
-  }
-
+// Kept for frontend compatibility, but builder readiness now comes from server env vars only.
+function updateBuilderSettings() {
   accountState.lastUpdated = nowIso();
-
   return getAccountReadiness();
 }
 
@@ -612,6 +637,7 @@ function buildTradeQuote(market, side, sizeDollars, mode = "PAPER") {
 function buildExecutionPreparation(market, side, sizeDollars) {
   const quote = buildTradeQuote(market, side, sizeDollars, "LIVE");
   const readiness = getAccountReadiness();
+  const builderEnv = getBuilderEnvStatus();
 
   return {
     builderReady: readiness.builderReady,
@@ -620,13 +646,23 @@ function buildExecutionPreparation(market, side, sizeDollars) {
       ? "PREPARED_FOR_BUILDER_ROUTING"
       : "PREPARED_PLACEHOLDER",
     message: readiness.builderReady
-      ? "Live trade is ready for future builder routing integration."
-      : "Live trade shell is ready, but account or builder setup is incomplete.",
+      ? "Builder attribution is configured on the server. Live routing shell is ready for the next integration step."
+      : "Live trade shell is ready, but wallet readiness or server-side builder configuration is incomplete.",
     accountReadiness: readiness,
+    builderAttribution: {
+      configured: builderEnv.configured,
+      liveRoutingEnabled: builderEnv.liveRoutingEnabled,
+      relayerReady: builderEnv.relayerReady,
+      relayerBaseUrl: builderEnv.relayerBaseUrl,
+      usesServerSideSigning: true,
+    },
     ticket: quote,
     nextSteps: readiness.blockers.length
       ? readiness.blockers
-      : ["Connect live routing client", "Add Polymarket signing flow"],
+      : [
+          "Add user order signing/authentication flow",
+          "Forward builder-attributed live requests from server to CLOB/Relayer",
+        ],
   };
 }
 
@@ -1064,11 +1100,7 @@ app.post("/api/account/live-mode", (req, res) => {
 
 app.post("/api/account/builder-settings", (req, res) => {
   try {
-    const { builderApiConfigured, relayerReady } = req.body || {};
-    const account = updateBuilderSettings({
-      builderApiConfigured,
-      relayerReady,
-    });
+    const account = updateBuilderSettings(req.body || {});
     res.json({ ok: true, account });
   } catch (err) {
     res.status(400).json({
@@ -1250,10 +1282,11 @@ app.post("/api/trade/execute", async (req, res) => {
       Number(sizeDollars)
     );
 
-    res.json({
+    return res.json({
       ok: true,
       mode: "LIVE",
-      message: "Live trade routing placeholder ready for builder integration",
+      message:
+        "Builder environment wiring is active on the server. Real live execution is still intentionally blocked until user authentication/signing is added safely.",
       preparation,
     });
   } catch (err) {
@@ -1271,7 +1304,12 @@ app.post("/api/trade/execute", async (req, res) => {
 const PORT = process.env.PORT || 3001;
 
 app.listen(PORT, async () => {
+  const builderEnv = getBuilderEnvStatus();
+
   console.log(`Running on http://localhost:${PORT}`);
+  console.log(
+    `[Builder] configured=${builderEnv.configured} liveRoutingEnabled=${builderEnv.liveRoutingEnabled} relayerReady=${builderEnv.relayerReady}`
+  );
 
   try {
     await runEngine();
