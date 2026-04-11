@@ -86,6 +86,56 @@ function parseJsonText(value, label) {
   }
 }
 
+function clearBrowserDemoState() {
+  const keysToRemove = [
+    "pbp_currentTradeTicket",
+    "pbp_currentLivePreparation",
+    "pbp_demo_state",
+    "paidByPolymarket_demo_state",
+  ];
+
+  try {
+    keysToRemove.forEach((key) => window.localStorage?.removeItem(key));
+  } catch {}
+
+  try {
+    keysToRemove.forEach((key) => window.sessionStorage?.removeItem(key));
+  } catch {}
+}
+
+function resetFrontendDemoUiState() {
+  hotMarketsCache = [];
+  currentTradeTicket = null;
+  currentLivePreparation = null;
+  accountStateCache = null;
+
+  const tradeModeSelect = document.getElementById("tradeModeSelect");
+  const tradeTicketSize = document.getElementById("tradeTicketSize");
+  const minVolume = document.getElementById("minVolume");
+  const minPrice = document.getElementById("minPrice");
+  const maxPrice = document.getElementById("maxPrice");
+
+  if (tradeModeSelect) tradeModeSelect.value = "PAPER";
+  if (tradeTicketSize) tradeTicketSize.value = "";
+  if (minVolume) minVolume.value = "";
+  if (minPrice) minPrice.value = "";
+  if (maxPrice) maxPrice.value = "";
+
+  renderTradeTicketPanel();
+  renderTradeExecutionResult(`<p class="empty">No execution prep run yet.</p>`);
+}
+
+async function beginCleanPublicLoad() {
+  clearBrowserDemoState();
+  resetFrontendDemoUiState();
+
+  try {
+    await postJson("/api/public-demo/reset", {});
+  } catch (err) {
+    console.error("Public demo reset failed:", err);
+  }
+}
+
 function renderAlertItem(alert) {
   return `
     <div class="alert-item">
@@ -259,7 +309,7 @@ function renderAccountControls(account = {}) {
           <div class="meta-box"><span class="meta-label">Real Submit</span><span class="meta-value">${account.realLiveSubmitEnabled ? "ON" : "SAFE FALLBACK"}</span></div>
         </div>
         <div class="alert-item">
-          <div class="alert-message">Builder readiness is now read-only.</div>
+          <div class="alert-message">Builder readiness is read-only.</div>
           <div class="alert-time">This status comes from Render environment variables and backend checks, not frontend toggles.</div>
         </div>
         <div style="margin-top: 14px;">
@@ -668,6 +718,10 @@ async function handleConnectAccount() {
 async function handleDisconnectAccount() {
   try {
     await postJson("/api/account/disconnect", {});
+    currentTradeTicket = null;
+    currentLivePreparation = null;
+    renderTradeTicketPanel();
+    renderTradeExecutionResult(`<p class="empty">No execution prep run yet.</p>`);
     await loadAccountState();
   } catch (err) {
     alert(err.message || "Failed to disconnect account");
@@ -677,6 +731,12 @@ async function handleDisconnectAccount() {
 async function handleLiveModeToggle(enabled) {
   try {
     await postJson("/api/account/live-mode", { enabled });
+
+    if (!enabled) {
+      currentLivePreparation = null;
+      renderTradeExecutionResult(`<p class="empty">No execution prep run yet.</p>`);
+    }
+
     await loadAccountState();
     renderTradeTicketPanel();
   } catch (err) {
@@ -719,8 +779,6 @@ async function handleResetPaperPortfolio() {
     await postJson("/api/paper-portfolio/reset", { startingBankroll, defaultPositionSize });
 
     await loadPaperPortfolio();
-    await loadSignalLog();
-    await loadPerformanceStats();
   } catch (err) {
     alert(err.message || "Failed to reset portfolio");
   }
@@ -1096,7 +1154,7 @@ async function loadBiggestMovers() {
   }
 }
 
-document.addEventListener("DOMContentLoaded", () => {
+document.addEventListener("DOMContentLoaded", async () => {
   const refreshAlerts = document.getElementById("refreshAlerts");
   const refreshOpp = document.getElementById("refreshOpportunities");
   const refreshHot = document.getElementById("refreshHot");
@@ -1117,17 +1175,19 @@ document.addEventListener("DOMContentLoaded", () => {
   if (refreshAccount) refreshAccount.addEventListener("click", loadAccountState);
   if (applyBtn) applyBtn.addEventListener("click", applyHotFilters);
 
+  await beginCleanPublicLoad();
+
   renderTradeTicketPanel();
   renderTradeExecutionResult(`<p class="empty">No execution prep run yet.</p>`);
 
-  loadAccountState();
-  loadAlerts();
-  loadPerformanceStats();
-  loadPaperPortfolio();
-  loadSignalLog();
-  loadTopOpportunities();
-  loadHotMarkets();
-  loadBiggestMovers();
+  await loadAccountState();
+  await loadAlerts();
+  await loadPerformanceStats();
+  await loadPaperPortfolio();
+  await loadSignalLog();
+  await loadTopOpportunities();
+  await loadHotMarkets();
+  await loadBiggestMovers();
 
   setInterval(loadAccountState, 60000);
   setInterval(loadAlerts, 60000);

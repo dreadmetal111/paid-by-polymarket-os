@@ -104,12 +104,6 @@ function normalizeAddress(value) {
   return String(value || "").trim();
 }
 
-function normalizeBoolean(value, fallback = false) {
-  if (typeof value === "boolean") return value;
-  if (typeof value === "string") return value.toLowerCase() === "true";
-  return fallback;
-}
-
 function sanitizeBase64(secret) {
   return String(secret || "")
     .replace(/-/g, "+")
@@ -229,11 +223,47 @@ function summarizeSignedOrder(signedOrder) {
   };
 }
 
-function buildOrderSubmissionBody(signedOrder, orderType = DEFAULT_ORDER_TYPE, postOnly = DEFAULT_POST_ONLY) {
+function buildOrderSubmissionBody(
+  signedOrder,
+  orderType = DEFAULT_ORDER_TYPE,
+  postOnly = DEFAULT_POST_ONLY
+) {
   return {
     order: signedOrder,
     orderType,
     postOnly: !!postOnly,
+  };
+}
+
+function buildDisconnectedAccountState() {
+  return {
+    isConnected: false,
+    walletAddress: "",
+    walletType: "NONE",
+    proxyWalletAddress: "",
+    signatureType: 0,
+    funderAddress: "",
+    liveModeEnabled: false,
+    lastUpdated: nowIso(),
+  };
+}
+
+function clearPaperPortfolioState(startingBankroll = 1000, defaultPositionSize = 50) {
+  paperPortfolio = [];
+  paperBankroll = {
+    startingBankroll: round4(startingBankroll),
+    cash: round4(startingBankroll),
+    defaultPositionSize: round4(defaultPositionSize),
+  };
+}
+
+function resetPublicDemoState() {
+  accountState = buildDisconnectedAccountState();
+  clearPaperPortfolioState(1000, 50);
+
+  return {
+    account: getAccountReadiness(),
+    stats: getPaperPortfolioStats(),
   };
 }
 
@@ -360,7 +390,7 @@ function getAccountReadiness() {
       !builderEnv.hasSecret ? "Builder secret missing on server" : null,
       !builderEnv.hasPassphrase ? "Builder passphrase missing on server" : null,
       builderEnv.configured && !builderEnv.liveRoutingEnabled
-        ? "Builder live routing is disabled on server"
+        ? "Builder live routing is disabled on the server"
         : null,
     ].filter(Boolean),
     lastUpdated: accountState.lastUpdated,
@@ -395,17 +425,7 @@ function connectAccount({
 }
 
 function disconnectAccount() {
-  accountState = {
-    isConnected: false,
-    walletAddress: "",
-    walletType: "NONE",
-    proxyWalletAddress: "",
-    signatureType: 0,
-    funderAddress: "",
-    liveModeEnabled: false,
-    lastUpdated: nowIso(),
-  };
-
+  accountState = buildDisconnectedAccountState();
   return getAccountReadiness();
 }
 
@@ -479,53 +499,6 @@ function calculatePositionPnlPoints(position, currentYesPrice) {
 function calculatePositionDollarPnl(position, pnlPoints) {
   const stake = position.positionSizeDollars || 0;
   return round4(stake * (pnlPoints / Math.max(position.entryYesPrice || 0.01, 0.01)));
-}
-
-function maybeOpenPaperPositions(markets) {
-  for (const market of markets) {
-    if (market.actionSignal !== "BUY YES" && market.actionSignal !== "BUY NO") {
-      continue;
-    }
-
-    const existingOpen = paperPortfolio.find(
-      (p) =>
-        p.marketId === market.id &&
-        p.actionSignal === market.actionSignal &&
-        p.status === "OPEN"
-    );
-
-    if (existingOpen) continue;
-
-    const stake = paperBankroll.defaultPositionSize;
-    if (paperBankroll.cash < stake) continue;
-
-    paperBankroll.cash = round4(paperBankroll.cash - stake);
-
-    paperPortfolio.unshift({
-      id: `${market.id}-${market.actionSignal}-${Date.now()}`,
-      marketId: market.id,
-      question: market.question,
-      slug: market.slug,
-      eventSlug: market.eventSlug,
-      url: market.url,
-      source: "AUTO",
-      actionSignal: market.actionSignal,
-      actionReason: market.actionReason,
-      confidenceScore: market.confidenceScore,
-      entryYesPrice: market.yesPriceLive,
-      currentYesPrice: market.yesPriceLive,
-      positionSizeDollars: stake,
-      pnlPoints: 0,
-      pnlDollars: 0,
-      pnlStatus: "FLAT",
-      status: "OPEN",
-      openedAt: nowIso(),
-      closedAt: null,
-      closeReason: null,
-    });
-  }
-
-  paperPortfolio = paperPortfolio.slice(0, 300);
 }
 
 function updatePaperPortfolio(currentMarkets) {
@@ -658,16 +631,7 @@ function manuallyClosePaperPosition(positionId, reason = "Manual Close") {
 }
 
 function resetPaperPortfolio(startingBankroll = 1000, defaultPositionSize = 50) {
-  signalLog = [];
-  signalLogTimestamps = new Map();
-  paperPortfolio = [];
-  priceHistory = new Map();
-
-  paperBankroll = {
-    startingBankroll: round4(startingBankroll),
-    cash: round4(startingBankroll),
-    defaultPositionSize: round4(defaultPositionSize),
-  };
+  clearPaperPortfolioState(startingBankroll, defaultPositionSize);
 }
 
 function getPaperPortfolioStats() {
@@ -1193,12 +1157,32 @@ async function runEngine() {
   maybeLogSignals(top);
 
   updatePaperPortfolio(markets);
-  maybeOpenPaperPositions(top);
+  // Intentionally no auto-open paper positions here.
+  // Paper trading should start clean and only open from explicit user actions.
 }
 
 // ===============================
 // ROUTES
 // ===============================
+
+app.post("/api/public-demo/reset", (_, res) => {
+  try {
+    const state = resetPublicDemoState();
+
+    res.json({
+      ok: true,
+      reset: true,
+      account: state.account,
+      stats: state.stats,
+      message: "Public demo state reset to a clean default load.",
+    });
+  } catch (err) {
+    res.status(500).json({
+      ok: false,
+      error: err.message || "Failed to reset public demo state",
+    });
+  }
+});
 
 app.get("/api/liveMarkets", async (_, res) => {
   try {
@@ -1680,6 +1664,9 @@ const PORT = process.env.PORT || 3001;
 
 app.listen(PORT, async () => {
   const builderEnv = getBuilderEnvStatus();
+
+  // Ensure a clean public state on each deploy / boot.
+  resetPublicDemoState();
 
   console.log(`Running on http://localhost:${PORT}`);
   console.log(
