@@ -39,6 +39,15 @@ function formatPoints(value) {
   return `${pts >= 0 ? "+" : ""}${pts.toFixed(2)} pts`;
 }
 
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
 function getCurrentTradeMode() {
   const modeSelect = document.getElementById("tradeModeSelect");
   return modeSelect?.value || "PAPER";
@@ -376,7 +385,7 @@ function renderTradeTicket(quote) {
 
       <div class="market-footer">
         <button id="executePaperTradeBtn" ${mode === "LIVE" ? "style='display:none;'" : ""}>Execute Paper Trade</button>
-        <button id="prepareLiveTradeBtn">${mode === "LIVE" ? "Prepare Live Trade" : "Preview Live Trade"}</button>
+        <button id="prepareLiveTradeBtn">${mode === "LIVE" ? "Run Builder Dry Run" : "Preview Live Trade"}</button>
       </div>
     </div>
   `;
@@ -384,19 +393,111 @@ function renderTradeTicket(quote) {
 
 function renderLivePreparation(preparation) {
   const ticket = preparation.ticket || {};
-  const blockers = (preparation.accountReadiness?.blockers || [])
-    .map((b) => `<div class="alert-time">• ${b}</div>`)
-    .join("");
+  const dryRun = preparation.dryRunRouting || {};
+  const requestPlan = dryRun.requestPlan || {};
+  const builderAttribution = dryRun.builderAttribution || {};
+  const readinessChecks = dryRun.readinessChecks || {};
+  const orderDraft = dryRun.orderDraft || {};
+  const blockedReasons = dryRun.blockedReasons || [];
+  const warnings = dryRun.warnings || [];
+  const nextSteps = preparation.nextSteps || [];
+
+  const orderDraftJson = escapeHtml(JSON.stringify(orderDraft, null, 2));
+
+  const blockedHtml = blockedReasons.length
+    ? `
+      <article class="market-card">
+        <h3>Blocked By</h3>
+        <div class="alerts-list">
+          ${blockedReasons.map((reason) => `<div class="alert-item"><div class="alert-message">${reason}</div></div>`).join("")}
+        </div>
+      </article>
+    `
+    : "";
+
+  const warningsHtml = warnings.length
+    ? `
+      <article class="market-card">
+        <h3>Dry-Run Notes</h3>
+        <div class="alerts-list">
+          ${warnings.map((warning) => `<div class="alert-item"><div class="alert-message">${warning}</div></div>`).join("")}
+        </div>
+      </article>
+    `
+    : "";
+
+  const nextStepsHtml = nextSteps.length
+    ? `
+      <article class="market-card">
+        <h3>Next Steps</h3>
+        <div class="alerts-list">
+          ${nextSteps.map((step) => `<div class="alert-item"><div class="alert-message">${step}</div></div>`).join("")}
+        </div>
+      </article>
+    `
+    : "";
 
   return `
-    <div class="alert-item">
-      <div class="alert-message">${preparation.message}</div>
-      <div class="alert-time">Mode: ${preparation.mode}</div>
-      <div class="alert-time">Question: ${ticket.question || "—"}</div>
-      <div class="alert-time">Side: ${ticket.side || "—"}</div>
-      <div class="alert-time">Size: ${formatMoney(ticket.sizeDollars || 0)}</div>
-      <div class="alert-time">Selected Price: ${formatProbability(ticket.selectedPrice)}</div>
-      ${blockers ? `<div style="margin-top:10px;">${blockers}</div>` : ""}
+    <div class="market-grid">
+      <article class="market-card">
+        <h3>Builder Dry Run Status</h3>
+        <div class="market-meta">
+          <div class="meta-box"><span class="meta-label">Mode</span><span class="meta-value">${preparation.mode || "LIVE"}</span></div>
+          <div class="meta-box"><span class="meta-label">Status</span><span class="meta-value">${preparation.status || "—"}</span></div>
+          <div class="meta-box"><span class="meta-label">Dry Run</span><span class="meta-value">${preparation.dryRun ? "YES" : "NO"}</span></div>
+          <div class="meta-box"><span class="meta-label">Builder Ready</span><span class="meta-value">${preparation.builderReady ? "YES" : "NO"}</span></div>
+        </div>
+        <div class="alert-item">
+          <div class="alert-message">${preparation.message || "Live preparation response received."}</div>
+          <div class="alert-time">Question: ${ticket.question || "—"}</div>
+          <div class="alert-time">Side: ${ticket.side || "—"}</div>
+          <div class="alert-time">Size: ${formatMoney(ticket.sizeDollars || 0)}</div>
+          <div class="alert-time">Selected Price: ${formatProbability(ticket.selectedPrice)}</div>
+        </div>
+      </article>
+
+      <article class="market-card">
+        <h3>Routing Summary</h3>
+        <div class="market-meta">
+          <div class="meta-box"><span class="meta-label">Route ID</span><span class="meta-value">${dryRun.routeId || "—"}</span></div>
+          <div class="meta-box"><span class="meta-label">Stage</span><span class="meta-value">${dryRun.stage || "—"}</span></div>
+          <div class="meta-box"><span class="meta-label">Target</span><span class="meta-value">${requestPlan.targetBaseUrl || "—"}${requestPlan.targetPath || ""}</span></div>
+          <div class="meta-box"><span class="meta-label">Method</span><span class="meta-value">${requestPlan.method || "POST"}</span></div>
+          <div class="meta-box"><span class="meta-label">Builder Headers</span><span class="meta-value">${requestPlan.builderHeadersAttachedServerSide ? "SERVER ONLY" : "NO"}</span></div>
+          <div class="meta-box"><span class="meta-label">User Signing</span><span class="meta-value">${requestPlan.userOrderSignatureRequired ? "REQUIRED" : "NOT REQUIRED"}</span></div>
+          <div class="meta-box"><span class="meta-label">Real Submission</span><span class="meta-value">${requestPlan.realSubmissionAttempted ? "YES" : "NO"}</span></div>
+          <div class="meta-box"><span class="meta-label">Secrets Exposed</span><span class="meta-value">${requestPlan.builderSecretsExposedToClient ? "YES" : "NO"}</span></div>
+        </div>
+      </article>
+    </div>
+
+    <div class="market-grid" style="margin-top: 18px;">
+      <article class="market-card">
+        <h3>Readiness Checks</h3>
+        <div class="market-meta">
+          <div class="meta-box"><span class="meta-label">Account Connected</span><span class="meta-value">${readinessChecks.accountConnected ? "YES" : "NO"}</span></div>
+          <div class="meta-box"><span class="meta-label">Live Mode Enabled</span><span class="meta-value">${readinessChecks.liveModeEnabled ? "YES" : "NO"}</span></div>
+          <div class="meta-box"><span class="meta-label">Can Enable Live</span><span class="meta-value">${readinessChecks.canEnableLiveMode ? "YES" : "NO"}</span></div>
+          <div class="meta-box"><span class="meta-label">Builder API</span><span class="meta-value">${readinessChecks.builderApiConfigured ? "READY" : "NOT READY"}</span></div>
+          <div class="meta-box"><span class="meta-label">Relayer</span><span class="meta-value">${readinessChecks.relayerReady ? "READY" : "NOT READY"}</span></div>
+          <div class="meta-box"><span class="meta-label">Builder Ready</span><span class="meta-value">${readinessChecks.builderReady ? "YES" : "NO"}</span></div>
+          <div class="meta-box"><span class="meta-label">Builder Attribution</span><span class="meta-value">${builderAttribution.configured ? "CONFIGURED" : "NOT CONFIGURED"}</span></div>
+          <div class="meta-box"><span class="meta-label">Live Routing Flag</span><span class="meta-value">${builderAttribution.liveRoutingEnabled ? "ON" : "OFF"}</span></div>
+        </div>
+      </article>
+
+      <article class="market-card">
+        <h3>Order Draft</h3>
+        <div class="alert-item">
+          <div class="alert-message">Server-Side Dry-Run Payload</div>
+          <div class="alert-time">No real order was signed or submitted.</div>
+          <pre style="margin:12px 0 0; white-space:pre-wrap; word-break:break-word; font-size:0.82rem; line-height:1.5; color:#cbd5e1;">${orderDraftJson}</pre>
+        </div>
+      </article>
+    </div>
+
+    <div class="market-grid" style="margin-top: 18px;">
+      ${blockedHtml || warningsHtml || nextStepsHtml ? `${blockedHtml}${warningsHtml}${nextStepsHtml}` : ""}
     </div>
   `;
 }

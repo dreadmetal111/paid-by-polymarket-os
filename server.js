@@ -291,7 +291,8 @@ function updateLiveMode(enabled) {
   return getAccountReadiness();
 }
 
-// Kept for frontend compatibility, but builder readiness now comes from server env vars only.
+// Kept for frontend compatibility.
+// Builder readiness now comes from server env vars only.
 function updateBuilderSettings() {
   accountState.lastUpdated = nowIso();
   return getAccountReadiness();
@@ -634,34 +635,115 @@ function buildTradeQuote(market, side, sizeDollars, mode = "PAPER") {
   };
 }
 
-function buildExecutionPreparation(market, side, sizeDollars) {
+function getOutcomeLabelForSide(side) {
+  return side === "BUY YES" ? "YES" : "NO";
+}
+
+function getTokenIdForSide(market, side) {
+  if (!Array.isArray(market.tokenIds)) return null;
+  return side === "BUY YES" ? market.tokenIds[0] || null : market.tokenIds[1] || null;
+}
+
+function buildBuilderDryRunRouting(market, side, sizeDollars) {
   const quote = buildTradeQuote(market, side, sizeDollars, "LIVE");
   const readiness = getAccountReadiness();
   const builderEnv = getBuilderEnvStatus();
 
+  const tokenID = getTokenIdForSide(market, side);
+  const outcome = getOutcomeLabelForSide(side);
+
+  const blockedReasons = [
+    !readiness.isConnected ? "Account is not connected" : null,
+    !readiness.liveModeEnabled ? "Live mode is not enabled" : null,
+    !readiness.canEnableLiveMode ? "Account cannot enable live mode yet" : null,
+    !readiness.builderApiConfigured ? "Builder credentials are not configured on the server" : null,
+    !readiness.relayerReady ? "Builder live routing is not enabled on the server" : null,
+    !tokenID ? "Outcome token ID is missing for this side" : null,
+  ].filter(Boolean);
+
+  const readyForDryRun = blockedReasons.length === 0;
+
   return {
-    builderReady: readiness.builderReady,
-    mode: "LIVE",
-    status: readiness.builderReady
-      ? "PREPARED_FOR_BUILDER_ROUTING"
-      : "PREPARED_PLACEHOLDER",
-    message: readiness.builderReady
-      ? "Builder attribution is configured on the server. Live routing shell is ready for the next integration step."
-      : "Live trade shell is ready, but wallet readiness or server-side builder configuration is incomplete.",
-    accountReadiness: readiness,
+    dryRun: true,
+    routeId: "BUILDER_ROUTE_DRY_RUN_V1",
+    stage: readyForDryRun ? "READY_TO_SIGN_AND_FORWARD" : "BLOCKED",
+    blocked: !readyForDryRun,
+    blockedReasons,
+    requestPlan: {
+      transport: "SERVER_ONLY",
+      method: "POST",
+      targetBaseUrl: CLOB,
+      targetPath: "/order",
+      builderHeadersAttachedServerSide: true,
+      userCredentialsRequired: true,
+      userOrderSignatureRequired: true,
+      builderSecretsExposedToClient: false,
+      realSubmissionAttempted: false,
+    },
     builderAttribution: {
       configured: builderEnv.configured,
       liveRoutingEnabled: builderEnv.liveRoutingEnabled,
       relayerReady: builderEnv.relayerReady,
       relayerBaseUrl: builderEnv.relayerBaseUrl,
-      usesServerSideSigning: true,
+      serverSideOnly: true,
+      headerValues: "REDACTED",
     },
+    readinessChecks: {
+      accountConnected: readiness.isConnected,
+      liveModeEnabled: readiness.liveModeEnabled,
+      canEnableLiveMode: readiness.canEnableLiveMode,
+      builderApiConfigured: readiness.builderApiConfigured,
+      relayerReady: readiness.relayerReady,
+      builderReady: readiness.builderReady,
+    },
+    orderDraft: {
+      marketId: market.id,
+      question: market.question,
+      tokenID,
+      outcome,
+      side: "BUY",
+      price: round4(quote.selectedPrice),
+      sizeShares: round4(quote.estimatedShares),
+      sizeDollars: round4(quote.sizeDollars),
+      estimatedCost: round4(quote.estimatedCost),
+      estimatedMaxLoss: round4(quote.estimatedMaxLoss),
+      estimatedMaxPayout: round4(quote.estimatedMaxPayout),
+      estimatedProfitIfCorrect: round4(quote.estimatedProfitIfCorrect),
+      orderType: "GTC",
+      timeInForce: "GTC",
+      walletAddress: readiness.walletAddress || null,
+      proxyWalletAddress: readiness.proxyWalletAddress || null,
+      funderAddress: readiness.funderAddress || null,
+      signatureType: readiness.signatureType ?? 0,
+    },
+    warnings: [
+      "DRY RUN ONLY — no live order was signed or submitted.",
+      "Builder attribution can be attached server-side, but real live trading still requires user authentication/signing.",
+    ],
+  };
+}
+
+function buildExecutionPreparation(market, side, sizeDollars) {
+  const quote = buildTradeQuote(market, side, sizeDollars, "LIVE");
+  const readiness = getAccountReadiness();
+  const dryRunRouting = buildBuilderDryRunRouting(market, side, sizeDollars);
+
+  return {
+    dryRun: true,
+    builderReady: readiness.builderReady,
+    mode: "LIVE",
+    status: dryRunRouting.blocked ? "DRY_RUN_BLOCKED" : "DRY_RUN_READY",
+    message: dryRunRouting.blocked
+      ? "Builder dry run is blocked by readiness checks. Review the blockers below."
+      : "Builder dry run prepared. The backend assembled the order draft and routing plan, but no real order was submitted.",
+    accountReadiness: readiness,
+    dryRunRouting,
     ticket: quote,
-    nextSteps: readiness.blockers.length
-      ? readiness.blockers
+    nextSteps: dryRunRouting.blocked
+      ? dryRunRouting.blockedReasons
       : [
-          "Add user order signing/authentication flow",
-          "Forward builder-attributed live requests from server to CLOB/Relayer",
+          "Add user authentication/signing for real live orders",
+          "Forward the signed order with builder attribution headers from the server",
         ],
   };
 }
@@ -1286,7 +1368,7 @@ app.post("/api/trade/execute", async (req, res) => {
       ok: true,
       mode: "LIVE",
       message:
-        "Builder environment wiring is active on the server. Real live execution is still intentionally blocked until user authentication/signing is added safely.",
+        "DRY RUN ONLY — the backend prepared the builder-attributed routing draft, but no real order was submitted.",
       preparation,
     });
   } catch (err) {
