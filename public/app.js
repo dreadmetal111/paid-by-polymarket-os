@@ -488,7 +488,7 @@ function renderSignedOrderSubmitResult(response, isError = false) {
     ${blockedReasons.length ? `
       <div class="market-grid" style="margin-top: 18px;">
         <article class="market-card">
-          <h3>Blocked By</h3>
+          <h3>Why this is blocked</h3>
           <div class="alerts-list">
             ${blockedReasons.map((reason) => `
               <div class="alert-item">
@@ -521,18 +521,42 @@ function renderLivePreparation(preparation) {
   const realSubmitPolicy = handoff.realSubmitPolicy || {};
   const realSubmitReadiness = handoff.realSubmitReadiness || {};
 
+  const handoffBlocked = !!handoff.blocked;
+  const fallbackMode = !!realSubmitReadiness.fallbackMode;
+  const guardedReady = !!realSubmitReadiness.readyForGuardedSubmit;
+  const showPayload = !handoffBlocked;
+  const showSubmitForm = guardedReady;
+  const showBlockedSection = handoffBlocked && blockedReasons.length > 0;
+  const showFallbackSection = !handoffBlocked && fallbackMode;
+  const showSafetyNotes = Array.isArray(handoff.notes) && handoff.notes.length > 0;
+  const showNextSteps = !handoffBlocked && Array.isArray(nextSteps) && nextSteps.length > 0;
+
+  let stateLabel = "Review";
+  let stateMessage = preparation.message || "Live preparation complete.";
+
+  if (handoffBlocked) {
+    stateLabel = "Blocked";
+  } else if (fallbackMode) {
+    stateLabel = "Safety Guard Active";
+    stateMessage =
+      "This live path is intentionally held in safe fallback mode. The backend is protecting real submission until server policy is explicitly enabled.";
+  } else if (guardedReady) {
+    stateLabel = "Guarded Submit Ready";
+  }
+
   return `
     <div class="market-grid">
       <article class="market-card">
-        <h3>Signed Handoff Status</h3>
+        <h3>Execution Prep Status</h3>
         <div class="market-meta">
           <div class="meta-box"><span class="meta-label">Mode</span><span class="meta-value">${preparation.mode || "LIVE"}</span></div>
           <div class="meta-box"><span class="meta-label">Status</span><span class="meta-value">${preparation.status || "—"}</span></div>
+          <div class="meta-box"><span class="meta-label">Current State</span><span class="meta-value">${stateLabel}</span></div>
           <div class="meta-box"><span class="meta-label">Builder Ready</span><span class="meta-value">${preparation.builderReady ? "YES" : "NO"}</span></div>
           <div class="meta-box"><span class="meta-label">Submission Mode</span><span class="meta-value">${handoff.submissionMode || "SAFE_FALLBACK_ONLY"}</span></div>
         </div>
         <div class="alert-item">
-          <div class="alert-message">${preparation.message || "Live preparation complete."}</div>
+          <div class="alert-message">${stateMessage}</div>
           <div class="alert-time">Question: ${ticket.question || "—"}</div>
           <div class="alert-time">Side: ${ticket.side || "—"}</div>
           <div class="alert-time">Size: ${formatMoney(ticket.sizeDollars || 0)}</div>
@@ -544,11 +568,11 @@ function renderLivePreparation(preparation) {
         <h3>Real Submit Guardrails</h3>
         <div class="market-meta">
           <div class="meta-box"><span class="meta-label">Server Enabled</span><span class="meta-value">${realSubmitPolicy.enabled ? "YES" : "NO"}</span></div>
-          <div class="meta-box"><span class="meta-label">Safe Fallback</span><span class="meta-value">${realSubmitReadiness.fallbackMode ? "YES" : "NO"}</span></div>
+          <div class="meta-box"><span class="meta-label">Safe Fallback</span><span class="meta-value">${fallbackMode ? "YES" : "NO"}</span></div>
           <div class="meta-box"><span class="meta-label">Requested Size</span><span class="meta-value">${formatMoney(realSubmitReadiness.requestedSizeDollars || 0)}</span></div>
           <div class="meta-box"><span class="meta-label">Max Submit Size</span><span class="meta-value">${formatMoney(realSubmitPolicy.maxSubmitDollars || 0)}</span></div>
           <div class="meta-box"><span class="meta-label">Within Max Size</span><span class="meta-value">${realSubmitReadiness.withinMaxSubmitSize ? "YES" : "NO"}</span></div>
-          <div class="meta-box"><span class="meta-label">Guarded Ready</span><span class="meta-value">${realSubmitReadiness.readyForGuardedSubmit ? "YES" : "NO"}</span></div>
+          <div class="meta-box"><span class="meta-label">Guarded Ready</span><span class="meta-value">${guardedReady ? "YES" : "NO"}</span></div>
         </div>
         <div class="alert-item">
           <div class="alert-message">Confirmation text required before real submit</div>
@@ -557,76 +581,116 @@ function renderLivePreparation(preparation) {
       </article>
     </div>
 
-    <div class="market-grid" style="margin-top: 18px;">
-      <article class="market-card">
-        <h3>Signable Order Payload</h3>
-        <div class="alert-item">
-          <div class="alert-message">Create and sign this order on the user side.</div>
-          <div class="alert-time">This app does not move the user private key to the server.</div>
-          <pre style="margin:12px 0 0; white-space:pre-wrap; word-break:break-word; font-size:0.82rem; line-height:1.5; color:#cbd5e1;">${formatJsonBlock(handoff.signableOrder)}</pre>
-        </div>
-      </article>
+    ${showBlockedSection ? `
+      <div class="market-grid" style="margin-top: 18px;">
+        <article class="market-card">
+          <h3>Why this is blocked</h3>
+          <div class="alerts-list">
+            ${blockedReasons.map((reason) => `
+              <div class="alert-item">
+                <div class="alert-message">${reason}</div>
+              </div>
+            `).join("")}
+          </div>
+        </article>
+      </div>
+    ` : ""}
 
-      <article class="market-card">
-        <h3>Submit Signed Order Handoff</h3>
-        <div class="alert-item">
-          <div class="alert-message">Paste signed order JSON</div>
-          <textarea
-            id="signedOrderInput"
-            rows="10"
-            placeholder="Paste signed order JSON here"
-            style="width:100%; margin-top:10px; padding:12px; border-radius:12px; border:1px solid #1e293b; background:#020817; color:#f8fafc; font-size:0.9rem; line-height:1.5;"
-          ></textarea>
-        </div>
-        <div class="alert-item" style="margin-top: 12px;">
-          <div class="alert-message">Paste user L2 auth JSON</div>
-          <div class="alert-time">Expected keys: address, apiKey, secret, passphrase</div>
-          <textarea
-            id="userAuthInput"
-            rows="8"
-            placeholder="Paste user auth JSON here"
-            style="width:100%; margin-top:10px; padding:12px; border-radius:12px; border:1px solid #1e293b; background:#020817; color:#f8fafc; font-size:0.9rem; line-height:1.5;"
-          ></textarea>
-          <pre style="margin:12px 0 0; white-space:pre-wrap; word-break:break-word; font-size:0.8rem; line-height:1.45; color:#94a3b8;">${formatJsonBlock(handoff.userAuthSchema)}</pre>
-        </div>
-        <div class="alert-item" style="margin-top: 12px;">
-          <div class="alert-message">Type the confirmation text exactly</div>
-          <div class="alert-time">${realSubmitPolicy.confirmText || "—"}</div>
-          <input
-            id="realSubmitConfirmInput"
-            type="text"
-            placeholder="Type confirmation text exactly"
-            style="margin-top:10px;"
-          />
-        </div>
-        <div style="margin-top: 14px;">
-          <button id="submitSignedOrderBtn">Guarded Real Submit</button>
-        </div>
-      </article>
-    </div>
+    ${showFallbackSection ? `
+      <div class="market-grid" style="margin-top: 18px;">
+        <article class="market-card">
+          <h3>Intentional Safety Guard</h3>
+          <div class="alert-item">
+            <div class="alert-message">Real live submit is intentionally off right now.</div>
+            <div class="alert-time">The backend route exists and the handoff architecture is in place, but forwarding remains disabled until the server policy is explicitly turned on.</div>
+          </div>
+        </article>
+      </div>
+    ` : ""}
 
-    <div class="market-grid" style="margin-top: 18px;">
-      <article class="market-card">
-        <h3>Handoff Notes</h3>
-        <div class="alerts-list">
-          ${(handoff.notes || []).map((note) => `
-            <div class="alert-item">
-              <div class="alert-message">${note}</div>
+    ${showPayload ? `
+      <div class="market-grid" style="margin-top: 18px;">
+        <article class="market-card">
+          <h3>Signable Order Payload</h3>
+          <div class="alert-item">
+            <div class="alert-message">${showSubmitForm ? "Create and sign this order on the user side." : "Preview of the order the client would sign when guarded submit is available."}</div>
+            <div class="alert-time">This app does not move the user private key to the server.</div>
+            <pre style="margin:12px 0 0; white-space:pre-wrap; word-break:break-word; font-size:0.82rem; line-height:1.5; color:#cbd5e1;">${formatJsonBlock(handoff.signableOrder)}</pre>
+          </div>
+        </article>
+      </div>
+    ` : ""}
+
+    ${showSubmitForm ? `
+      <div class="market-grid" style="margin-top: 18px;">
+        <article class="market-card">
+          <h3>Submit Signed Order Handoff</h3>
+          <div class="alert-item">
+            <div class="alert-message">Paste signed order JSON</div>
+            <textarea
+              id="signedOrderInput"
+              rows="10"
+              placeholder="Paste signed order JSON here"
+              style="width:100%; margin-top:10px; padding:12px; border-radius:12px; border:1px solid #1e293b; background:#020817; color:#f8fafc; font-size:0.9rem; line-height:1.5;"
+            ></textarea>
+          </div>
+          <div class="alert-item" style="margin-top: 12px;">
+            <div class="alert-message">Paste user L2 auth JSON</div>
+            <div class="alert-time">Expected keys: address, apiKey, secret, passphrase</div>
+            <textarea
+              id="userAuthInput"
+              rows="8"
+              placeholder="Paste user auth JSON here"
+              style="width:100%; margin-top:10px; padding:12px; border-radius:12px; border:1px solid #1e293b; background:#020817; color:#f8fafc; font-size:0.9rem; line-height:1.5;"
+            ></textarea>
+            <pre style="margin:12px 0 0; white-space:pre-wrap; word-break:break-word; font-size:0.8rem; line-height:1.45; color:#94a3b8;">${formatJsonBlock(handoff.userAuthSchema)}</pre>
+          </div>
+          <div class="alert-item" style="margin-top: 12px;">
+            <div class="alert-message">Type the confirmation text exactly</div>
+            <div class="alert-time">${realSubmitPolicy.confirmText || "—"}</div>
+            <input
+              id="realSubmitConfirmInput"
+              type="text"
+              placeholder="Type confirmation text exactly"
+              style="margin-top:10px;"
+            />
+          </div>
+          <div style="margin-top: 14px;">
+            <button id="submitSignedOrderBtn">Guarded Real Submit</button>
+          </div>
+        </article>
+      </div>
+    ` : ""}
+
+    ${(showSafetyNotes || showNextSteps) ? `
+      <div class="market-grid" style="margin-top: 18px;">
+        ${showSafetyNotes ? `
+          <article class="market-card">
+            <h3>Safety Notes</h3>
+            <div class="alerts-list">
+              ${(handoff.notes || []).map((note) => `
+                <div class="alert-item">
+                  <div class="alert-message">${note}</div>
+                </div>
+              `).join("")}
             </div>
-          `).join("")}
-          ${(blockedReasons || []).map((reason) => `
-            <div class="alert-item">
-              <div class="alert-message">${reason}</div>
+          </article>
+        ` : ""}
+
+        ${showNextSteps ? `
+          <article class="market-card">
+            <h3>Next Steps</h3>
+            <div class="alerts-list">
+              ${nextSteps.map((step) => `
+                <div class="alert-item">
+                  <div class="alert-message">${step}</div>
+                </div>
+              `).join("")}
             </div>
-          `).join("")}
-          ${(nextSteps || []).map((step) => `
-            <div class="alert-item">
-              <div class="alert-message">${step}</div>
-            </div>
-          `).join("")}
-        </div>
-      </article>
-    </div>
+          </article>
+        ` : ""}
+      </div>
+    ` : ""}
   `;
 }
 
@@ -895,6 +959,11 @@ async function handleSubmitSignedOrderHandoff() {
     if (!currentTradeTicket) throw new Error("No trade ticket selected");
     if (!currentLivePreparation?.signedOrderHandoff) {
       throw new Error("Prepare the live handoff first");
+    }
+
+    const readiness = currentLivePreparation.signedOrderHandoff.realSubmitReadiness || {};
+    if (!readiness.readyForGuardedSubmit) {
+      throw new Error("Guarded real submit is not available in the current safety state");
     }
 
     const signedOrderRaw = document.getElementById("signedOrderInput")?.value?.trim();
