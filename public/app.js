@@ -248,6 +248,7 @@ function renderAccountPanel(account) {
           <div class="meta-box"><span class="meta-label">Relayer</span><span class="meta-value">${account.relayerReady ? "READY" : "NOT READY"}</span></div>
           <div class="meta-box"><span class="meta-label">Signed Handoff</span><span class="meta-value">${account.signedOrderHandoffEnabled ? "READY" : "NOT READY"}</span></div>
           <div class="meta-box"><span class="meta-label">Real Live Submit</span><span class="meta-value">${account.realLiveSubmitEnabled ? "ON" : "SAFE FALLBACK"}</span></div>
+          <div class="meta-box"><span class="meta-label">Max Live Submit</span><span class="meta-value">${formatMoney(account.maxRealSubmitDollars || 0)}</span></div>
         </div>
         <div class="alert-item" style="margin-top: 10px;">
           <div class="alert-message">Live Mode</div>
@@ -307,6 +308,7 @@ function renderAccountControls(account = {}) {
           <div class="meta-box"><span class="meta-label">Live Routing</span><span class="meta-value">${account.liveRoutingEnabled ? "ON" : "OFF"}</span></div>
           <div class="meta-box"><span class="meta-label">Signed Handoff</span><span class="meta-value">${account.signedOrderHandoffEnabled ? "READY" : "NOT READY"}</span></div>
           <div class="meta-box"><span class="meta-label">Real Submit</span><span class="meta-value">${account.realLiveSubmitEnabled ? "ON" : "SAFE FALLBACK"}</span></div>
+          <div class="meta-box"><span class="meta-label">Max Submit</span><span class="meta-value">${formatMoney(account.maxRealSubmitDollars || 0)}</span></div>
         </div>
         <div class="alert-item">
           <div class="alert-message">Builder readiness is read-only.</div>
@@ -455,15 +457,17 @@ function renderSignedOrderSubmitResult(response, isError = false) {
   const result = response?.result || {};
   const summary = result.requestSummary || {};
   const clobResponse = result.clobResponse || null;
+  const blockedReasons = result.blockedReasons || [];
 
   return `
     <div class="market-grid">
       <article class="market-card">
-        <h3>${isError ? "Signed Handoff Error" : "Signed Handoff Result"}</h3>
+        <h3>${isError ? "Signed Handoff Error" : "Real Submit Result"}</h3>
         <div class="market-meta">
           <div class="meta-box"><span class="meta-label">Status</span><span class="meta-value">${result.status || (isError ? "ERROR" : "DONE")}</span></div>
           <div class="meta-box"><span class="meta-label">Forwarded</span><span class="meta-value">${response?.forwarded ? "YES" : "NO"}</span></div>
-          <div class="meta-box"><span class="meta-label">Dry-Run Fallback</span><span class="meta-value">${response?.dryRunFallback ? "YES" : "NO"}</span></div>
+          <div class="meta-box"><span class="meta-label">Blocked</span><span class="meta-value">${response?.blocked ? "YES" : "NO"}</span></div>
+          <div class="meta-box"><span class="meta-label">Safe Fallback</span><span class="meta-value">${response?.dryRunFallback ? "YES" : "NO"}</span></div>
           <div class="meta-box"><span class="meta-label">Real Submission</span><span class="meta-value">${summary.realSubmissionAttempted ? "YES" : "NO"}</span></div>
           <div class="meta-box"><span class="meta-label">Builder Attribution</span><span class="meta-value">${summary.builderAttributionAttached ? "YES" : "NO"}</span></div>
           <div class="meta-box"><span class="meta-label">User L2 Auth</span><span class="meta-value">${summary.userL2AuthAttached ? "YES" : "NO"}</span></div>
@@ -480,6 +484,21 @@ function renderSignedOrderSubmitResult(response, isError = false) {
         </div>
       </article>
     </div>
+
+    ${blockedReasons.length ? `
+      <div class="market-grid" style="margin-top: 18px;">
+        <article class="market-card">
+          <h3>Blocked By</h3>
+          <div class="alerts-list">
+            ${blockedReasons.map((reason) => `
+              <div class="alert-item">
+                <div class="alert-message">${reason}</div>
+              </div>
+            `).join("")}
+          </div>
+        </article>
+      </div>
+    ` : ""}
 
     ${clobResponse ? `
       <div class="market-grid" style="margin-top: 18px;">
@@ -499,6 +518,8 @@ function renderLivePreparation(preparation) {
   const handoff = preparation.signedOrderHandoff || {};
   const blockedReasons = handoff.blockedReasons || [];
   const nextSteps = preparation.nextSteps || [];
+  const realSubmitPolicy = handoff.realSubmitPolicy || {};
+  const realSubmitReadiness = handoff.realSubmitReadiness || {};
 
   return `
     <div class="market-grid">
@@ -520,6 +541,24 @@ function renderLivePreparation(preparation) {
       </article>
 
       <article class="market-card">
+        <h3>Real Submit Guardrails</h3>
+        <div class="market-meta">
+          <div class="meta-box"><span class="meta-label">Server Enabled</span><span class="meta-value">${realSubmitPolicy.enabled ? "YES" : "NO"}</span></div>
+          <div class="meta-box"><span class="meta-label">Safe Fallback</span><span class="meta-value">${realSubmitReadiness.fallbackMode ? "YES" : "NO"}</span></div>
+          <div class="meta-box"><span class="meta-label">Requested Size</span><span class="meta-value">${formatMoney(realSubmitReadiness.requestedSizeDollars || 0)}</span></div>
+          <div class="meta-box"><span class="meta-label">Max Submit Size</span><span class="meta-value">${formatMoney(realSubmitPolicy.maxSubmitDollars || 0)}</span></div>
+          <div class="meta-box"><span class="meta-label">Within Max Size</span><span class="meta-value">${realSubmitReadiness.withinMaxSubmitSize ? "YES" : "NO"}</span></div>
+          <div class="meta-box"><span class="meta-label">Guarded Ready</span><span class="meta-value">${realSubmitReadiness.readyForGuardedSubmit ? "YES" : "NO"}</span></div>
+        </div>
+        <div class="alert-item">
+          <div class="alert-message">Confirmation text required before real submit</div>
+          <div class="alert-time">${realSubmitPolicy.confirmText || "—"}</div>
+        </div>
+      </article>
+    </div>
+
+    <div class="market-grid" style="margin-top: 18px;">
+      <article class="market-card">
         <h3>Signable Order Payload</h3>
         <div class="alert-item">
           <div class="alert-message">Create and sign this order on the user side.</div>
@@ -527,9 +566,7 @@ function renderLivePreparation(preparation) {
           <pre style="margin:12px 0 0; white-space:pre-wrap; word-break:break-word; font-size:0.82rem; line-height:1.5; color:#cbd5e1;">${formatJsonBlock(handoff.signableOrder)}</pre>
         </div>
       </article>
-    </div>
 
-    <div class="market-grid" style="margin-top: 18px;">
       <article class="market-card">
         <h3>Submit Signed Order Handoff</h3>
         <div class="alert-item">
@@ -552,11 +589,23 @@ function renderLivePreparation(preparation) {
           ></textarea>
           <pre style="margin:12px 0 0; white-space:pre-wrap; word-break:break-word; font-size:0.8rem; line-height:1.45; color:#94a3b8;">${formatJsonBlock(handoff.userAuthSchema)}</pre>
         </div>
+        <div class="alert-item" style="margin-top: 12px;">
+          <div class="alert-message">Type the confirmation text exactly</div>
+          <div class="alert-time">${realSubmitPolicy.confirmText || "—"}</div>
+          <input
+            id="realSubmitConfirmInput"
+            type="text"
+            placeholder="Type confirmation text exactly"
+            style="margin-top:10px;"
+          />
+        </div>
         <div style="margin-top: 14px;">
-          <button id="submitSignedOrderBtn">Submit Signed Order Handoff</button>
+          <button id="submitSignedOrderBtn">Guarded Real Submit</button>
         </div>
       </article>
+    </div>
 
+    <div class="market-grid" style="margin-top: 18px;">
       <article class="market-card">
         <h3>Handoff Notes</h3>
         <div class="alerts-list">
@@ -850,9 +899,11 @@ async function handleSubmitSignedOrderHandoff() {
 
     const signedOrderRaw = document.getElementById("signedOrderInput")?.value?.trim();
     const userAuthRaw = document.getElementById("userAuthInput")?.value?.trim();
+    const confirmText = document.getElementById("realSubmitConfirmInput")?.value?.trim() || "";
 
     if (!signedOrderRaw) throw new Error("Paste signed order JSON first");
     if (!userAuthRaw) throw new Error("Paste user L2 auth JSON first");
+    if (!confirmText) throw new Error("Type the confirmation text first");
 
     const signedOrder = parseJsonText(signedOrderRaw, "Signed order");
     const userAuth = parseJsonText(userAuthRaw, "User auth");
@@ -863,6 +914,7 @@ async function handleSubmitSignedOrderHandoff() {
       sizeDollars: currentTradeTicket.sizeDollars,
       signedOrder,
       userAuth,
+      confirmText,
       orderType: currentLivePreparation.signedOrderHandoff.orderType || "GTC",
       postOnly: !!currentLivePreparation.signedOrderHandoff.postOnly,
     });

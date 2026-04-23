@@ -178,6 +178,25 @@ function getBuilderEnvStatus() {
   };
 }
 
+function getRealSubmitPolicy() {
+  const enabled =
+    String(process.env.PBP_ENABLE_REAL_LIVE_SUBMIT || "false").toLowerCase() === "true";
+
+  const maxRaw = Number(process.env.PBP_MAX_REAL_SUBMIT_DOLLARS || 25);
+  const maxSubmitDollars =
+    Number.isFinite(maxRaw) && maxRaw > 0 ? round4(maxRaw) : 25;
+
+  const confirmText =
+    String(process.env.PBP_REAL_SUBMIT_CONFIRM_TEXT || "CONFIRM_LIVE_SUBMIT").trim() ||
+    "CONFIRM_LIVE_SUBMIT";
+
+  return {
+    enabled,
+    maxSubmitDollars,
+    confirmText,
+  };
+}
+
 function getBuilderConfig() {
   const status = getBuilderEnvStatus();
 
@@ -235,6 +254,27 @@ function buildOrderSubmissionBody(
   };
 }
 
+function maskAddress(value) {
+  const address = normalizeAddress(value);
+  if (!address || address.length < 10) return address || null;
+  return `${address.slice(0, 6)}...${address.slice(-4)}`;
+}
+
+function logRealSubmitAudit(event, details = {}) {
+  const safePayload = {
+    timestamp: nowIso(),
+    event,
+    ...details,
+  };
+
+  console.log(`[REAL_SUBMIT_AUDIT] ${JSON.stringify(safePayload)}`);
+}
+
+function getMissingUserAuthFields(userAuth = {}) {
+  const fields = ["address", "apiKey", "secret", "passphrase"];
+  return fields.filter((field) => !String(userAuth[field] || "").trim());
+}
+
 function buildDisconnectedAccountState() {
   return {
     isConnected: false,
@@ -264,6 +304,35 @@ function resetPublicDemoState() {
   return {
     account: getAccountReadiness(),
     stats: getPaperPortfolioStats(),
+  };
+}
+
+function buildRealSubmitSummary({
+  requestPath,
+  requestMethod,
+  orderType,
+  postOnly,
+  signedOrder,
+  sizeDollars,
+  policy,
+  confirmText,
+  builderAttributionAttached = false,
+  userL2AuthAttached = false,
+  realSubmissionAttempted = false,
+}) {
+  return {
+    target: `${CLOB}${requestPath}`,
+    method: requestMethod,
+    orderType,
+    postOnly: !!postOnly,
+    requestedSizeDollars: round4(Number(sizeDollars || 0)),
+    maxSubmitDollars: policy.maxSubmitDollars,
+    confirmTextRequired: policy.confirmText,
+    confirmTextProvided: String(confirmText || "").trim(),
+    signedOrderSummary: summarizeSignedOrder(signedOrder),
+    builderAttributionAttached,
+    userL2AuthAttached,
+    realSubmissionAttempted,
   };
 }
 
@@ -353,6 +422,7 @@ function getActionSignal(m) {
 
 function getAccountReadiness() {
   const builderEnv = getBuilderEnvStatus();
+  const realSubmitPolicy = getRealSubmitPolicy();
 
   const hasWallet = !!accountState.walletAddress;
   const hasProxyIfNeeded =
@@ -383,6 +453,7 @@ function getAccountReadiness() {
     liveRoutingEnabled: builderEnv.liveRoutingEnabled,
     realLiveSubmitEnabled: builderEnv.realLiveSubmitEnabled,
     signedOrderHandoffEnabled: true,
+    maxRealSubmitDollars: realSubmitPolicy.maxSubmitDollars,
     blockers: [
       !hasWallet ? "Missing wallet address" : null,
       !hasProxyIfNeeded ? "Missing proxy wallet address" : null,
@@ -739,22 +810,32 @@ function getTokenIdForSide(market, side) {
   return side === "BUY YES" ? market.tokenIds[0] || null : market.tokenIds[1] || null;
 }
 
-function buildSignedOrderHandoff(market, side, sizeDollars) {
+function getSignedHandoffBlockedReasons(market, side, sizeDollars) {
   const quote = buildTradeQuote(market, side, sizeDollars, "LIVE");
   const readiness = getAccountReadiness();
-  const builderEnv = getBuilderEnvStatus();
-
   const tokenID = getTokenIdForSide(market, side);
-  const outcome = getOutcomeLabelForSide(side);
 
-  const blockedReasons = [
+  return [
     !readiness.isConnected ? "Account is not connected" : null,
     !readiness.liveModeEnabled ? "Live mode is not enabled" : null,
     !readiness.canEnableLiveMode ? "Account cannot enable live mode yet" : null,
     !readiness.builderApiConfigured ? "Builder credentials are not configured on the server" : null,
     !readiness.relayerReady ? "Builder live routing is not enabled on the server" : null,
     !tokenID ? "Outcome token ID is missing for this side" : null,
+    !quote.selectedPrice || quote.selectedPrice <= 0 ? "Selected price is invalid" : null,
   ].filter(Boolean);
+}
+
+function buildSignedOrderHandoff(market, side, sizeDollars) {
+  const quote = buildTradeQuote(market, side, sizeDollars, "LIVE");
+  const readiness = getAccountReadiness();
+  const builderEnv = getBuilderEnvStatus();
+  const realSubmitPolicy = getRealSubmitPolicy();
+
+  const tokenID = getTokenIdForSide(market, side);
+  const outcome = getOutcomeLabelForSide(side);
+  const blockedReasons = getSignedHandoffBlockedReasons(market, side, sizeDollars);
+  const withinMaxSubmitSize = quote.sizeDollars <= realSubmitPolicy.maxSubmitDollars;
 
   const signableOrder = {
     tokenID,
@@ -788,6 +869,23 @@ function buildSignedOrderHandoff(market, side, sizeDollars) {
       signedOrderRequired: true,
       userL2AuthRequired: true,
       builderSecretsStayServerSide: true,
+      confirmationTextRequired: true,
+    },
+    realSubmitPolicy: {
+      enabled: realSubmitPolicy.enabled,
+      maxSubmitDollars: realSubmitPolicy.maxSubmitDollars,
+      confirmText: realSubmitPolicy.confirmText,
+    },
+    realSubmitReadiness: {
+      handoffReady: blockedReasons.length === 0,
+      serverEnabled: realSubmitPolicy.enabled,
+      requestedSizeDollars: round4(quote.sizeDollars),
+      withinMaxSubmitSize,
+      readyForGuardedSubmit:
+        blockedReasons.length === 0 &&
+        realSubmitPolicy.enabled &&
+        withinMaxSubmitSize,
+      fallbackMode: !realSubmitPolicy.enabled,
     },
     orderSummary: {
       marketId: market.id,
@@ -810,9 +908,9 @@ function buildSignedOrderHandoff(market, side, sizeDollars) {
     notes: [
       "The user signs the order payload client-side or in an external wallet/SDK flow.",
       "The backend receives the signed order plus user L2 auth and forwards it with builder attribution headers.",
-      builderEnv.realLiveSubmitEnabled
-        ? "Real live submission is enabled on the server."
-        : "Real live submission is disabled on the server, so signed-order submit will fall back safely.",
+      realSubmitPolicy.enabled
+        ? "Real live submission is enabled on the server, but still gated by max size and confirmation checks."
+        : "Real live submission is disabled on the server, so submit stays in safe fallback mode.",
     ],
   };
 }
@@ -822,18 +920,31 @@ function buildExecutionPreparation(market, side, sizeDollars) {
   const readiness = getAccountReadiness();
   const signedOrderHandoff = buildSignedOrderHandoff(market, side, sizeDollars);
 
+  let message = "Signed-order handoff is blocked by readiness checks.";
+
+  if (!signedOrderHandoff.blocked) {
+    if (!signedOrderHandoff.realSubmitPolicy.enabled) {
+      message =
+        "Signed-order handoff is ready. Real submit remains blocked by server policy until explicitly enabled.";
+    } else if (!signedOrderHandoff.realSubmitReadiness.withinMaxSubmitSize) {
+      message =
+        "Signed-order handoff is ready, but this trade exceeds the current max real submit size guardrail.";
+    } else {
+      message =
+        "Signed-order handoff is ready. Real submit guardrails are satisfied pending signed payload, user auth, and final confirmation.";
+    }
+  }
+
   return {
     dryRun: !signedOrderHandoff.submissionEnabled,
     builderReady: readiness.builderReady,
     mode: "LIVE",
     status: signedOrderHandoff.blocked
       ? "SIGNED_HANDOFF_BLOCKED"
-      : "SIGNED_HANDOFF_READY",
-    message: signedOrderHandoff.blocked
-      ? "Signed-order handoff is blocked by readiness checks."
-      : signedOrderHandoff.submissionEnabled
-        ? "Signed-order handoff is ready. The backend can accept a signed order plus user L2 auth and forward it with builder attribution."
-        : "Signed-order handoff is ready, but real submit is disabled on the server, so the fallback remains safe.",
+      : signedOrderHandoff.realSubmitReadiness.readyForGuardedSubmit
+        ? "GUARDED_REAL_SUBMIT_READY"
+        : "SIGNED_HANDOFF_READY",
+    message,
     accountReadiness: readiness,
     signedOrderHandoff,
     ticket: quote,
@@ -841,7 +952,7 @@ function buildExecutionPreparation(market, side, sizeDollars) {
       ? signedOrderHandoff.blockedReasons
       : [
           "Sign the order payload with the user wallet or SDK",
-          "Send the signed order plus user L2 auth bundle to the backend handoff route",
+          "Send the signed order, user L2 auth bundle, and confirmation text to the guarded submit route",
         ],
   };
 }
@@ -1158,7 +1269,7 @@ async function runEngine() {
 
   updatePaperPortfolio(markets);
   // Intentionally no auto-open paper positions here.
-  // Paper trading should start clean and only open from explicit user actions.
+  // Paper trading starts clean and only opens from explicit user actions.
 }
 
 // ===============================
@@ -1459,6 +1570,7 @@ app.post("/api/trade/submit-signed", async (req, res) => {
       userAuth,
       orderType = DEFAULT_ORDER_TYPE,
       postOnly = DEFAULT_POST_ONLY,
+      confirmText = "",
     } = req.body || {};
 
     if (!marketId || !side || !sizeDollars) {
@@ -1467,6 +1579,8 @@ app.post("/api/trade/submit-signed", async (req, res) => {
 
     const parsedSignedOrder = tryParseJsonObject(signedOrder);
     const parsedUserAuth = tryParseJsonObject(userAuth);
+    const signedOrderSummary = summarizeSignedOrder(parsedSignedOrder);
+    const missingUserAuthFields = getMissingUserAuthFields(parsedUserAuth);
 
     const markets = await buildMarkets();
     const market = markets.find((m) => String(m.id) === String(marketId));
@@ -1479,19 +1593,72 @@ app.post("/api/trade/submit-signed", async (req, res) => {
       Number(sizeDollars)
     );
 
-    if (preparation.signedOrderHandoff?.blocked) {
-      return res.status(400).json({
-        ok: false,
-        error: "Signed-order handoff is blocked",
+    const realSubmitPolicy = getRealSubmitPolicy();
+
+    const blockedReasons = [
+      ...(preparation.signedOrderHandoff?.blockedReasons || []),
+      !realSubmitPolicy.enabled ? "Real live submit is disabled on the server" : null,
+      Number(sizeDollars) > realSubmitPolicy.maxSubmitDollars
+        ? `Requested size exceeds max real submit limit of $${realSubmitPolicy.maxSubmitDollars}`
+        : null,
+      String(confirmText || "").trim() !== realSubmitPolicy.confirmText
+        ? "Confirmation text is missing or invalid"
+        : null,
+      !signedOrderSummary?.hasSignature
+        ? "Signed order payload is missing a signature"
+        : null,
+      missingUserAuthFields.length
+        ? `User auth is missing: ${missingUserAuthFields.join(", ")}`
+        : null,
+    ].filter(Boolean);
+
+    const requestPath = "/order";
+    const requestMethod = "POST";
+    const requestSummary = buildRealSubmitSummary({
+      requestPath,
+      requestMethod,
+      orderType,
+      postOnly,
+      signedOrder: parsedSignedOrder,
+      sizeDollars,
+      policy: realSubmitPolicy,
+      confirmText,
+      builderAttributionAttached: false,
+      userL2AuthAttached: false,
+      realSubmissionAttempted: false,
+    });
+
+    if (blockedReasons.length > 0) {
+      const disabledFallback = !realSubmitPolicy.enabled;
+      const status = disabledFallback
+        ? "REAL_SUBMIT_DISABLED_FALLBACK"
+        : "REAL_SUBMIT_BLOCKED";
+
+      logRealSubmitAudit("blocked_attempt", {
+        status,
+        marketId: String(marketId),
+        side,
+        sizeDollars: round4(Number(sizeDollars)),
+        walletAddress: maskAddress(accountState.walletAddress),
+        blockedReasons,
+      });
+
+      return res.json({
+        ok: true,
+        forwarded: false,
+        blocked: true,
+        dryRunFallback: disabledFallback,
         result: {
-          status: "HANDOFF_BLOCKED",
-          blockedReasons: preparation.signedOrderHandoff.blockedReasons,
+          status,
+          message: disabledFallback
+            ? "Real live submission is disabled on the server. The request stayed in safe fallback mode."
+            : "Real live submission was blocked by one or more safety guardrails.",
+          blockedReasons,
+          requestSummary,
         },
       });
     }
 
-    const requestPath = "/order";
-    const requestMethod = "POST";
     const submissionBody = buildOrderSubmissionBody(
       parsedSignedOrder,
       orderType,
@@ -1511,30 +1678,27 @@ app.post("/api/trade/submit-signed", async (req, res) => {
       bodyString
     );
 
-    const builderEnv = getBuilderEnvStatus();
+    const allowedSummary = buildRealSubmitSummary({
+      requestPath,
+      requestMethod,
+      orderType,
+      postOnly,
+      signedOrder: parsedSignedOrder,
+      sizeDollars,
+      policy: realSubmitPolicy,
+      confirmText,
+      builderAttributionAttached: true,
+      userL2AuthAttached: true,
+      realSubmissionAttempted: true,
+    });
 
-    if (!builderEnv.realLiveSubmitEnabled) {
-      return res.json({
-        ok: true,
-        forwarded: false,
-        dryRunFallback: true,
-        result: {
-          status: "HANDOFF_DRY_RUN_FALLBACK",
-          message:
-            "Signed-order handoff is wired, but real live submission is disabled on the server. No order was forwarded.",
-          requestSummary: {
-            target: `${CLOB}${requestPath}`,
-            method: requestMethod,
-            orderType,
-            postOnly: !!postOnly,
-            signedOrderSummary: summarizeSignedOrder(parsedSignedOrder),
-            builderAttributionAttached: true,
-            userL2AuthAttached: true,
-            realSubmissionAttempted: false,
-          },
-        },
-      });
-    }
+    logRealSubmitAudit("allowed_attempt", {
+      marketId: String(marketId),
+      side,
+      sizeDollars: round4(Number(sizeDollars)),
+      walletAddress: maskAddress(parsedUserAuth.address),
+      maxSubmitDollars: realSubmitPolicy.maxSubmitDollars,
+    });
 
     const clobRes = await fetch(`${CLOB}${requestPath}`, {
       method: requestMethod,
@@ -1555,50 +1719,54 @@ app.post("/api/trade/submit-signed", async (req, res) => {
     }
 
     if (!clobRes.ok) {
-      return res.status(400).json({
-        ok: false,
+      logRealSubmitAudit("forward_failure", {
+        marketId: String(marketId),
+        side,
+        sizeDollars: round4(Number(sizeDollars)),
+        walletAddress: maskAddress(parsedUserAuth.address),
+        httpStatus: clobRes.status,
+      });
+
+      return res.json({
+        ok: true,
         forwarded: false,
-        error: "CLOB rejected signed-order handoff",
+        blocked: false,
+        dryRunFallback: false,
         result: {
           status: "FORWARD_REJECTED",
           message: "The signed order was handed off, but the CLOB rejected the request.",
-          requestSummary: {
-            target: `${CLOB}${requestPath}`,
-            method: requestMethod,
-            orderType,
-            postOnly: !!postOnly,
-            signedOrderSummary: summarizeSignedOrder(parsedSignedOrder),
-            builderAttributionAttached: true,
-            userL2AuthAttached: true,
-            realSubmissionAttempted: true,
-          },
+          requestSummary: allowedSummary,
           clobResponse: parsed,
         },
       });
     }
 
+    logRealSubmitAudit("forward_success", {
+      marketId: String(marketId),
+      side,
+      sizeDollars: round4(Number(sizeDollars)),
+      walletAddress: maskAddress(parsedUserAuth.address),
+      httpStatus: clobRes.status,
+    });
+
     return res.json({
       ok: true,
       forwarded: true,
+      blocked: false,
       dryRunFallback: false,
       result: {
         status: "FORWARDED_TO_CLOB",
         message:
           "Signed order handed off successfully. The backend forwarded the signed order with builder attribution attached.",
-        requestSummary: {
-          target: `${CLOB}${requestPath}`,
-          method: requestMethod,
-          orderType,
-          postOnly: !!postOnly,
-          signedOrderSummary: summarizeSignedOrder(parsedSignedOrder),
-          builderAttributionAttached: true,
-          userL2AuthAttached: true,
-          realSubmissionAttempted: true,
-        },
+        requestSummary: allowedSummary,
         clobResponse: parsed,
       },
     });
   } catch (err) {
+    logRealSubmitAudit("unexpected_error", {
+      message: err.message || "Unknown error",
+    });
+
     res.status(400).json({
       ok: false,
       error: err.message || "Failed to submit signed order handoff",
@@ -1645,7 +1813,7 @@ app.post("/api/trade/execute", async (req, res) => {
       ok: true,
       mode: "LIVE",
       message:
-        "Live mode now uses signed-order handoff architecture. No direct live execution occurs here without a signed order handoff request.",
+        "Live mode uses signed-order handoff architecture. Real submission stays guarded by server policy, max size, confirmation, and readiness checks.",
       preparation,
     });
   } catch (err) {
@@ -1664,6 +1832,7 @@ const PORT = process.env.PORT || 3001;
 
 app.listen(PORT, async () => {
   const builderEnv = getBuilderEnvStatus();
+  const realSubmitPolicy = getRealSubmitPolicy();
 
   // Ensure a clean public state on each deploy / boot.
   resetPublicDemoState();
@@ -1671,6 +1840,9 @@ app.listen(PORT, async () => {
   console.log(`Running on http://localhost:${PORT}`);
   console.log(
     `[Builder] configured=${builderEnv.configured} liveRoutingEnabled=${builderEnv.liveRoutingEnabled} relayerReady=${builderEnv.relayerReady} realLiveSubmitEnabled=${builderEnv.realLiveSubmitEnabled}`
+  );
+  console.log(
+    `[RealSubmitPolicy] enabled=${realSubmitPolicy.enabled} maxSubmitDollars=${realSubmitPolicy.maxSubmitDollars} confirmText=${realSubmitPolicy.confirmText}`
   );
 
   try {
