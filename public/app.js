@@ -1,9 +1,15 @@
+const POLYMARKET_CLOB_HOST = "https://clob.polymarket.com";
+const POLYMARKET_CHAIN_ID = 137;
+const POLYGON_HEX_CHAIN_ID = "0x89";
+
 let hotMarketsCache = [];
 let currentTradeTicket = null;
 let accountStateCache = null;
 let currentLivePreparation = null;
+let currentClientSignedOrder = null;
 let walletConnectionSource = "NONE"; // NONE | BROWSER | MANUAL
 let browserWalletEventsBound = false;
+let polymarketBrowserModulesPromise = null;
 
 function formatProbability(value) {
   if (value === null || value === undefined || Number.isNaN(value)) return "—";
@@ -58,7 +64,15 @@ function escapeHtml(value) {
 }
 
 function formatJsonBlock(value) {
-  return escapeHtml(JSON.stringify(value ?? {}, null, 2));
+  return escapeHtml(stringifyJsonForUi(value));
+}
+
+function stringifyJsonForUi(value) {
+  return JSON.stringify(
+    value ?? {},
+    (_, innerValue) => (typeof innerValue === "bigint" ? innerValue.toString() : innerValue),
+    2
+  );
 }
 
 function hasBrowserWalletProvider() {
@@ -119,6 +133,7 @@ function resetFrontendDemoUiState() {
   hotMarketsCache = [];
   currentTradeTicket = null;
   currentLivePreparation = null;
+  currentClientSignedOrder = null;
   accountStateCache = null;
   walletConnectionSource = "NONE";
 
@@ -164,6 +179,9 @@ async function syncAppAccountFromWalletAddress(walletAddress, source = "BROWSER"
   });
 
   walletConnectionSource = source;
+  currentClientSignedOrder = null;
+  currentLivePreparation = null;
+  renderTradeExecutionResult(`<p class="empty">No execution prep run yet.</p>`);
   await loadAccountState();
 }
 
@@ -172,8 +190,9 @@ async function clearAppWalletConnection() {
   walletConnectionSource = "NONE";
   currentTradeTicket = null;
   currentLivePreparation = null;
-  renderTradeTicketPanel();
+  currentClientSignedOrder = null;
   renderTradeExecutionResult(`<p class="empty">No execution prep run yet.</p>`);
+  renderTradeTicketPanel();
   await loadAccountState();
 }
 
@@ -210,6 +229,9 @@ async function handleBrowserWalletChainChanged() {
       return;
     }
 
+    currentClientSignedOrder = null;
+    currentLivePreparation = null;
+    renderTradeExecutionResult(`<p class="empty">No execution prep run yet.</p>`);
     await syncAppAccountFromWalletAddress(nextAddress, "BROWSER");
   } catch (err) {
     console.error("chainChanged sync error:", err);
@@ -224,6 +246,145 @@ function setupBrowserWalletEventSync() {
   window.ethereum.on("accountsChanged", handleBrowserWalletAccountsChanged);
   window.ethereum.on("chainChanged", handleBrowserWalletChainChanged);
   browserWalletEventsBound = true;
+}
+
+async function ensurePolygonBrowserWalletChain() {
+  if (!hasBrowserWalletProvider()) {
+    throw new Error("No browser wallet provider detected");
+  }
+
+  const currentChainId = await window.ethereum.request({ method: "eth_chainId" });
+
+  if (String(currentChainId).toLowerCase() === POLYGON_HEX_CHAIN_ID) {
+    return;
+  }
+
+  try {
+    await window.ethereum.request({
+      method: "wallet_switchEthereumChain",
+      params: [{ chainId: POLYGON_HEX_CHAIN_ID }],
+    });
+  } catch (err) {
+    throw new Error(
+      err?.message || "Switch the browser wallet to Polygon mainnet before signing"
+    );
+  }
+}
+
+async function loadPolymarketBrowserSigningModules() {
+  if (!polymarketBrowserModulesPromise) {
+    polymarketBrowserModulesPromise = Promise.all([
+      import("https://esm.sh/@polymarket/clob-client-v2?bundle"),
+      import("https://esm.sh/viem?bundle"),
+      import("https://esm.sh/viem/chains?bundle"),
+    ]).then(([clobModule, viemModule, viemChainsModule]) => ({
+      clobModule,
+      viemModule,
+      viemChainsModule,
+    }));
+  }
+
+  return polymarketBrowserModulesPromise;
+}
+
+function buildPreparedBrowserUserOrder(signableOrder, sideEnum) {
+  const nextOrder = {
+    tokenID: String(signableOrder.tokenID || ""),
+    price: Number(signableOrder.price),
+    size: Number(signableOrder.size),
+    side:
+      String(signableOrder.side || "").toUpperCase() === "SELL"
+        ? sideEnum.SELL
+        : sideEnum.BUY,
+  };
+
+  if (!nextOrder.tokenID) {
+    throw new Error("Prepared order is missing tokenID");
+  }
+
+  if (!Number.isFinite(nextOrder.price) || nextOrder.price <= 0) {
+    throw new Error("Prepared order price is invalid");
+  }
+
+  if (!Number.isFinite(nextOrder.size) || nextOrder.size <= 0) {
+    throw new Error("Prepared order size is invalid");
+  }
+
+  if (signableOrder.expiration !== undefined && signableOrder.expiration !== null) {
+    nextOrder.expiration = Number(signableOrder.expiration);
+  }
+
+  if (signableOrder.feeRateBps !== undefined && signableOrder.feeRateBps !== null) {
+    nextOrder.feeRateBps = Number(signableOrder.feeRateBps);
+  }
+
+  if (signableOrder.taker) {
+    nextOrder.taker = String(signableOrder.taker);
+  }
+
+  if (signableOrder.nonce !== undefined && signableOrder.nonce !== null) {
+    nextOrder.nonce = Number(signableOrder.nonce);
+  }
+
+  return nextOrder;
+}
+
+async function buildBrowserWalletClobClient(walletAddress) {
+  const { clobModule, viemModule, viemChainsModule } =
+    await loadPolymarketBrowserSigningModules();
+
+  const { ClobClient } = clobModule;
+  const { createWalletClient, custom } = viemModule;
+  const { polygon } = viemChainsModule;
+
+  const walletClient = createWalletClient({
+    account: String(walletAddress || "").trim(),
+    chain: polygon,
+    transport: custom(window.ethereum),
+  });
+
+  return {
+    clobClient: new ClobClient({
+      host: POLYMARKET_CLOB_HOST,
+      chain: POLYMARKET_CHAIN_ID,
+      signer: walletClient,
+      signatureType: 0,
+      funderAddress: String(walletAddress || "").trim(),
+    }),
+    clobModule,
+  };
+}
+
+async function signPreparedOrderClientSide() {
+  if (!hasBrowserWalletProvider()) {
+    throw new Error("No browser wallet provider detected");
+  }
+
+  if (walletConnectionSource !== "BROWSER") {
+    throw new Error("Connect with the browser wallet flow to sign in-browser");
+  }
+
+  const walletAddress = String(accountStateCache?.walletAddress || "").trim();
+  if (!walletAddress) {
+    throw new Error("No active browser wallet address is connected");
+  }
+
+  const signableOrder = currentLivePreparation?.signedOrderHandoff?.signableOrder;
+  if (!signableOrder) {
+    throw new Error("No prepared signable order is available");
+  }
+
+  await ensurePolygonBrowserWalletChain();
+
+  const { clobClient, clobModule } = await buildBrowserWalletClobClient(walletAddress);
+  const userOrder = buildPreparedBrowserUserOrder(signableOrder, clobModule.Side);
+
+  const signedOrder = await clobClient.createOrder(userOrder, {
+    tickSize: String(signableOrder.tickSize || "0.01"),
+    negRisk: !!signableOrder.negRisk,
+  });
+
+  return signedOrder;
 }
 
 function renderAlertItem(alert) {
@@ -265,7 +426,8 @@ function renderPerformanceStats(stats) {
   const expectancyLabel = formatPoints(stats.expectancy || 0);
 
   const signalBreakdown = Object.entries(stats.bySignal || {})
-    .map(([signalType, data]) => `
+    .map(
+      ([signalType, data]) => `
       <article class="market-card">
         <h3>${signalType}</h3>
         <div class="market-meta">
@@ -277,7 +439,8 @@ function renderPerformanceStats(stats) {
           <div class="meta-box"><span class="meta-label">Avg Perf</span><span class="meta-value">${formatPoints(data.avgPerformance || 0)}</span></div>
         </div>
       </article>
-    `)
+    `
+    )
     .join("");
 
   return `
@@ -538,11 +701,13 @@ function renderPaperPositionItem(position) {
   const pnl = position.pnlPoints ?? 0;
   const pnlDollar = position.pnlDollars ?? 0;
   const pnlClass = pnl > 0 ? "positive" : pnl < 0 ? "negative" : "";
-  const statusClass = position.status === "OPEN" ? "" : pnl > 0 ? "positive" : pnl < 0 ? "negative" : "";
+  const statusClass =
+    position.status === "OPEN" ? "" : pnl > 0 ? "positive" : pnl < 0 ? "negative" : "";
 
-  const closeButton = position.status === "OPEN"
-    ? `<button class="close-position-btn" data-position-id="${position.id}">Close Position</button>`
-    : "";
+  const closeButton =
+    position.status === "OPEN"
+      ? `<button class="close-position-btn" data-position-id="${position.id}">Close Position</button>`
+      : "";
 
   return `
     <div class="alert-item">
@@ -667,11 +832,15 @@ function renderSignedOrderSubmitResult(response, isError = false) {
         <article class="market-card">
           <h3>Why this is blocked</h3>
           <div class="alerts-list">
-            ${blockedReasons.map((reason) => `
+            ${blockedReasons
+              .map(
+                (reason) => `
               <div class="alert-item">
                 <div class="alert-message">${reason}</div>
               </div>
-            `).join("")}
+            `
+              )
+              .join("")}
           </div>
         </article>
       </div>
@@ -707,6 +876,12 @@ function renderLivePreparation(preparation) {
   const showFallbackSection = !handoffBlocked && fallbackMode;
   const showSafetyNotes = Array.isArray(handoff.notes) && handoff.notes.length > 0;
   const showNextSteps = !handoffBlocked && Array.isArray(nextSteps) && nextSteps.length > 0;
+
+  const canSignClientSide =
+    showPayload &&
+    hasBrowserWalletProvider() &&
+    walletConnectionSource === "BROWSER" &&
+    !!accountStateCache?.walletAddress;
 
   let stateLabel = "Review";
   let stateMessage = preparation.message || "Live preparation complete.";
@@ -763,11 +938,15 @@ function renderLivePreparation(preparation) {
         <article class="market-card">
           <h3>Why this is blocked</h3>
           <div class="alerts-list">
-            ${blockedReasons.map((reason) => `
+            ${blockedReasons
+              .map(
+                (reason) => `
               <div class="alert-item">
                 <div class="alert-message">${reason}</div>
               </div>
-            `).join("")}
+            `
+              )
+              .join("")}
           </div>
         </article>
       </div>
@@ -794,6 +973,42 @@ function renderLivePreparation(preparation) {
             <div class="alert-time">This app does not move the user private key to the server.</div>
             <pre style="margin:12px 0 0; white-space:pre-wrap; word-break:break-word; font-size:0.82rem; line-height:1.5; color:#cbd5e1;">${formatJsonBlock(handoff.signableOrder)}</pre>
           </div>
+        </article>
+      </div>
+    ` : ""}
+
+    ${showPayload ? `
+      <div class="market-grid" style="margin-top: 18px;">
+        <article class="market-card">
+          <h3>Client-Side Order Signing</h3>
+          <div class="alert-item">
+            <div class="alert-message">
+              ${canSignClientSide
+                ? "Sign the prepared order payload with your connected browser wallet."
+                : "Browser-wallet order signing is not available in the current connection state."}
+            </div>
+            <div class="alert-time">
+              ${canSignClientSide
+                ? "This signs the actual prepared order object client-side using the browser wallet flow. No private keys move to the server."
+                : walletConnectionSource === "MANUAL"
+                  ? "Use the browser wallet connection flow to create a true in-browser signed order. Manual connection remains available as a fallback."
+                  : "Connect a browser wallet to sign the prepared order in-browser."}
+            </div>
+          </div>
+
+          <div style="margin-top: 14px;">
+            <button id="signPreparedOrderBtn" ${canSignClientSide ? "" : "disabled"}>
+              ${canSignClientSide ? "Sign Prepared Order" : "Browser Wallet Signing Unavailable"}
+            </button>
+          </div>
+
+          ${currentClientSignedOrder ? `
+            <div class="alert-item" style="margin-top: 14px;">
+              <div class="alert-message">Client-side signed order created.</div>
+              <div class="alert-time">This signed JSON is the order object to use in the guarded submit handoff.</div>
+              <pre style="margin:12px 0 0; white-space:pre-wrap; word-break:break-word; font-size:0.82rem; line-height:1.5; color:#cbd5e1;">${formatJsonBlock(currentClientSignedOrder)}</pre>
+            </div>
+          ` : ""}
         </article>
       </div>
     ` : ""}
@@ -845,11 +1060,15 @@ function renderLivePreparation(preparation) {
           <article class="market-card">
             <h3>Safety Notes</h3>
             <div class="alerts-list">
-              ${(handoff.notes || []).map((note) => `
+              ${(handoff.notes || [])
+                .map(
+                  (note) => `
                 <div class="alert-item">
                   <div class="alert-message">${note}</div>
                 </div>
-              `).join("")}
+              `
+                )
+                .join("")}
             </div>
           </article>
         ` : ""}
@@ -858,11 +1077,15 @@ function renderLivePreparation(preparation) {
           <article class="market-card">
             <h3>Next Steps</h3>
             <div class="alerts-list">
-              ${nextSteps.map((step) => `
+              ${nextSteps
+                .map(
+                  (step) => `
                 <div class="alert-item">
                   <div class="alert-message">${step}</div>
                 </div>
-              `).join("")}
+              `
+                )
+                .join("")}
             </div>
           </article>
         ` : ""}
@@ -934,10 +1157,11 @@ function applyHotFilters() {
   const minPrice = Number(document.getElementById("minPrice")?.value) || 0;
   const maxPrice = Number(document.getElementById("maxPrice")?.value) || 1;
 
-  const filtered = hotMarketsCache.filter((market) =>
-    market.volume24hr >= minVolume &&
-    market.yesPriceLive >= minPrice &&
-    market.yesPriceLive <= maxPrice
+  const filtered = hotMarketsCache.filter(
+    (market) =>
+      market.volume24hr >= minVolume &&
+      market.yesPriceLive >= minPrice &&
+      market.yesPriceLive <= maxPrice
   );
 
   if (filtered.length === 0) {
@@ -1007,9 +1231,11 @@ async function handleConnectAccount() {
   try {
     const walletAddress = document.getElementById("connectWalletAddress")?.value?.trim();
     const walletType = document.getElementById("connectWalletType")?.value || "EOA";
-    const proxyWalletAddress = document.getElementById("connectProxyWallet")?.value?.trim() || "";
+    const proxyWalletAddress =
+      document.getElementById("connectProxyWallet")?.value?.trim() || "";
     const signatureType = Number(document.getElementById("connectSignatureType")?.value || 0);
-    const funderAddress = document.getElementById("connectFunderAddress")?.value?.trim() || walletAddress;
+    const funderAddress =
+      document.getElementById("connectFunderAddress")?.value?.trim() || walletAddress;
 
     if (!walletAddress) throw new Error("Wallet address is required");
 
@@ -1022,6 +1248,9 @@ async function handleConnectAccount() {
     });
 
     walletConnectionSource = "MANUAL";
+    currentClientSignedOrder = null;
+    currentLivePreparation = null;
+    renderTradeExecutionResult(`<p class="empty">No execution prep run yet.</p>`);
     await loadAccountState();
   } catch (err) {
     alert(err.message || "Failed to connect account");
@@ -1042,6 +1271,7 @@ async function handleLiveModeToggle(enabled) {
 
     if (!enabled) {
       currentLivePreparation = null;
+      currentClientSignedOrder = null;
       renderTradeExecutionResult(`<p class="empty">No execution prep run yet.</p>`);
     }
 
@@ -1063,7 +1293,11 @@ async function handleManualOpenPosition() {
       throw new Error("Fill in market ID, signal side, and position size");
     }
 
-    await postJson("/api/paper-portfolio/open", { marketId, actionSignal, positionSizeDollars });
+    await postJson("/api/paper-portfolio/open", {
+      marketId,
+      actionSignal,
+      positionSizeDollars,
+    });
     await loadPaperPortfolio();
   } catch (err) {
     alert(err.message || "Failed to open position");
@@ -1081,8 +1315,12 @@ async function handleManualClosePosition(positionId) {
 
 async function handleResetPaperPortfolio() {
   try {
-    const startingBankroll = Number(document.getElementById("resetStartingBankroll")?.value || 1000);
-    const defaultPositionSize = Number(document.getElementById("resetDefaultPositionSize")?.value || 50);
+    const startingBankroll = Number(
+      document.getElementById("resetStartingBankroll")?.value || 1000
+    );
+    const defaultPositionSize = Number(
+      document.getElementById("resetDefaultPositionSize")?.value || 50
+    );
 
     await postJson("/api/paper-portfolio/reset", { startingBankroll, defaultPositionSize });
 
@@ -1106,6 +1344,7 @@ async function handleQuoteTrade(marketId, side) {
 
     currentTradeTicket = data.quote;
     currentLivePreparation = null;
+    currentClientSignedOrder = null;
     renderTradeTicketPanel();
     renderTradeExecutionResult(`<p class="empty">No execution prep run yet.</p>`);
   } catch (err) {
@@ -1149,10 +1388,27 @@ async function handlePrepareLiveTrade() {
     });
 
     currentLivePreparation = data.preparation;
+    currentClientSignedOrder = null;
     renderTradeExecutionResult(renderLivePreparation(data.preparation));
     bindLiveHandoffControls();
   } catch (err) {
     alert(err.message || "Failed to prepare live trade");
+  }
+}
+
+async function handleSignPreparedOrder() {
+  try {
+    if (!currentLivePreparation?.signedOrderHandoff?.signableOrder) {
+      throw new Error("Prepare a live trade first");
+    }
+
+    const signedOrder = await signPreparedOrderClientSide();
+    currentClientSignedOrder = signedOrder;
+
+    renderTradeExecutionResult(renderLivePreparation(currentLivePreparation));
+    bindLiveHandoffControls();
+  } catch (err) {
+    alert(err.message || "Failed to sign prepared order");
   }
 }
 
@@ -1244,8 +1500,21 @@ function bindDynamicPortfolioControls() {
 }
 
 function bindLiveHandoffControls() {
+  const signBtn = document.getElementById("signPreparedOrderBtn");
   const submitBtn = document.getElementById("submitSignedOrderBtn");
-  if (submitBtn) submitBtn.onclick = handleSubmitSignedOrderHandoff;
+  const signedOrderInput = document.getElementById("signedOrderInput");
+
+  if (signBtn && !signBtn.disabled) {
+    signBtn.onclick = handleSignPreparedOrder;
+  }
+
+  if (submitBtn) {
+    submitBtn.onclick = handleSubmitSignedOrderHandoff;
+  }
+
+  if (signedOrderInput && currentClientSignedOrder) {
+    signedOrderInput.value = stringifyJsonForUi(currentClientSignedOrder);
+  }
 }
 
 function bindAccountControls() {
@@ -1256,7 +1525,9 @@ function bindAccountControls() {
   const tradeModeSelect = document.getElementById("tradeModeSelect");
 
   if (connectBtn) connectBtn.onclick = handleConnectAccount;
-  if (connectBrowserBtn && !connectBrowserBtn.disabled) connectBrowserBtn.onclick = handleBrowserWalletConnect;
+  if (connectBrowserBtn && !connectBrowserBtn.disabled) {
+    connectBrowserBtn.onclick = handleBrowserWalletConnect;
+  }
   if (disconnectBtn) disconnectBtn.onclick = handleDisconnectAccount;
   if (liveToggle) liveToggle.onchange = (e) => handleLiveModeToggle(e.target.checked);
   if (tradeModeSelect) tradeModeSelect.onchange = () => renderTradeTicketPanel();
@@ -1409,7 +1680,8 @@ async function loadTopOpportunities() {
     const res = await fetch("/api/liveMarkets");
     const data = await res.json();
 
-    if (!data.ok || !Array.isArray(data.markets)) throw new Error("Invalid opportunities response");
+    if (!data.ok || !Array.isArray(data.markets))
+      throw new Error("Invalid opportunities response");
 
     const ranked = data.markets
       .slice()
@@ -1439,7 +1711,8 @@ async function loadHotMarkets() {
     const res = await fetch("/api/liveMarkets");
     const data = await res.json();
 
-    if (!data.ok || !Array.isArray(data.markets)) throw new Error("Invalid hot markets response");
+    if (!data.ok || !Array.isArray(data.markets))
+      throw new Error("Invalid hot markets response");
 
     if (data.markets.length === 0) {
       hotMarketsCache = [];
@@ -1465,7 +1738,8 @@ async function loadBiggestMovers() {
     const res = await fetch("/api/biggestMovers");
     const data = await res.json();
 
-    if (!data.ok || !Array.isArray(data.markets)) throw new Error("Invalid biggest movers response");
+    if (!data.ok || !Array.isArray(data.markets))
+      throw new Error("Invalid biggest movers response");
 
     if (data.markets.length === 0) {
       container.innerHTML = `<p class="empty">Mover data is warming up. Check back shortly.</p>`;
