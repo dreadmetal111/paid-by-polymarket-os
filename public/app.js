@@ -2,6 +2,8 @@ let hotMarketsCache = [];
 let currentTradeTicket = null;
 let accountStateCache = null;
 let currentLivePreparation = null;
+let walletConnectionSource = "NONE"; // NONE | BROWSER | MANUAL
+let browserWalletEventsBound = false;
 
 function formatProbability(value) {
   if (value === null || value === undefined || Number.isNaN(value)) return "—";
@@ -40,6 +42,12 @@ function formatPoints(value) {
   return `${pts >= 0 ? "+" : ""}${pts.toFixed(2)} pts`;
 }
 
+function shortAddress(value) {
+  const address = String(value || "").trim();
+  if (!address || address.length < 10) return address || "—";
+  return `${address.slice(0, 6)}...${address.slice(-4)}`;
+}
+
 function escapeHtml(value) {
   return String(value ?? "")
     .replaceAll("&", "&amp;")
@@ -51,6 +59,10 @@ function escapeHtml(value) {
 
 function formatJsonBlock(value) {
   return escapeHtml(JSON.stringify(value ?? {}, null, 2));
+}
+
+function hasBrowserWalletProvider() {
+  return typeof window !== "undefined" && !!window.ethereum?.request;
 }
 
 function getCurrentTradeMode() {
@@ -108,6 +120,7 @@ function resetFrontendDemoUiState() {
   currentTradeTicket = null;
   currentLivePreparation = null;
   accountStateCache = null;
+  walletConnectionSource = "NONE";
 
   const tradeModeSelect = document.getElementById("tradeModeSelect");
   const tradeTicketSize = document.getElementById("tradeTicketSize");
@@ -134,6 +147,83 @@ async function beginCleanPublicLoad() {
   } catch (err) {
     console.error("Public demo reset failed:", err);
   }
+}
+
+async function syncAppAccountFromWalletAddress(walletAddress, source = "BROWSER") {
+  const normalized = String(walletAddress || "").trim();
+  if (!normalized) {
+    throw new Error("Wallet address is required");
+  }
+
+  await postJson("/api/account/connect", {
+    walletAddress: normalized,
+    walletType: "EOA",
+    proxyWalletAddress: "",
+    signatureType: 0,
+    funderAddress: normalized,
+  });
+
+  walletConnectionSource = source;
+  await loadAccountState();
+}
+
+async function clearAppWalletConnection() {
+  await postJson("/api/account/disconnect", {});
+  walletConnectionSource = "NONE";
+  currentTradeTicket = null;
+  currentLivePreparation = null;
+  renderTradeTicketPanel();
+  renderTradeExecutionResult(`<p class="empty">No execution prep run yet.</p>`);
+  await loadAccountState();
+}
+
+async function handleBrowserWalletAccountsChanged(accounts) {
+  if (walletConnectionSource !== "BROWSER") {
+    return;
+  }
+
+  const nextAddress = Array.isArray(accounts) ? String(accounts[0] || "").trim() : "";
+
+  try {
+    if (!nextAddress) {
+      await clearAppWalletConnection();
+      return;
+    }
+
+    await syncAppAccountFromWalletAddress(nextAddress, "BROWSER");
+  } catch (err) {
+    console.error("accountsChanged sync error:", err);
+  }
+}
+
+async function handleBrowserWalletChainChanged() {
+  if (walletConnectionSource !== "BROWSER" || !hasBrowserWalletProvider()) {
+    return;
+  }
+
+  try {
+    const accounts = await window.ethereum.request({ method: "eth_accounts" });
+    const nextAddress = Array.isArray(accounts) ? String(accounts[0] || "").trim() : "";
+
+    if (!nextAddress) {
+      await clearAppWalletConnection();
+      return;
+    }
+
+    await syncAppAccountFromWalletAddress(nextAddress, "BROWSER");
+  } catch (err) {
+    console.error("chainChanged sync error:", err);
+  }
+}
+
+function setupBrowserWalletEventSync() {
+  if (browserWalletEventsBound || !hasBrowserWalletProvider()) {
+    return;
+  }
+
+  window.ethereum.on("accountsChanged", handleBrowserWalletAccountsChanged);
+  window.ethereum.on("chainChanged", handleBrowserWalletChainChanged);
+  browserWalletEventsBound = true;
 }
 
 function renderAlertItem(alert) {
@@ -263,39 +353,119 @@ function renderAccountPanel(account) {
   `;
 }
 
-function renderAccountControls(account = {}) {
+function renderDisconnectedWalletShell(account = {}) {
+  const providerAvailable = hasBrowserWalletProvider();
+
   return `
     <div class="market-grid">
       <article class="market-card">
-        <h3>Advanced Setup</h3>
+        <h3>Connect Wallet</h3>
+        <div class="alert-item">
+          <div class="alert-message">Use a browser wallet for the cleanest connection flow.</div>
+          <div class="alert-time">This keeps the product feeling closer to a real Polymarket-style workflow while preserving the current safe backend architecture.</div>
+        </div>
+
+        <div style="margin-top: 14px; display:flex; gap:12px; flex-wrap:wrap;">
+          <button id="browserWalletConnectBtn" ${providerAvailable ? "" : "disabled"}>
+            ${providerAvailable ? "Connect Browser Wallet" : "Browser Wallet Not Detected"}
+          </button>
+        </div>
+
+        <div class="alert-item" style="margin-top: 14px;">
+          <div class="alert-message">${providerAvailable ? "Wallet provider detected in this browser." : "No browser wallet provider detected."}</div>
+          <div class="alert-time">${providerAvailable ? "You can connect with your injected wallet and keep the rest of the live flow unchanged." : "You can still use the manual fallback below for safe demo and testing flows."}</div>
+        </div>
+
+        <details style="margin-top: 16px;">
+          <summary style="cursor:pointer; font-weight:600;">Use manual fallback instead</summary>
+          <div style="margin-top: 14px;">
+            <div class="market-meta">
+              <div class="meta-box">
+                <span class="meta-label">Wallet Address</span>
+                <input id="connectWalletAddress" type="text" placeholder="0x..." />
+              </div>
+              <div class="meta-box">
+                <span class="meta-label">Funder Address</span>
+                <input id="connectFunderAddress" type="text" placeholder="Defaults to wallet address" />
+              </div>
+            </div>
+
+            <details style="margin-top: 14px;">
+              <summary style="cursor:pointer; font-weight:600;">Advanced wallet fields</summary>
+              <div class="market-meta" style="margin-top: 14px;">
+                <div class="meta-box">
+                  <span class="meta-label">Wallet Type</span>
+                  <select id="connectWalletType">
+                    <option value="EOA">EOA</option>
+                    <option value="POLYMARKET_PROXY">POLYMARKET_PROXY</option>
+                  </select>
+                </div>
+                <div class="meta-box">
+                  <span class="meta-label">Proxy Wallet</span>
+                  <input id="connectProxyWallet" type="text" placeholder="Optional / required for proxy mode" />
+                </div>
+                <div class="meta-box">
+                  <span class="meta-label">Signature Type</span>
+                  <input id="connectSignatureType" type="number" min="0" step="1" placeholder="0" />
+                </div>
+              </div>
+            </details>
+
+            <div style="margin-top: 14px;">
+              <button id="connectAccountBtn">Use Manual Connection</button>
+            </div>
+          </div>
+        </details>
+      </article>
+
+      <article class="market-card">
+        <h3>Connection Behavior</h3>
+        <div class="alerts-list">
+          <div class="alert-item">
+            <div class="alert-message">Server-side builder readiness stays unchanged.</div>
+          </div>
+          <div class="alert-item">
+            <div class="alert-message">Real submit remains in safe fallback mode.</div>
+          </div>
+          <div class="alert-item">
+            <div class="alert-message">Manual fallback remains available for beginner-safe testing.</div>
+          </div>
+          <div class="alert-item">
+            <div class="alert-message">Once connected, the existing account-state, live-mode, and execution-prep flows continue to work as before.</div>
+          </div>
+          <div class="alert-item">
+            <div class="alert-message">Builder API</div>
+            <div class="alert-time">${account.builderApiConfigured ? "READY" : "NOT READY"}</div>
+          </div>
+          <div class="alert-item">
+            <div class="alert-message">Relayer</div>
+            <div class="alert-time">${account.relayerReady ? "READY" : "NOT READY"}</div>
+          </div>
+        </div>
+      </article>
+    </div>
+  `;
+}
+
+function renderConnectedWalletShell(account = {}) {
+  return `
+    <div class="market-grid">
+      <article class="market-card">
+        <h3>Wallet Connected</h3>
         <div class="market-meta">
-          <div class="meta-box">
-            <span class="meta-label">Wallet Address</span>
-            <input id="connectWalletAddress" type="text" placeholder="0x..." />
-          </div>
-          <div class="meta-box">
-            <span class="meta-label">Wallet Type</span>
-            <select id="connectWalletType">
-              <option value="EOA">EOA</option>
-              <option value="POLYMARKET_PROXY">POLYMARKET_PROXY</option>
-            </select>
-          </div>
-          <div class="meta-box">
-            <span class="meta-label">Proxy Wallet</span>
-            <input id="connectProxyWallet" type="text" placeholder="Optional / required for proxy mode" />
-          </div>
-          <div class="meta-box">
-            <span class="meta-label">Signature Type</span>
-            <input id="connectSignatureType" type="number" min="0" step="1" placeholder="0" />
-          </div>
-          <div class="meta-box">
-            <span class="meta-label">Funder Address</span>
-            <input id="connectFunderAddress" type="text" placeholder="Defaults to wallet address" />
-          </div>
-          <div class="meta-box">
-            <span class="meta-label">Action</span>
-            <button id="connectAccountBtn">Connect Account</button>
-          </div>
+          <div class="meta-box"><span class="meta-label">Wallet</span><span class="meta-value">${shortAddress(account.walletAddress)}</span></div>
+          <div class="meta-box"><span class="meta-label">Wallet Type</span><span class="meta-value">${account.walletType || "EOA"}</span></div>
+          <div class="meta-box"><span class="meta-label">Proxy Wallet</span><span class="meta-value">${account.proxyWalletAddress ? shortAddress(account.proxyWalletAddress) : "—"}</span></div>
+          <div class="meta-box"><span class="meta-label">Funder</span><span class="meta-value">${account.funderAddress ? shortAddress(account.funderAddress) : "—"}</span></div>
+        </div>
+
+        <div class="alert-item" style="margin-top: 14px;">
+          <div class="alert-message">Your wallet connection shell is active.</div>
+          <div class="alert-time">This keeps the existing backend readiness and signed-handoff flow intact while making the UI feel more product-like.</div>
+        </div>
+
+        <div style="margin-top: 14px;">
+          <button id="disconnectAccountBtn">Clear Wallet Connection</button>
         </div>
       </article>
 
@@ -314,12 +484,15 @@ function renderAccountControls(account = {}) {
           <div class="alert-message">Builder readiness is read-only.</div>
           <div class="alert-time">This status comes from Render environment variables and backend checks, not frontend toggles.</div>
         </div>
-        <div style="margin-top: 14px;">
-          <button id="disconnectAccountBtn">Disconnect Account</button>
-        </div>
       </article>
     </div>
   `;
+}
+
+function renderAccountControls(account = {}) {
+  return account.isConnected
+    ? renderConnectedWalletShell(account)
+    : renderDisconnectedWalletShell(account);
 }
 
 function renderPaperPortfolioStats(stats) {
@@ -808,6 +981,28 @@ async function postJsonDetailed(url, body) {
   };
 }
 
+async function handleBrowserWalletConnect() {
+  try {
+    if (!hasBrowserWalletProvider()) {
+      throw new Error("No browser wallet provider detected");
+    }
+
+    const accounts = await window.ethereum.request({
+      method: "eth_requestAccounts",
+    });
+
+    const walletAddress = Array.isArray(accounts) ? String(accounts[0] || "").trim() : "";
+
+    if (!walletAddress) {
+      throw new Error("No wallet address was returned by the provider");
+    }
+
+    await syncAppAccountFromWalletAddress(walletAddress, "BROWSER");
+  } catch (err) {
+    alert(err.message || "Failed to connect browser wallet");
+  }
+}
+
 async function handleConnectAccount() {
   try {
     const walletAddress = document.getElementById("connectWalletAddress")?.value?.trim();
@@ -826,6 +1021,7 @@ async function handleConnectAccount() {
       funderAddress,
     });
 
+    walletConnectionSource = "MANUAL";
     await loadAccountState();
   } catch (err) {
     alert(err.message || "Failed to connect account");
@@ -834,14 +1030,9 @@ async function handleConnectAccount() {
 
 async function handleDisconnectAccount() {
   try {
-    await postJson("/api/account/disconnect", {});
-    currentTradeTicket = null;
-    currentLivePreparation = null;
-    renderTradeTicketPanel();
-    renderTradeExecutionResult(`<p class="empty">No execution prep run yet.</p>`);
-    await loadAccountState();
+    await clearAppWalletConnection();
   } catch (err) {
-    alert(err.message || "Failed to disconnect account");
+    alert(err.message || "Failed to clear wallet connection");
   }
 }
 
@@ -1059,11 +1250,13 @@ function bindLiveHandoffControls() {
 
 function bindAccountControls() {
   const connectBtn = document.getElementById("connectAccountBtn");
+  const connectBrowserBtn = document.getElementById("browserWalletConnectBtn");
   const disconnectBtn = document.getElementById("disconnectAccountBtn");
   const liveToggle = document.getElementById("liveModeToggle");
   const tradeModeSelect = document.getElementById("tradeModeSelect");
 
   if (connectBtn) connectBtn.onclick = handleConnectAccount;
+  if (connectBrowserBtn && !connectBrowserBtn.disabled) connectBrowserBtn.onclick = handleBrowserWalletConnect;
   if (disconnectBtn) disconnectBtn.onclick = handleDisconnectAccount;
   if (liveToggle) liveToggle.onchange = (e) => handleLiveModeToggle(e.target.checked);
   if (tradeModeSelect) tradeModeSelect.onchange = () => renderTradeTicketPanel();
@@ -1142,7 +1335,7 @@ async function loadAccountState() {
   if (!stateContainer || !controlsContainer) return;
 
   stateContainer.innerHTML = `<p class="loading">Loading account state...</p>`;
-  controlsContainer.innerHTML = `<p class="loading">Loading account controls...</p>`;
+  controlsContainer.innerHTML = `<p class="loading">Loading wallet connection...</p>`;
 
   try {
     const res = await fetch("/api/account-state");
@@ -1157,7 +1350,7 @@ async function loadAccountState() {
   } catch (err) {
     console.error("Account state load error:", err);
     stateContainer.innerHTML = `<p class="empty">Failed to load account state.</p>`;
-    controlsContainer.innerHTML = `<p class="empty">Failed to load account controls.</p>`;
+    controlsContainer.innerHTML = `<p class="empty">Failed to load wallet connection.</p>`;
   }
 }
 
@@ -1306,6 +1499,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   if (refreshPaperPortfolio) refreshPaperPortfolio.addEventListener("click", loadPaperPortfolio);
   if (refreshAccount) refreshAccount.addEventListener("click", loadAccountState);
   if (applyBtn) applyBtn.addEventListener("click", applyHotFilters);
+
+  setupBrowserWalletEventSync();
 
   await beginCleanPublicLoad();
 
