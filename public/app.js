@@ -427,6 +427,10 @@ function renderTradeTicket(quote) {
   const mode = getCurrentTradeMode();
   const liveBlocked = mode === "LIVE" && !(accountStateCache?.canEnableLiveMode);
 
+  const liveActionButton = liveBlocked
+    ? `<button id="prepareLiveTradeBtn" disabled>Live Requirements Not Met</button>`
+    : `<button id="prepareLiveTradeBtn">${mode === "LIVE" ? "Prepare Signed Handoff" : "Preview Live Trade"}</button>`;
+
   return `
     <div class="market-card">
       <h3>Execution Ticket</h3>
@@ -447,7 +451,7 @@ function renderTradeTicket(quote) {
 
       <div class="market-footer">
         <button id="executePaperTradeBtn" ${mode === "LIVE" ? "style='display:none;'" : ""}>Execute Paper Trade</button>
-        <button id="prepareLiveTradeBtn">${mode === "LIVE" ? "Prepare Signed Handoff" : "Preview Live Trade"}</button>
+        ${liveActionButton}
       </div>
     </div>
   `;
@@ -940,6 +944,13 @@ async function handlePrepareLiveTrade() {
   try {
     if (!currentTradeTicket) throw new Error("No trade ticket selected");
 
+    const mode = getCurrentTradeMode();
+    const liveBlocked = mode === "LIVE" && !(accountStateCache?.canEnableLiveMode);
+
+    if (liveBlocked) {
+      throw new Error("Live requirements are not met");
+    }
+
     const data = await postJson("/api/trade/prepare", {
       marketId: currentTradeTicket.marketId,
       side: currentTradeTicket.side,
@@ -1014,7 +1025,7 @@ function renderTradeTicketPanel() {
   const prepBtn = document.getElementById("prepareLiveTradeBtn");
 
   if (execBtn) execBtn.onclick = handleExecutePaperTrade;
-  if (prepBtn) prepBtn.onclick = handlePrepareLiveTrade;
+  if (prepBtn && !prepBtn.disabled) prepBtn.onclick = handlePrepareLiveTrade;
 }
 
 function renderTradeExecutionResult(html) {
