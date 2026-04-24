@@ -197,6 +197,15 @@ function normalizeAndValidateUserAuth(userAuth) {
   return normalized;
 }
 
+function applyUserAuthObjectToDraft(userAuthObject) {
+  const normalized = normalizeAndValidateUserAuth(userAuthObject);
+
+  currentUserAuthDraft.address = normalized.address;
+  currentUserAuthDraft.apiKey = normalized.apiKey;
+  currentUserAuthDraft.secret = normalized.secret;
+  currentUserAuthDraft.passphrase = normalized.passphrase;
+}
+
 function readResolvedUserAuthFromUi() {
   captureUserAuthDraftFromUi();
 
@@ -1195,13 +1204,17 @@ function renderLivePreparation(preparation) {
             <summary style="cursor:pointer; font-weight:600;">Use raw JSON fallback instead</summary>
             <div class="alert-item" style="margin-top: 12px;">
               <div class="alert-message">Raw user auth JSON fallback</div>
-              <div class="alert-time">If raw JSON is provided, it overrides the structured fields above.</div>
+              <div class="alert-time">Paste one full Polymarket L2 auth JSON bundle here, then apply it to the structured fields for this browser session only.</div>
               <textarea
                 id="userAuthJsonInput"
                 rows="8"
                 placeholder="Paste user auth JSON here"
                 style="width:100%; margin-top:10px; padding:12px; border-radius:12px; border:1px solid #1e293b; background:#020817; color:#f8fafc; font-size:0.9rem; line-height:1.5;"
               ></textarea>
+              <div style="margin-top: 12px; display:flex; gap:12px; flex-wrap:wrap;">
+                <button id="applyUserAuthJsonBtn" type="button">Apply Auth JSON to Fields</button>
+              </div>
+              <div class="alert-time" style="margin-top: 10px;">After a successful apply, the raw JSON box is cleared so the structured fields become the active session source.</div>
               <pre style="margin:12px 0 0; white-space:pre-wrap; word-break:break-word; font-size:0.8rem; line-height:1.45; color:#94a3b8;">${formatJsonBlock(handoff.userAuthSchema)}</pre>
             </div>
           </details>
@@ -1608,6 +1621,25 @@ async function handleSignPreparedOrder() {
   }
 }
 
+async function handleApplyUserAuthJsonToFields() {
+  try {
+    captureUserAuthDraftFromUi();
+
+    if (!currentUserAuthDraft.rawJson) {
+      throw new Error("Paste user auth JSON first");
+    }
+
+    const parsed = parseJsonText(currentUserAuthDraft.rawJson, "User auth JSON");
+    applyUserAuthObjectToDraft(parsed);
+    currentUserAuthDraft.rawJson = "";
+
+    restoreUserAuthDraftToUi();
+    alert("Auth JSON applied to fields for this browser session.");
+  } catch (err) {
+    alert(err.message || "Failed to apply auth JSON");
+  }
+}
+
 async function handleSubmitSignedOrderHandoff() {
   try {
     if (!currentTradeTicket) throw new Error("No trade ticket selected");
@@ -1698,6 +1730,7 @@ function bindLiveHandoffControls() {
   const submitBtn = document.getElementById("submitSignedOrderBtn");
   const signedOrderInput = document.getElementById("signedOrderInput");
   const fillAddressBtn = document.getElementById("fillUserAuthAddressBtn");
+  const applyAuthJsonBtn = document.getElementById("applyUserAuthJsonBtn");
 
   restoreUserAuthDraftToUi();
 
@@ -1716,6 +1749,10 @@ function bindLiveHandoffControls() {
 
   if (fillAddressBtn) {
     fillAddressBtn.onclick = fillUserAuthAddressFromConnectedWallet;
+  }
+
+  if (applyAuthJsonBtn) {
+    applyAuthJsonBtn.onclick = handleApplyUserAuthJsonToFields;
   }
 
   if (signBtn && !signBtn.disabled) {
