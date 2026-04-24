@@ -7,9 +7,20 @@ let currentTradeTicket = null;
 let accountStateCache = null;
 let currentLivePreparation = null;
 let currentClientSignedOrder = null;
+let currentUserAuthDraft = createEmptyUserAuthDraft();
 let walletConnectionSource = "NONE"; // NONE | BROWSER | MANUAL
 let browserWalletEventsBound = false;
 let polymarketBrowserModulesPromise = null;
+
+function createEmptyUserAuthDraft() {
+  return {
+    address: "",
+    apiKey: "",
+    secret: "",
+    passphrase: "",
+    rawJson: "",
+  };
+}
 
 function formatProbability(value) {
   if (value === null || value === undefined || Number.isNaN(value)) return "—";
@@ -63,16 +74,16 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
-function formatJsonBlock(value) {
-  return escapeHtml(stringifyJsonForUi(value));
-}
-
 function stringifyJsonForUi(value) {
   return JSON.stringify(
     value ?? {},
     (_, innerValue) => (typeof innerValue === "bigint" ? innerValue.toString() : innerValue),
     2
   );
+}
+
+function formatJsonBlock(value) {
+  return escapeHtml(stringifyJsonForUi(value));
 }
 
 function hasBrowserWalletProvider() {
@@ -112,6 +123,96 @@ function parseJsonText(value, label) {
   }
 }
 
+function getPreferredUserAuthAddress() {
+  const signedOrderAddress =
+    currentClientSignedOrder?.maker ||
+    currentClientSignedOrder?.signer ||
+    currentClientSignedOrder?.owner ||
+    "";
+  const connectedAddress = accountStateCache?.walletAddress || "";
+  return String(signedOrderAddress || connectedAddress || "").trim();
+}
+
+function resetUserAuthDraft() {
+  currentUserAuthDraft = createEmptyUserAuthDraft();
+}
+
+function hydrateUserAuthDraftDefaults() {
+  if (!currentUserAuthDraft.address) {
+    currentUserAuthDraft.address = getPreferredUserAuthAddress();
+  }
+}
+
+function captureUserAuthDraftFromUi() {
+  const addressInput = document.getElementById("userAuthAddressInput");
+  const apiKeyInput = document.getElementById("userAuthApiKeyInput");
+  const secretInput = document.getElementById("userAuthSecretInput");
+  const passphraseInput = document.getElementById("userAuthPassphraseInput");
+  const rawJsonInput = document.getElementById("userAuthJsonInput");
+
+  if (addressInput) currentUserAuthDraft.address = addressInput.value.trim();
+  if (apiKeyInput) currentUserAuthDraft.apiKey = apiKeyInput.value.trim();
+  if (secretInput) currentUserAuthDraft.secret = secretInput.value.trim();
+  if (passphraseInput) currentUserAuthDraft.passphrase = passphraseInput.value.trim();
+  if (rawJsonInput) currentUserAuthDraft.rawJson = rawJsonInput.value.trim();
+}
+
+function restoreUserAuthDraftToUi() {
+  hydrateUserAuthDraftDefaults();
+
+  const addressInput = document.getElementById("userAuthAddressInput");
+  const apiKeyInput = document.getElementById("userAuthApiKeyInput");
+  const secretInput = document.getElementById("userAuthSecretInput");
+  const passphraseInput = document.getElementById("userAuthPassphraseInput");
+  const rawJsonInput = document.getElementById("userAuthJsonInput");
+
+  if (addressInput) addressInput.value = currentUserAuthDraft.address || "";
+  if (apiKeyInput) apiKeyInput.value = currentUserAuthDraft.apiKey || "";
+  if (secretInput) secretInput.value = currentUserAuthDraft.secret || "";
+  if (passphraseInput) passphraseInput.value = currentUserAuthDraft.passphrase || "";
+  if (rawJsonInput) rawJsonInput.value = currentUserAuthDraft.rawJson || "";
+}
+
+function fillUserAuthAddressFromConnectedWallet() {
+  const nextAddress = getPreferredUserAuthAddress();
+  currentUserAuthDraft.address = nextAddress;
+
+  const addressInput = document.getElementById("userAuthAddressInput");
+  if (addressInput) addressInput.value = nextAddress;
+}
+
+function normalizeAndValidateUserAuth(userAuth) {
+  const normalized = {
+    address: String(userAuth?.address || "").trim(),
+    apiKey: String(userAuth?.apiKey || "").trim(),
+    secret: String(userAuth?.secret || "").trim(),
+    passphrase: String(userAuth?.passphrase || "").trim(),
+  };
+
+  if (!normalized.address) throw new Error("User auth address is required");
+  if (!normalized.apiKey) throw new Error("User auth API key is required");
+  if (!normalized.secret) throw new Error("User auth secret is required");
+  if (!normalized.passphrase) throw new Error("User auth passphrase is required");
+
+  return normalized;
+}
+
+function readResolvedUserAuthFromUi() {
+  captureUserAuthDraftFromUi();
+
+  if (currentUserAuthDraft.rawJson) {
+    const parsed = parseJsonText(currentUserAuthDraft.rawJson, "User auth JSON");
+    return normalizeAndValidateUserAuth(parsed);
+  }
+
+  return normalizeAndValidateUserAuth({
+    address: currentUserAuthDraft.address,
+    apiKey: currentUserAuthDraft.apiKey,
+    secret: currentUserAuthDraft.secret,
+    passphrase: currentUserAuthDraft.passphrase,
+  });
+}
+
 function clearBrowserDemoState() {
   const keysToRemove = [
     "pbp_currentTradeTicket",
@@ -136,6 +237,7 @@ function resetFrontendDemoUiState() {
   currentClientSignedOrder = null;
   accountStateCache = null;
   walletConnectionSource = "NONE";
+  resetUserAuthDraft();
 
   const tradeModeSelect = document.getElementById("tradeModeSelect");
   const tradeTicketSize = document.getElementById("tradeTicketSize");
@@ -181,6 +283,7 @@ async function syncAppAccountFromWalletAddress(walletAddress, source = "BROWSER"
   walletConnectionSource = source;
   currentClientSignedOrder = null;
   currentLivePreparation = null;
+  resetUserAuthDraft();
   renderTradeExecutionResult(`<p class="empty">No execution prep run yet.</p>`);
   await loadAccountState();
 }
@@ -191,6 +294,7 @@ async function clearAppWalletConnection() {
   currentTradeTicket = null;
   currentLivePreparation = null;
   currentClientSignedOrder = null;
+  resetUserAuthDraft();
   renderTradeExecutionResult(`<p class="empty">No execution prep run yet.</p>`);
   renderTradeTicketPanel();
   await loadAccountState();
@@ -231,6 +335,7 @@ async function handleBrowserWalletChainChanged() {
 
     currentClientSignedOrder = null;
     currentLivePreparation = null;
+    resetUserAuthDraft();
     renderTradeExecutionResult(`<p class="empty">No execution prep run yet.</p>`);
     await syncAppAccountFromWalletAddress(nextAddress, "BROWSER");
   } catch (err) {
@@ -871,7 +976,8 @@ function renderLivePreparation(preparation) {
   const fallbackMode = !!realSubmitReadiness.fallbackMode;
   const guardedReady = !!realSubmitReadiness.readyForGuardedSubmit;
   const showPayload = !handoffBlocked;
-  const showSubmitForm = guardedReady;
+  const showAuthPrep = showPayload;
+  const showSubmitSection = showPayload;
   const showBlockedSection = handoffBlocked && blockedReasons.length > 0;
   const showFallbackSection = !handoffBlocked && fallbackMode;
   const showSafetyNotes = Array.isArray(handoff.notes) && handoff.notes.length > 0;
@@ -882,6 +988,8 @@ function renderLivePreparation(preparation) {
     hasBrowserWalletProvider() &&
     walletConnectionSource === "BROWSER" &&
     !!accountStateCache?.walletAddress;
+
+  hydrateUserAuthDraftDefaults();
 
   let stateLabel = "Review";
   let stateMessage = preparation.message || "Live preparation complete.";
@@ -958,7 +1066,7 @@ function renderLivePreparation(preparation) {
           <h3>Intentional Safety Guard</h3>
           <div class="alert-item">
             <div class="alert-message">Real live submit is intentionally off right now.</div>
-            <div class="alert-time">The backend route exists and the handoff architecture is in place, but forwarding remains disabled until the server policy is explicitly turned on.</div>
+            <div class="alert-time">You can still prepare signing and user auth inputs now, but actual submission remains blocked until guarded readiness is explicitly available.</div>
           </div>
         </article>
       </div>
@@ -969,7 +1077,7 @@ function renderLivePreparation(preparation) {
         <article class="market-card">
           <h3>Signable Order Payload</h3>
           <div class="alert-item">
-            <div class="alert-message">${showSubmitForm ? "Create and sign this order on the user side." : "Preview of the order the client would sign when guarded submit is available."}</div>
+            <div class="alert-message">Review the prepared order payload.</div>
             <div class="alert-time">This app does not move the user private key to the server.</div>
             <pre style="margin:12px 0 0; white-space:pre-wrap; word-break:break-word; font-size:0.82rem; line-height:1.5; color:#cbd5e1;">${formatJsonBlock(handoff.signableOrder)}</pre>
           </div>
@@ -1013,12 +1121,71 @@ function renderLivePreparation(preparation) {
       </div>
     ` : ""}
 
-    ${showSubmitForm ? `
+    ${showAuthPrep ? `
       <div class="market-grid" style="margin-top: 18px;">
         <article class="market-card">
-          <h3>Submit Signed Order Handoff</h3>
+          <h3>Guarded Submit Auth Prep</h3>
           <div class="alert-item">
-            <div class="alert-message">Paste signed order JSON</div>
+            <div class="alert-message">Prepare user L2 auth now.</div>
+            <div class="alert-time">
+              ${guardedReady
+                ? "This auth bundle will be used by the guarded handoff if you proceed."
+                : "This is preparation only while the app remains in safe fallback mode. Actual submission stays disabled."}
+            </div>
+          </div>
+
+          <div class="market-meta" style="margin-top: 12px;">
+            <div class="meta-box">
+              <span class="meta-label">Auth Address</span>
+              <input id="userAuthAddressInput" type="text" placeholder="0x..." autocomplete="off" />
+            </div>
+            <div class="meta-box">
+              <span class="meta-label">API Key</span>
+              <input id="userAuthApiKeyInput" type="password" placeholder="Paste API key" autocomplete="off" />
+            </div>
+            <div class="meta-box">
+              <span class="meta-label">Secret</span>
+              <input id="userAuthSecretInput" type="password" placeholder="Paste secret" autocomplete="off" />
+            </div>
+            <div class="meta-box">
+              <span class="meta-label">Passphrase</span>
+              <input id="userAuthPassphraseInput" type="password" placeholder="Paste passphrase" autocomplete="off" />
+            </div>
+          </div>
+
+          <div style="margin-top: 12px; display:flex; gap:12px; flex-wrap:wrap;">
+            <button id="fillUserAuthAddressBtn" type="button">Use Connected Wallet Address</button>
+          </div>
+
+          <details style="margin-top: 14px;">
+            <summary style="cursor:pointer; font-weight:600;">Use raw JSON fallback instead</summary>
+            <div class="alert-item" style="margin-top: 12px;">
+              <div class="alert-message">Raw user auth JSON fallback</div>
+              <div class="alert-time">If raw JSON is provided, it overrides the structured fields above.</div>
+              <textarea
+                id="userAuthJsonInput"
+                rows="8"
+                placeholder="Paste user auth JSON here"
+                style="width:100%; margin-top:10px; padding:12px; border-radius:12px; border:1px solid #1e293b; background:#020817; color:#f8fafc; font-size:0.9rem; line-height:1.5;"
+              ></textarea>
+              <pre style="margin:12px 0 0; white-space:pre-wrap; word-break:break-word; font-size:0.8rem; line-height:1.45; color:#94a3b8;">${formatJsonBlock(handoff.userAuthSchema)}</pre>
+            </div>
+          </details>
+        </article>
+      </div>
+    ` : ""}
+
+    ${showSubmitSection ? `
+      <div class="market-grid" style="margin-top: 18px;">
+        <article class="market-card">
+          <h3>${guardedReady ? "Submit Signed Order Handoff" : "Guarded Submit Preparation"}</h3>
+          <div class="alert-item">
+            <div class="alert-message">Signed order JSON</div>
+            <div class="alert-time">
+              ${guardedReady
+                ? "This field is auto-filled after a successful browser-wallet signing step, but manual paste remains available."
+                : "You can prepare the signed order and auth inputs now, but actual guarded submission remains disabled in safe fallback mode."}
+            </div>
             <textarea
               id="signedOrderInput"
               rows="10"
@@ -1026,17 +1193,7 @@ function renderLivePreparation(preparation) {
               style="width:100%; margin-top:10px; padding:12px; border-radius:12px; border:1px solid #1e293b; background:#020817; color:#f8fafc; font-size:0.9rem; line-height:1.5;"
             ></textarea>
           </div>
-          <div class="alert-item" style="margin-top: 12px;">
-            <div class="alert-message">Paste user L2 auth JSON</div>
-            <div class="alert-time">Expected keys: address, apiKey, secret, passphrase</div>
-            <textarea
-              id="userAuthInput"
-              rows="8"
-              placeholder="Paste user auth JSON here"
-              style="width:100%; margin-top:10px; padding:12px; border-radius:12px; border:1px solid #1e293b; background:#020817; color:#f8fafc; font-size:0.9rem; line-height:1.5;"
-            ></textarea>
-            <pre style="margin:12px 0 0; white-space:pre-wrap; word-break:break-word; font-size:0.8rem; line-height:1.45; color:#94a3b8;">${formatJsonBlock(handoff.userAuthSchema)}</pre>
-          </div>
+
           <div class="alert-item" style="margin-top: 12px;">
             <div class="alert-message">Type the confirmation text exactly</div>
             <div class="alert-time">${realSubmitPolicy.confirmText || "—"}</div>
@@ -1047,8 +1204,11 @@ function renderLivePreparation(preparation) {
               style="margin-top:10px;"
             />
           </div>
+
           <div style="margin-top: 14px;">
-            <button id="submitSignedOrderBtn">Guarded Real Submit</button>
+            <button id="submitSignedOrderBtn" ${guardedReady ? "" : "disabled"}>
+              ${guardedReady ? "Guarded Real Submit" : "Guarded Real Submit Unavailable"}
+            </button>
           </div>
         </article>
       </div>
@@ -1250,6 +1410,7 @@ async function handleConnectAccount() {
     walletConnectionSource = "MANUAL";
     currentClientSignedOrder = null;
     currentLivePreparation = null;
+    resetUserAuthDraft();
     renderTradeExecutionResult(`<p class="empty">No execution prep run yet.</p>`);
     await loadAccountState();
   } catch (err) {
@@ -1323,7 +1484,6 @@ async function handleResetPaperPortfolio() {
     );
 
     await postJson("/api/paper-portfolio/reset", { startingBankroll, defaultPositionSize });
-
     await loadPaperPortfolio();
   } catch (err) {
     alert(err.message || "Failed to reset portfolio");
@@ -1398,6 +1558,8 @@ async function handlePrepareLiveTrade() {
 
 async function handleSignPreparedOrder() {
   try {
+    captureUserAuthDraftFromUi();
+
     if (!currentLivePreparation?.signedOrderHandoff?.signableOrder) {
       throw new Error("Prepare a live trade first");
     }
@@ -1425,15 +1587,13 @@ async function handleSubmitSignedOrderHandoff() {
     }
 
     const signedOrderRaw = document.getElementById("signedOrderInput")?.value?.trim();
-    const userAuthRaw = document.getElementById("userAuthInput")?.value?.trim();
     const confirmText = document.getElementById("realSubmitConfirmInput")?.value?.trim() || "";
 
     if (!signedOrderRaw) throw new Error("Paste signed order JSON first");
-    if (!userAuthRaw) throw new Error("Paste user L2 auth JSON first");
     if (!confirmText) throw new Error("Type the confirmation text first");
 
     const signedOrder = parseJsonText(signedOrderRaw, "Signed order");
-    const userAuth = parseJsonText(userAuthRaw, "User auth");
+    const userAuth = readResolvedUserAuthFromUi();
 
     const response = await postJsonDetailed("/api/trade/submit-signed", {
       marketId: currentTradeTicket.marketId,
@@ -1503,12 +1663,32 @@ function bindLiveHandoffControls() {
   const signBtn = document.getElementById("signPreparedOrderBtn");
   const submitBtn = document.getElementById("submitSignedOrderBtn");
   const signedOrderInput = document.getElementById("signedOrderInput");
+  const fillAddressBtn = document.getElementById("fillUserAuthAddressBtn");
+
+  restoreUserAuthDraftToUi();
+
+  [
+    "userAuthAddressInput",
+    "userAuthApiKeyInput",
+    "userAuthSecretInput",
+    "userAuthPassphraseInput",
+    "userAuthJsonInput",
+  ].forEach((id) => {
+    const element = document.getElementById(id);
+    if (element) {
+      element.addEventListener("input", captureUserAuthDraftFromUi);
+    }
+  });
+
+  if (fillAddressBtn) {
+    fillAddressBtn.onclick = fillUserAuthAddressFromConnectedWallet;
+  }
 
   if (signBtn && !signBtn.disabled) {
     signBtn.onclick = handleSignPreparedOrder;
   }
 
-  if (submitBtn) {
+  if (submitBtn && !submitBtn.disabled) {
     submitBtn.onclick = handleSubmitSignedOrderHandoff;
   }
 
@@ -1567,7 +1747,9 @@ async function loadSignalLog() {
     const res = await fetch("/api/signal-log");
     const data = await res.json();
 
-    if (!data.ok || !Array.isArray(data.signals)) throw new Error("Invalid signal log response");
+    if (!data.ok || !Array.isArray(data.signals)) {
+      throw new Error("Invalid signal log response");
+    }
 
     if (data.signals.length === 0) {
       container.innerHTML = `<p class="empty">No tracked signals yet.</p>`;
@@ -1680,8 +1862,9 @@ async function loadTopOpportunities() {
     const res = await fetch("/api/liveMarkets");
     const data = await res.json();
 
-    if (!data.ok || !Array.isArray(data.markets))
+    if (!data.ok || !Array.isArray(data.markets)) {
       throw new Error("Invalid opportunities response");
+    }
 
     const ranked = data.markets
       .slice()
@@ -1711,8 +1894,9 @@ async function loadHotMarkets() {
     const res = await fetch("/api/liveMarkets");
     const data = await res.json();
 
-    if (!data.ok || !Array.isArray(data.markets))
+    if (!data.ok || !Array.isArray(data.markets)) {
       throw new Error("Invalid hot markets response");
+    }
 
     if (data.markets.length === 0) {
       hotMarketsCache = [];
@@ -1738,8 +1922,9 @@ async function loadBiggestMovers() {
     const res = await fetch("/api/biggestMovers");
     const data = await res.json();
 
-    if (!data.ok || !Array.isArray(data.markets))
+    if (!data.ok || !Array.isArray(data.markets)) {
       throw new Error("Invalid biggest movers response");
+    }
 
     if (data.markets.length === 0) {
       container.innerHTML = `<p class="empty">Mover data is warming up. Check back shortly.</p>`;
