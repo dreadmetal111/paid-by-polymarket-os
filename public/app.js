@@ -8,6 +8,7 @@ let accountStateCache = null;
 let currentLivePreparation = null;
 let currentClientSignedOrder = null;
 let currentUserAuthDraft = createEmptyUserAuthDraft();
+let currentUserAuthUiState = createEmptyUserAuthUiState();
 let walletConnectionSource = "NONE"; // NONE | BROWSER | MANUAL
 let browserWalletEventsBound = false;
 let polymarketBrowserModulesPromise = null;
@@ -19,6 +20,14 @@ function createEmptyUserAuthDraft() {
     secret: "",
     passphrase: "",
     rawJson: "",
+    lockEmptyAddress: false,
+  };
+}
+
+function createEmptyUserAuthUiState() {
+  return {
+    type: "",
+    message: "",
   };
 }
 
@@ -135,10 +144,11 @@ function getPreferredUserAuthAddress() {
 
 function resetUserAuthDraft() {
   currentUserAuthDraft = createEmptyUserAuthDraft();
+  clearUserAuthInlineStatus();
 }
 
 function hydrateUserAuthDraftDefaults() {
-  if (!currentUserAuthDraft.address) {
+  if (!currentUserAuthDraft.address && !currentUserAuthDraft.lockEmptyAddress) {
     currentUserAuthDraft.address = getPreferredUserAuthAddress();
   }
 }
@@ -150,7 +160,10 @@ function captureUserAuthDraftFromUi() {
   const passphraseInput = document.getElementById("userAuthPassphraseInput");
   const rawJsonInput = document.getElementById("userAuthJsonInput");
 
-  if (addressInput) currentUserAuthDraft.address = addressInput.value.trim();
+  if (addressInput) {
+    currentUserAuthDraft.address = addressInput.value.trim();
+    currentUserAuthDraft.lockEmptyAddress = currentUserAuthDraft.address === "";
+  }
   if (apiKeyInput) currentUserAuthDraft.apiKey = apiKeyInput.value.trim();
   if (secretInput) currentUserAuthDraft.secret = secretInput.value.trim();
   if (passphraseInput) currentUserAuthDraft.passphrase = passphraseInput.value.trim();
@@ -173,12 +186,53 @@ function restoreUserAuthDraftToUi() {
   if (rawJsonInput) rawJsonInput.value = currentUserAuthDraft.rawJson || "";
 }
 
+function setUserAuthInlineStatus(type, message) {
+  currentUserAuthUiState = {
+    type: String(type || "").trim(),
+    message: String(message || "").trim(),
+  };
+  updateUserAuthInlineStatusUi();
+}
+
+function clearUserAuthInlineStatus() {
+  currentUserAuthUiState = createEmptyUserAuthUiState();
+  updateUserAuthInlineStatusUi();
+}
+
+function updateUserAuthInlineStatusUi() {
+  const container = document.getElementById("userAuthInlineStatus");
+  if (!container) return;
+
+  if (!currentUserAuthUiState.message) {
+    container.innerHTML = "";
+    container.style.display = "none";
+    return;
+  }
+
+  const messageClass =
+    currentUserAuthUiState.type === "error"
+      ? "negative"
+      : currentUserAuthUiState.type === "success"
+        ? "positive"
+        : "";
+
+  container.style.display = "block";
+  container.innerHTML = `
+    <div class="alert-item">
+      <div class="alert-message ${messageClass}">${escapeHtml(currentUserAuthUiState.message)}</div>
+    </div>
+  `;
+}
+
 function fillUserAuthAddressFromConnectedWallet() {
   const nextAddress = getPreferredUserAuthAddress();
   currentUserAuthDraft.address = nextAddress;
+  currentUserAuthDraft.lockEmptyAddress = nextAddress === "";
 
   const addressInput = document.getElementById("userAuthAddressInput");
   if (addressInput) addressInput.value = nextAddress;
+
+  clearUserAuthInlineStatus();
 }
 
 function normalizeAndValidateUserAuth(userAuth) {
@@ -204,6 +258,14 @@ function applyUserAuthObjectToDraft(userAuthObject) {
   currentUserAuthDraft.apiKey = normalized.apiKey;
   currentUserAuthDraft.secret = normalized.secret;
   currentUserAuthDraft.passphrase = normalized.passphrase;
+  currentUserAuthDraft.lockEmptyAddress = false;
+}
+
+function clearUserAuthFieldsInDraft() {
+  currentUserAuthDraft = {
+    ...createEmptyUserAuthDraft(),
+    lockEmptyAddress: true,
+  };
 }
 
 function readResolvedUserAuthFromUi() {
@@ -1177,6 +1239,8 @@ function renderLivePreparation(preparation) {
             </div>
           </details>
 
+          <div id="userAuthInlineStatus" style="display:none; margin-top: 12px;"></div>
+
           <div class="market-meta" style="margin-top: 12px;">
             <div class="meta-box">
               <span class="meta-label">Auth Address</span>
@@ -1198,6 +1262,7 @@ function renderLivePreparation(preparation) {
 
           <div style="margin-top: 12px; display:flex; gap:12px; flex-wrap:wrap;">
             <button id="fillUserAuthAddressBtn" type="button">Use Connected Wallet Address</button>
+            <button id="clearUserAuthFieldsBtn" type="button">Clear Auth Fields</button>
           </div>
 
           <details style="margin-top: 14px;">
@@ -1596,6 +1661,7 @@ async function handlePrepareLiveTrade() {
 
     currentLivePreparation = data.preparation;
     currentClientSignedOrder = null;
+    clearUserAuthInlineStatus();
     renderTradeExecutionResult(renderLivePreparation(data.preparation));
     bindLiveHandoffControls();
   } catch (err) {
@@ -1622,9 +1688,9 @@ async function handleSignPreparedOrder() {
 }
 
 async function handleApplyUserAuthJsonToFields() {
-  try {
-    captureUserAuthDraftFromUi();
+  captureUserAuthDraftFromUi();
 
+  try {
     if (!currentUserAuthDraft.rawJson) {
       throw new Error("Paste user auth JSON first");
     }
@@ -1634,10 +1700,19 @@ async function handleApplyUserAuthJsonToFields() {
     currentUserAuthDraft.rawJson = "";
 
     restoreUserAuthDraftToUi();
-    alert("Auth JSON applied to fields for this browser session.");
+    setUserAuthInlineStatus(
+      "success",
+      "Auth JSON applied to fields for this browser session. Raw JSON input cleared."
+    );
   } catch (err) {
-    alert(err.message || "Failed to apply auth JSON");
+    setUserAuthInlineStatus("error", err.message || "Failed to apply auth JSON");
   }
+}
+
+function handleClearUserAuthFields() {
+  clearUserAuthFieldsInDraft();
+  restoreUserAuthDraftToUi();
+  setUserAuthInlineStatus("success", "Auth fields cleared for this browser session.");
 }
 
 async function handleSubmitSignedOrderHandoff() {
@@ -1730,9 +1805,11 @@ function bindLiveHandoffControls() {
   const submitBtn = document.getElementById("submitSignedOrderBtn");
   const signedOrderInput = document.getElementById("signedOrderInput");
   const fillAddressBtn = document.getElementById("fillUserAuthAddressBtn");
+  const clearFieldsBtn = document.getElementById("clearUserAuthFieldsBtn");
   const applyAuthJsonBtn = document.getElementById("applyUserAuthJsonBtn");
 
   restoreUserAuthDraftToUi();
+  updateUserAuthInlineStatusUi();
 
   [
     "userAuthAddressInput",
@@ -1743,12 +1820,19 @@ function bindLiveHandoffControls() {
   ].forEach((id) => {
     const element = document.getElementById(id);
     if (element) {
-      element.addEventListener("input", captureUserAuthDraftFromUi);
+      element.addEventListener("input", () => {
+        captureUserAuthDraftFromUi();
+        clearUserAuthInlineStatus();
+      });
     }
   });
 
   if (fillAddressBtn) {
     fillAddressBtn.onclick = fillUserAuthAddressFromConnectedWallet;
+  }
+
+  if (clearFieldsBtn) {
+    clearFieldsBtn.onclick = handleClearUserAuthFields;
   }
 
   if (applyAuthJsonBtn) {
