@@ -1134,6 +1134,40 @@ function renderLivePreparation(preparation) {
             </div>
           </div>
 
+          <details style="margin-top: 14px;">
+            <summary style="cursor:pointer; font-weight:600;">What these fields are</summary>
+            <div class="alerts-list" style="margin-top: 12px;">
+              <div class="alert-item">
+                <div class="alert-message">Address</div>
+                <div class="alert-time">The wallet address tied to the Polymarket L2 auth credentials you plan to use.</div>
+              </div>
+              <div class="alert-item">
+                <div class="alert-message">API Key</div>
+                <div class="alert-time">Your Polymarket L2 API key used for authenticated order-routing requests.</div>
+              </div>
+              <div class="alert-item">
+                <div class="alert-message">Secret</div>
+                <div class="alert-time">Your Polymarket L2 API secret paired with the API key.</div>
+              </div>
+              <div class="alert-item">
+                <div class="alert-message">Passphrase</div>
+                <div class="alert-time">Your Polymarket L2 passphrase paired with the same credential set.</div>
+              </div>
+              <div class="alert-item">
+                <div class="alert-message">Important safety note</div>
+                <div class="alert-time">These are sensitive Polymarket L2 auth credentials. Do not include them in screenshots and do not share them publicly.</div>
+              </div>
+              <div class="alert-item">
+                <div class="alert-message">How this app handles them</div>
+                <div class="alert-time">This app keeps them in current browser memory only for preparation in this session and does not store them in localStorage.</div>
+              </div>
+              <div class="alert-item">
+                <div class="alert-message">Current state</div>
+                <div class="alert-time">This is preparation for guarded submit only. It does not mean active real submission is on.</div>
+              </div>
+            </div>
+          </details>
+
           <div class="market-meta" style="margin-top: 12px;">
             <div class="meta-box">
               <span class="meta-label">Auth Address</span>
