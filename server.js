@@ -1,1861 +1,1859 @@
 import express from "express";
 import cors from "cors";
-import path from "node:path";
-import crypto from "node:crypto";
-import { fileURLToPath } from "node:url";
-import { BuilderConfig } from "@polymarket/builder-signing-sdk";
+import path from "path";
+import { fileURLToPath } from "url";
+
+const app = express();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const PUBLIC_DIR = path.resolve(__dirname, "public");
+const PORT = Number(process.env.PORT || 3000);
 
-const app = express();
+const GAMMA_BASE = "https://gamma-api.polymarket.com";
+
+const LIVE_MARKET_LIMIT = 250;
+const LIVE_CACHE_MS = 45_000;
+const LIVE_REFRESH_INTERVAL_MS = 120_000;
+const FETCH_TIMEOUT_MS = 15_000;
+const PRICE_MEMORY_WINDOW_MS = 24 * 60 * 60 * 1000;
+const PRICE_MEMORY_MIN_SAMPLE_GAP_MS = 60_000;
+
+const liveDataState = {
+  markets: [],
+  lastFetchedAt: 0,
+};
+
+const priceMemoryByMarketId = new Map();
+const signalLogByMarketId = new Map();
+
+const demoState = {
+  account: createInitialAccountState(),
+  paper: createInitialPaperState(),
+};
+
 app.use(cors());
-app.use(express.json({ limit: "1mb" }));
-app.use(express.static(path.join(__dirname, "public")));
+app.use(express.json({ limit: "2mb" }));
+app.use(express.static(PUBLIC_DIR));
 
-app.get("/", (_, res) => {
-  res.sendFile(path.join(__dirname, "public", "index.html"));
-});
-
-const GAMMA = "https://gamma-api.polymarket.com";
-const CLOB = "https://clob.polymarket.com";
-const RELAYER =
-  process.env.POLYMARKET_RELAYER_BASE_URL || "https://relayer-v2.polymarket.com";
-
-const DEFAULT_ORDER_TYPE = "GTC";
-const DEFAULT_POST_ONLY = false;
-
-// ===============================
-// MEMORY + STORAGE
-// ===============================
-
-let signalLog = [];
-let signalLogTimestamps = new Map();
-let paperPortfolio = [];
-let priceHistory = new Map();
-
-let paperBankroll = {
-  startingBankroll: 1000,
-  cash: 1000,
-  defaultPositionSize: 50,
-};
-
-let accountState = {
-  isConnected: false,
-  walletAddress: "",
-  walletType: "NONE", // NONE | EOA | POLYMARKET_PROXY
-  proxyWalletAddress: "",
-  signatureType: 0,
-  funderAddress: "",
-  liveModeEnabled: false,
-  lastUpdated: null,
-};
-
-const SIGNAL_LOG_COOLDOWN_MS = 30 * 60 * 1000;
-const PRICE_HISTORY_WINDOW_MS = 2 * 60 * 60 * 1000;
-const MOVER_LOOKBACK_MS = 30 * 60 * 1000;
-
-// ===============================
-// HELPERS
-// ===============================
-
-function safeJsonParse(value, fallback = []) {
-  try {
-    return typeof value === "string" ? JSON.parse(value) : value ?? fallback;
-  } catch {
-    return fallback;
-  }
-}
-
-function tryParseJsonObject(value) {
-  const parsed = typeof value === "string" ? JSON.parse(value) : value;
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("Expected a JSON object");
-  }
-  return parsed;
-}
-
-function safeJsonStringify(value) {
-  return JSON.stringify(value ?? {});
-}
-
-function clamp(value, min, max) {
-  return Math.max(min, Math.min(max, value));
-}
-
-function avg(arr) {
-  if (!arr.length) return 0;
-  return arr.reduce((sum, x) => sum + x, 0) / arr.length;
-}
-
-function round4(value) {
-  return Number(Number(value).toFixed(4));
-}
-
-function nowIso() {
-  return new Date().toISOString();
-}
-
-function nowTs() {
-  return Math.floor(Date.now() / 1000);
-}
-
-function normalizeAddress(value) {
-  return String(value || "").trim();
-}
-
-function sanitizeBase64(secret) {
-  return String(secret || "")
-    .replace(/-/g, "+")
-    .replace(/_/g, "/")
-    .replace(/[^A-Za-z0-9+/=]/g, "");
-}
-
-function toUrlSafeBase64(base64Value) {
-  return String(base64Value).replace(/\+/g, "-").replace(/\//g, "_");
-}
-
-function buildPolyHmacSignature(secret, timestamp, method, requestPath, body = "") {
-  const message = `${timestamp}${method.toUpperCase()}${requestPath}${body || ""}`;
-  const key = Buffer.from(sanitizeBase64(secret), "base64");
-  const signature = crypto.createHmac("sha256", key).update(message).digest("base64");
-  return toUrlSafeBase64(signature);
-}
-
-function buildUserL2Headers(userAuth, method, requestPath, bodyString) {
-  const address = normalizeAddress(userAuth.address);
-  const apiKey = String(userAuth.apiKey || "").trim();
-  const secret = String(userAuth.secret || "").trim();
-  const passphrase = String(userAuth.passphrase || "").trim();
-
-  if (!address || !apiKey || !secret || !passphrase) {
-    throw new Error("userAuth must include address, apiKey, secret, and passphrase");
-  }
-
-  const timestamp = nowTs();
-  const signature = buildPolyHmacSignature(
-    secret,
-    timestamp,
-    method,
-    requestPath,
-    bodyString
-  );
-
-  return {
-    POLY_ADDRESS: address,
-    POLY_SIGNATURE: signature,
-    POLY_TIMESTAMP: String(timestamp),
-    POLY_API_KEY: apiKey,
-    POLY_PASSPHRASE: passphrase,
-  };
-}
-
-function getBuilderEnvStatus() {
-  const apiKey = String(process.env.POLY_BUILDER_API_KEY || "").trim();
-  const secret = String(process.env.POLY_BUILDER_SECRET || "").trim();
-  const passphrase = String(process.env.POLY_BUILDER_PASSPHRASE || "").trim();
-  const liveRoutingEnabled =
-    String(process.env.PBP_ENABLE_BUILDER_LIVE_ROUTING || "false").toLowerCase() === "true";
-  const realLiveSubmitEnabled =
-    String(process.env.PBP_ENABLE_REAL_LIVE_SUBMIT || "false").toLowerCase() === "true";
-
-  const hasApiKey = !!apiKey;
-  const hasSecret = !!secret;
-  const hasPassphrase = !!passphrase;
-  const configured = hasApiKey && hasSecret && hasPassphrase;
-  const relayerReady = configured && liveRoutingEnabled;
-
-  return {
-    configured,
-    hasApiKey,
-    hasSecret,
-    hasPassphrase,
-    liveRoutingEnabled,
-    relayerReady,
-    realLiveSubmitEnabled,
-    relayerBaseUrl: RELAYER,
-    usesServerSideSigning: true,
-  };
-}
-
-function getRealSubmitPolicy() {
-  const enabled =
-    String(process.env.PBP_ENABLE_REAL_LIVE_SUBMIT || "false").toLowerCase() === "true";
-
-  const maxRaw = Number(process.env.PBP_MAX_REAL_SUBMIT_DOLLARS || 25);
-  const maxSubmitDollars =
-    Number.isFinite(maxRaw) && maxRaw > 0 ? round4(maxRaw) : 25;
-
-  const confirmText =
-    String(process.env.PBP_REAL_SUBMIT_CONFIRM_TEXT || "CONFIRM_LIVE_SUBMIT").trim() ||
-    "CONFIRM_LIVE_SUBMIT";
-
-  return {
-    enabled,
-    maxSubmitDollars,
-    confirmText,
-  };
-}
-
-function getBuilderConfig() {
-  const status = getBuilderEnvStatus();
-
-  if (!status.configured) {
-    return null;
-  }
-
-  return new BuilderConfig({
-    localBuilderCreds: {
-      key: process.env.POLY_BUILDER_API_KEY,
-      secret: process.env.POLY_BUILDER_SECRET,
-      passphrase: process.env.POLY_BUILDER_PASSPHRASE,
-    },
-  });
-}
-
-async function buildBuilderHeaders(method, requestPath, bodyString) {
-  const builderConfig = getBuilderConfig();
-  if (!builderConfig) {
-    throw new Error("Builder credentials are not configured on the server");
-  }
-
-  return builderConfig.generateBuilderHeaders(
-    method.toUpperCase(),
-    requestPath,
-    bodyString
-  );
-}
-
-function summarizeSignedOrder(signedOrder) {
-  if (!signedOrder || typeof signedOrder !== "object") return null;
-
-  const signature =
-    signedOrder.signature ||
-    signedOrder.sig ||
-    signedOrder.orderSignature ||
-    null;
-
-  return {
-    hasSignature: !!signature,
-    signatureLength: signature ? String(signature).length : 0,
-    keys: Object.keys(signedOrder),
-  };
-}
-
-function buildOrderSubmissionBody(
-  signedOrder,
-  orderType = DEFAULT_ORDER_TYPE,
-  postOnly = DEFAULT_POST_ONLY
-) {
-  return {
-    order: signedOrder,
-    orderType,
-    postOnly: !!postOnly,
-  };
-}
-
-function maskAddress(value) {
-  const address = normalizeAddress(value);
-  if (!address || address.length < 10) return address || null;
-  return `${address.slice(0, 6)}...${address.slice(-4)}`;
-}
-
-function logRealSubmitAudit(event, details = {}) {
-  const safePayload = {
-    timestamp: nowIso(),
-    event,
-    ...details,
-  };
-
-  console.log(`[REAL_SUBMIT_AUDIT] ${JSON.stringify(safePayload)}`);
-}
-
-function getMissingUserAuthFields(userAuth = {}) {
-  const fields = ["address", "apiKey", "secret", "passphrase"];
-  return fields.filter((field) => !String(userAuth[field] || "").trim());
-}
-
-function buildDisconnectedAccountState() {
+function createInitialAccountState() {
   return {
     isConnected: false,
-    walletAddress: "",
     walletType: "NONE",
+    walletAddress: "",
     proxyWalletAddress: "",
     signatureType: 0,
     funderAddress: "",
     liveModeEnabled: false,
-    lastUpdated: nowIso(),
   };
 }
 
-function clearPaperPortfolioState(startingBankroll = 1000, defaultPositionSize = 50) {
-  paperPortfolio = [];
-  paperBankroll = {
-    startingBankroll: round4(startingBankroll),
-    cash: round4(startingBankroll),
-    defaultPositionSize: round4(defaultPositionSize),
-  };
-}
-
-function resetPublicDemoState() {
-  accountState = buildDisconnectedAccountState();
-  clearPaperPortfolioState(1000, 50);
-
-  return {
-    account: getAccountReadiness(),
-    stats: getPaperPortfolioStats(),
-  };
-}
-
-function buildRealSubmitSummary({
-  requestPath,
-  requestMethod,
-  orderType,
-  postOnly,
-  signedOrder,
-  sizeDollars,
-  policy,
-  confirmText,
-  builderAttributionAttached = false,
-  userL2AuthAttached = false,
-  realSubmissionAttempted = false,
-}) {
-  return {
-    target: `${CLOB}${requestPath}`,
-    method: requestMethod,
-    orderType,
-    postOnly: !!postOnly,
-    requestedSizeDollars: round4(Number(sizeDollars || 0)),
-    maxSubmitDollars: policy.maxSubmitDollars,
-    confirmTextRequired: policy.confirmText,
-    confirmTextProvided: String(confirmText || "").trim(),
-    signedOrderSummary: summarizeSignedOrder(signedOrder),
-    builderAttributionAttached,
-    userL2AuthAttached,
-    realSubmissionAttempted,
-  };
-}
-
-// ===============================
-// SCORING SYSTEM
-// ===============================
-
-function getHotScore(m) {
-  if (m.yesPriceLive === null) return 0;
-
-  const balancePenalty = Math.abs(0.5 - m.yesPriceLive);
-
-  return (
-    m.volume24hr * 0.55 +
-    m.liquidity * 0.3 +
-    m.volume * 0.15 -
-    balancePenalty * 100000
-  );
-}
-
-function getConfidenceScore(m) {
-  if (m.yesPriceLive === null) return 0;
-
-  const balanceScore = (1 - Math.abs(0.5 - m.yesPriceLive) / 0.5) * 30;
-  const liquidityScore = Math.min(m.liquidity / 50000, 1) * 25;
-  const volume24hrScore = Math.min(m.volume24hr / 50000, 1) * 25;
-  const hotScoreBonus = Math.min(m.hotScore / 1000000, 1) * 20;
-
-  let score = balanceScore + liquidityScore + volume24hrScore + hotScoreBonus;
-
-  if (m.yesPriceLive < 0.05 || m.yesPriceLive > 0.95) score -= 20;
-  else if (m.yesPriceLive < 0.1 || m.yesPriceLive > 0.9) score -= 10;
-
-  return Math.round(clamp(score, 0, 100));
-}
-
-// ===============================
-// ACTION SIGNAL
-// ===============================
-
-function getActionSignal(m) {
-  const price = m.yesPriceLive;
-  const confidence = m.confidenceScore;
-  const liquid = m.liquidity > 150000;
-  const active = m.volume24hr > 25000;
-  const balanced = price >= 0.38 && price <= 0.56;
-  const elevated = price >= 0.68 && price <= 0.85;
-  const extreme = price < 0.08 || price > 0.92;
-
-  if (balanced && confidence >= 75 && liquid) {
-    return {
-      actionSignal: "BUY YES",
-      actionReason: "Balanced probability with strong confidence and liquidity",
-    };
-  }
-
-  if (elevated && confidence >= 68 && liquid && active) {
-    return {
-      actionSignal: "BUY NO",
-      actionReason: "Elevated YES pricing with enough liquidity and activity",
-    };
-  }
-
-  if (!extreme && confidence >= 60 && active) {
-    return {
-      actionSignal: "WATCH",
-      actionReason: "Interesting setup, but edge is not strong enough yet",
-    };
-  }
-
-  if (extreme) {
-    return {
-      actionSignal: "WATCH",
-      actionReason: "Extreme pricing increases reversal/noise risk",
-    };
-  }
-
-  return {
-    actionSignal: "WATCH",
-    actionReason: "No strong edge right now",
-  };
-}
-
-// ===============================
-// ACCOUNT / LIVE MODE
-// ===============================
-
-function getAccountReadiness() {
-  const builderEnv = getBuilderEnvStatus();
-  const realSubmitPolicy = getRealSubmitPolicy();
-
-  const hasWallet = !!accountState.walletAddress;
-  const hasProxyIfNeeded =
-    accountState.walletType !== "POLYMARKET_PROXY" || !!accountState.proxyWalletAddress;
-
-  const canEnableLiveMode = hasWallet && hasProxyIfNeeded;
-  const builderApiConfigured = builderEnv.configured;
-  const relayerReady = builderEnv.relayerReady;
-
-  const builderReady =
-    canEnableLiveMode &&
-    builderApiConfigured &&
-    relayerReady;
-
-  return {
-    isConnected: accountState.isConnected,
-    liveModeEnabled: accountState.liveModeEnabled,
-    walletType: accountState.walletType,
-    walletAddress: accountState.walletAddress,
-    proxyWalletAddress: accountState.proxyWalletAddress,
-    signatureType: accountState.signatureType,
-    funderAddress: accountState.funderAddress,
-    builderApiConfigured,
-    relayerReady,
-    canEnableLiveMode,
-    builderReady,
-    builderConfigSource: "SERVER_ENV",
-    liveRoutingEnabled: builderEnv.liveRoutingEnabled,
-    realLiveSubmitEnabled: builderEnv.realLiveSubmitEnabled,
-    signedOrderHandoffEnabled: true,
-    maxRealSubmitDollars: realSubmitPolicy.maxSubmitDollars,
-    blockers: [
-      !hasWallet ? "Missing wallet address" : null,
-      !hasProxyIfNeeded ? "Missing proxy wallet address" : null,
-      !builderEnv.hasApiKey ? "Builder API key missing on server" : null,
-      !builderEnv.hasSecret ? "Builder secret missing on server" : null,
-      !builderEnv.hasPassphrase ? "Builder passphrase missing on server" : null,
-      builderEnv.configured && !builderEnv.liveRoutingEnabled
-        ? "Builder live routing is disabled on the server"
-        : null,
-    ].filter(Boolean),
-    lastUpdated: accountState.lastUpdated,
-  };
-}
-
-function connectAccount({
-  walletAddress,
-  walletType = "EOA",
-  proxyWalletAddress = "",
-  signatureType = 0,
-  funderAddress = "",
-}) {
-  accountState = {
-    ...accountState,
-    isConnected: true,
-    walletAddress: normalizeAddress(walletAddress),
-    walletType,
-    proxyWalletAddress: normalizeAddress(proxyWalletAddress),
-    signatureType: Number(signatureType || 0),
-    funderAddress: normalizeAddress(funderAddress || walletAddress),
-    lastUpdated: nowIso(),
-  };
-
-  const readiness = getAccountReadiness();
-
-  if (!readiness.canEnableLiveMode) {
-    accountState.liveModeEnabled = false;
-  }
-
-  return getAccountReadiness();
-}
-
-function disconnectAccount() {
-  accountState = buildDisconnectedAccountState();
-  return getAccountReadiness();
-}
-
-function updateLiveMode(enabled) {
-  const readiness = getAccountReadiness();
-
-  if (enabled && !readiness.canEnableLiveMode) {
-    throw new Error("Account is not ready for live mode");
-  }
-
-  accountState.liveModeEnabled = !!enabled;
-  accountState.lastUpdated = nowIso();
-
-  return getAccountReadiness();
-}
-
-// Kept for frontend compatibility.
-// Builder readiness comes from server env vars only.
-function updateBuilderSettings() {
-  accountState.lastUpdated = nowIso();
-  return getAccountReadiness();
-}
-
-// ===============================
-// SIGNAL PERFORMANCE TRACKING
-// ===============================
-
-function updateSignalPerformance(currentMarkets) {
-  const marketMap = new Map(currentMarkets.map((m) => [m.id, m]));
-
-  signalLog = signalLog.map((entry) => {
-    const current = marketMap.get(entry.marketId);
-    if (!current || current.yesPriceLive === null) return entry;
-
-    const currentPrice = current.yesPriceLive;
-    const entryPrice = entry.entryYesPrice;
-
-    let performancePoints = currentPrice - entryPrice;
-
-    if (entry.actionSignal === "BUY NO") {
-      performancePoints = -performancePoints;
-    }
-
-    let status = entry.status || "ACTIVE";
-
-    if (status === "ACTIVE") {
-      if (performancePoints >= 0.05) status = "WIN";
-      if (performancePoints <= -0.05) status = "LOSS";
-    }
-
-    return {
-      ...entry,
-      currentYesPrice: currentPrice,
-      performancePoints: round4(performancePoints),
-      status,
-      updatedAt: nowIso(),
-    };
-  });
-}
-
-// ===============================
-// PAPER PORTFOLIO
-// ===============================
-
-function calculatePositionPnlPoints(position, currentYesPrice) {
-  let pnlPoints = currentYesPrice - position.entryYesPrice;
-  if (position.actionSignal === "BUY NO") pnlPoints = -pnlPoints;
-  return round4(pnlPoints);
-}
-
-function calculatePositionDollarPnl(position, pnlPoints) {
-  const stake = position.positionSizeDollars || 0;
-  return round4(stake * (pnlPoints / Math.max(position.entryYesPrice || 0.01, 0.01)));
-}
-
-function updatePaperPortfolio(currentMarkets) {
-  const marketMap = new Map(currentMarkets.map((m) => [m.id, m]));
-
-  paperPortfolio = paperPortfolio.map((position) => {
-    const current = marketMap.get(position.marketId);
-    if (!current || current.yesPriceLive === null) return position;
-
-    const currentPrice = current.yesPriceLive;
-    const pnlPoints = calculatePositionPnlPoints(position, currentPrice);
-    const pnlDollars = calculatePositionDollarPnl(position, pnlPoints);
-
-    let pnlStatus = "FLAT";
-    if (pnlPoints > 0) pnlStatus = "GREEN";
-    if (pnlPoints < 0) pnlStatus = "RED";
-
-    let status = position.status;
-    let closeReason = position.closeReason;
-    let closedAt = position.closedAt;
-
-    if (status === "OPEN") {
-      if (pnlPoints >= 0.05) {
-        status = "CLOSED";
-        closeReason = "Take Profit (+5 pts)";
-        closedAt = nowIso();
-        paperBankroll.cash = round4(
-          paperBankroll.cash + position.positionSizeDollars + pnlDollars
-        );
-      } else if (pnlPoints <= -0.05) {
-        status = "CLOSED";
-        closeReason = "Stop Loss (-5 pts)";
-        closedAt = nowIso();
-        paperBankroll.cash = round4(
-          paperBankroll.cash + position.positionSizeDollars + pnlDollars
-        );
-      }
-    }
-
-    return {
-      ...position,
-      currentYesPrice: currentPrice,
-      pnlPoints,
-      pnlDollars,
-      pnlStatus,
-      status,
-      closeReason,
-      closedAt,
-      updatedAt: nowIso(),
-    };
-  });
-}
-
-function manuallyOpenPaperPosition(market, actionSignal, positionSizeDollars) {
-  if (actionSignal !== "BUY YES" && actionSignal !== "BUY NO") {
-    throw new Error("Only BUY YES and BUY NO can open positions");
-  }
-
-  const existingOpen = paperPortfolio.find(
-    (p) =>
-      p.marketId === market.id &&
-      p.actionSignal === actionSignal &&
-      p.status === "OPEN"
-  );
-
-  if (existingOpen) {
-    throw new Error("Open position already exists for this market and side");
-  }
-
-  if (positionSizeDollars <= 0) {
-    throw new Error("Position size must be greater than 0");
-  }
-
-  if (paperBankroll.cash < positionSizeDollars) {
-    throw new Error("Not enough paper cash available");
-  }
-
-  paperBankroll.cash = round4(paperBankroll.cash - positionSizeDollars);
-
-  const position = {
-    id: `${market.id}-${actionSignal}-${Date.now()}`,
-    marketId: market.id,
-    question: market.question,
-    slug: market.slug,
-    eventSlug: market.eventSlug,
-    url: market.url,
-    source: "MANUAL",
-    actionSignal,
-    actionReason: `Manual ${actionSignal} entry`,
-    confidenceScore: market.confidenceScore,
-    entryYesPrice: market.yesPriceLive,
-    currentYesPrice: market.yesPriceLive,
-    positionSizeDollars,
-    pnlPoints: 0,
-    pnlDollars: 0,
-    pnlStatus: "FLAT",
-    status: "OPEN",
-    openedAt: nowIso(),
-    closedAt: null,
-    closeReason: null,
-  };
-
-  paperPortfolio.unshift(position);
-  paperPortfolio = paperPortfolio.slice(0, 300);
-
-  return position;
-}
-
-function manuallyClosePaperPosition(positionId, reason = "Manual Close") {
-  const idx = paperPortfolio.findIndex((p) => p.id === positionId);
-  if (idx === -1) throw new Error("Position not found");
-
-  const position = paperPortfolio[idx];
-  if (position.status !== "OPEN") throw new Error("Position is already closed");
-
-  const closedPosition = {
-    ...position,
-    status: "CLOSED",
-    closeReason: reason,
-    closedAt: nowIso(),
-    updatedAt: nowIso(),
-  };
-
-  paperBankroll.cash = round4(
-    paperBankroll.cash + closedPosition.positionSizeDollars + (closedPosition.pnlDollars || 0)
-  );
-
-  paperPortfolio[idx] = closedPosition;
-  return closedPosition;
-}
-
-function resetPaperPortfolio(startingBankroll = 1000, defaultPositionSize = 50) {
-  clearPaperPortfolioState(startingBankroll, defaultPositionSize);
-}
-
-function getPaperPortfolioStats() {
-  const open = paperPortfolio.filter((p) => p.status === "OPEN");
-  const closed = paperPortfolio.filter((p) => p.status === "CLOSED");
-  const closedWins = closed.filter((p) => p.pnlPoints > 0);
-  const closedLosses = closed.filter((p) => p.pnlPoints < 0);
-
-  const avgOpenPnl = round4(avg(open.map((p) => p.pnlPoints || 0)));
-  const realizedPnl = round4(closed.reduce((sum, p) => sum + (p.pnlDollars || 0), 0));
-  const unrealizedPnlDollars = round4(open.reduce((sum, p) => sum + (p.pnlDollars || 0), 0));
-
-  const closedWinRate = closed.length
-    ? Number((closedWins.length / closed.length).toFixed(4))
-    : 0;
-
-  const equity = round4(
-    paperBankroll.cash +
-      open.reduce(
-        (sum, p) => sum + (p.positionSizeDollars || 0) + (p.pnlDollars || 0),
-        0
-      )
-  );
+function createInitialPaperState() {
+  const startingBankroll = 1000;
+  const defaultPositionSize = 50;
 
   return {
     bankroll: {
-      startingBankroll: paperBankroll.startingBankroll,
-      cash: paperBankroll.cash,
-      equity,
-      defaultPositionSize: paperBankroll.defaultPositionSize,
+      startingBankroll,
+      cash: startingBankroll,
+      equity: startingBankroll,
+      defaultPositionSize,
     },
-    totalPositions: paperPortfolio.length,
-    openPositions: open.length,
-    closedPositions: closed.length,
-    closedWins: closedWins.length,
-    closedLosses: closedLosses.length,
-    closedWinRate,
-    avgOpenPnl,
-    realizedPnl,
-    unrealizedPnlDollars,
+    positions: [],
   };
 }
 
-// ===============================
-// EXECUTION-READY TRADE HELPERS
-// ===============================
+function envFirst(...names) {
+  for (const name of names) {
+    const value = process.env[name];
+    if (value !== undefined && value !== null && String(value).trim() !== "") {
+      return String(value).trim();
+    }
+  }
+  return "";
+}
 
-function getTradeSideDetails(market, side) {
-  if (side !== "BUY YES" && side !== "BUY NO") {
-    throw new Error("side must be BUY YES or BUY NO");
+function envFlag(...names) {
+  const value = envFirst(...names);
+  return /^(1|true|yes|on)$/i.test(value);
+}
+
+function envNumber(defaultValue, ...names) {
+  const value = envFirst(...names);
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : defaultValue;
+}
+
+function getBuilderConfig() {
+  const builderApiKey = envFirst(
+    "PBP_BUILDER_API_KEY",
+    "POLYMARKET_BUILDER_API_KEY",
+    "BUILDER_API_KEY"
+  );
+  const builderApiSecret = envFirst(
+    "PBP_BUILDER_API_SECRET",
+    "POLYMARKET_BUILDER_API_SECRET",
+    "BUILDER_API_SECRET"
+  );
+  const builderApiPassphrase = envFirst(
+    "PBP_BUILDER_API_PASSPHRASE",
+    "POLYMARKET_BUILDER_API_PASSPHRASE",
+    "BUILDER_API_PASSPHRASE"
+  );
+  const relayerUrl = envFirst(
+    "PBP_RELAYER_URL",
+    "POLYMARKET_RELAYER_URL",
+    "BUILDER_RELAYER_URL",
+    "RELAYER_URL"
+  );
+  const builderProfileId = envFirst(
+    "PBP_BUILDER_PROFILE_ID",
+    "POLYMARKET_BUILDER_PROFILE_ID",
+    "BUILDER_PROFILE_ID"
+  );
+  const builderName = envFirst(
+    "PBP_BUILDER_NAME",
+    "POLYMARKET_BUILDER_NAME",
+    "BUILDER_NAME"
+  );
+
+  const builderApiConfigured = !!(
+    builderApiKey &&
+    builderApiSecret &&
+    builderApiPassphrase
+  );
+
+  const relayerReady =
+    envFlag("PBP_RELAYER_READY", "POLYMARKET_RELAYER_READY", "RELAYER_READY") ||
+    !!relayerUrl;
+
+  const liveRoutingEnabled =
+    envFlag(
+      "PBP_LIVE_ROUTING_ENABLED",
+      "POLYMARKET_LIVE_ROUTING_ENABLED",
+      "LIVE_ROUTING_ENABLED"
+    ) || relayerReady;
+
+  const signedOrderHandoffEnabled =
+    envFirst(
+      "PBP_SIGNED_ORDER_HANDOFF_ENABLED",
+      "POLYMARKET_SIGNED_ORDER_HANDOFF_ENABLED",
+      "SIGNED_ORDER_HANDOFF_ENABLED"
+    ) === ""
+      ? true
+      : envFlag(
+          "PBP_SIGNED_ORDER_HANDOFF_ENABLED",
+          "POLYMARKET_SIGNED_ORDER_HANDOFF_ENABLED",
+          "SIGNED_ORDER_HANDOFF_ENABLED"
+        );
+
+  const realLiveSubmitEnabled = envFlag(
+    "PBP_REAL_LIVE_SUBMIT_ENABLED",
+    "POLYMARKET_REAL_LIVE_SUBMIT_ENABLED",
+    "REAL_LIVE_SUBMIT_ENABLED"
+  );
+
+  const maxRealSubmitDollars = envNumber(
+    25,
+    "PBP_REAL_LIVE_SUBMIT_MAX_DOLLARS",
+    "POLYMARKET_REAL_LIVE_SUBMIT_MAX_DOLLARS",
+    "REAL_LIVE_SUBMIT_MAX_DOLLARS"
+  );
+
+  const confirmText =
+    envFirst(
+      "PBP_REAL_LIVE_SUBMIT_CONFIRM_TEXT",
+      "POLYMARKET_REAL_LIVE_SUBMIT_CONFIRM_TEXT",
+      "REAL_LIVE_SUBMIT_CONFIRM_TEXT"
+    ) || "CONFIRM LIVE SUBMIT";
+
+  return {
+    builderApiConfigured,
+    relayerReady,
+    liveRoutingEnabled,
+    signedOrderHandoffEnabled,
+    realLiveSubmitEnabled,
+    maxRealSubmitDollars,
+    confirmText,
+    relayerUrl,
+    builderProfileId,
+    builderName,
+    builderConfigSource: "SERVER_ENV",
+  };
+}
+
+function toNumber(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function firstFinite(...values) {
+  for (const value of values) {
+    if (Number.isFinite(value)) return value;
+  }
+  return null;
+}
+
+function clamp(value, min, max) {
+  if (!Number.isFinite(value)) return min;
+  return Math.min(max, Math.max(min, value));
+}
+
+function roundTo(value, digits = 4) {
+  if (!Number.isFinite(value)) return null;
+  const factor = 10 ** digits;
+  return Math.round(value * factor) / factor;
+}
+
+function titleCase(value) {
+  return String(value || "")
+    .toLowerCase()
+    .split(/[\s/_-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function normalizeCategoryLabel(value) {
+  const cleaned = String(value || "")
+    .replace(/\s+/g, " ")
+    .replace(/[_/]+/g, " ")
+    .trim();
+
+  if (!cleaned) return "";
+
+  const lower = cleaned.toLowerCase();
+
+  const map = {
+    politics: "Politics",
+    election: "Politics",
+    elections: "Politics",
+    crypto: "Crypto",
+    cryptocurrency: "Crypto",
+    bitcoin: "Crypto",
+    ethereum: "Crypto",
+    sports: "Sports",
+    sport: "Sports",
+    business: "Business",
+    economy: "Business",
+    macro: "Business",
+    technology: "Tech",
+    tech: "Tech",
+    entertainment: "Culture",
+    culture: "Culture",
+    popculture: "Culture",
+    pop: "Culture",
+    world: "World",
+    news: "News",
+  };
+
+  return map[lower] || titleCase(cleaned);
+}
+
+function isMeaningfulCategory(value) {
+  const normalized = normalizeCategoryLabel(value);
+  if (!normalized) return false;
+
+  const blocked = new Set([
+    "All",
+    "Featured",
+    "New",
+    "Markets",
+    "Market",
+    "Events",
+    "Event",
+    "Homepage",
+    "Trending",
+    "Uncategorized",
+  ]);
+
+  return !blocked.has(normalized);
+}
+
+function parseStringArray(value) {
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item)).filter(Boolean);
   }
 
-  const yesPrice = market.yesPriceLive;
-  const noPrice = yesPrice === null ? null : round4(1 - yesPrice);
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) return [];
 
-  return {
-    side,
-    selectedPrice: side === "BUY YES" ? yesPrice : noPrice,
-    yesPrice,
-    noPrice,
-  };
-}
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (Array.isArray(parsed)) {
+        return parsed.map((item) => String(item)).filter(Boolean);
+      }
+    } catch {}
 
-function buildTradeQuote(market, side, sizeDollars, mode = "PAPER") {
-  const trade = getTradeSideDetails(market, side);
-  const price = trade.selectedPrice;
-
-  if (price === null || price <= 0) {
-    throw new Error("Market price unavailable for quote");
+    return trimmed
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
   }
 
-  const estimatedShares = round4(sizeDollars / price);
-  const estimatedMaxLoss = round4(sizeDollars);
-  const estimatedMaxPayout = round4(estimatedShares * 1);
-  const estimatedProfitIfCorrect = round4(estimatedMaxPayout - sizeDollars);
-
-  return {
-    mode,
-    marketId: market.id,
-    question: market.question,
-    url: market.url,
-    side,
-    sizeDollars: round4(sizeDollars),
-    selectedPrice: price,
-    yesPrice: trade.yesPrice,
-    noPrice: trade.noPrice,
-    estimatedShares,
-    estimatedCost: round4(sizeDollars),
-    estimatedMaxLoss,
-    estimatedMaxPayout,
-    estimatedProfitIfCorrect,
-    confidenceScore: market.confidenceScore,
-    actionSignal: market.actionSignal,
-    actionReason: market.actionReason,
-    timestamp: nowIso(),
-  };
+  return [];
 }
 
-function getOutcomeLabelForSide(side) {
-  return side === "BUY YES" ? "YES" : "NO";
+function parseNumberArray(value) {
+  return parseStringArray(value)
+    .map((item) => Number(item))
+    .filter((item) => Number.isFinite(item));
 }
 
-function getTokenIdForSide(market, side) {
-  if (!Array.isArray(market.tokenIds)) return null;
-  return side === "BUY YES" ? market.tokenIds[0] || null : market.tokenIds[1] || null;
-}
+function parseTagLabels(raw) {
+  const tags = [];
 
-function getSignedHandoffBlockedReasons(market, side, sizeDollars) {
-  const quote = buildTradeQuote(market, side, sizeDollars, "LIVE");
-  const readiness = getAccountReadiness();
-  const tokenID = getTokenIdForSide(market, side);
-
-  return [
-    !readiness.isConnected ? "Account is not connected" : null,
-    !readiness.liveModeEnabled ? "Live mode is not enabled" : null,
-    !readiness.canEnableLiveMode ? "Account cannot enable live mode yet" : null,
-    !readiness.builderApiConfigured ? "Builder credentials are not configured on the server" : null,
-    !readiness.relayerReady ? "Builder live routing is not enabled on the server" : null,
-    !tokenID ? "Outcome token ID is missing for this side" : null,
-    !quote.selectedPrice || quote.selectedPrice <= 0 ? "Selected price is invalid" : null,
-  ].filter(Boolean);
-}
-
-function buildSignedOrderHandoff(market, side, sizeDollars) {
-  const quote = buildTradeQuote(market, side, sizeDollars, "LIVE");
-  const readiness = getAccountReadiness();
-  const builderEnv = getBuilderEnvStatus();
-  const realSubmitPolicy = getRealSubmitPolicy();
-
-  const tokenID = getTokenIdForSide(market, side);
-  const outcome = getOutcomeLabelForSide(side);
-  const blockedReasons = getSignedHandoffBlockedReasons(market, side, sizeDollars);
-  const withinMaxSubmitSize = quote.sizeDollars <= realSubmitPolicy.maxSubmitDollars;
-
-  const signableOrder = {
-    tokenID,
-    side: "BUY",
-    price: round4(quote.selectedPrice),
-    size: round4(quote.estimatedShares),
-    tickSize: market.minimumTickSize || "0.01",
-    negRisk: !!market.negRisk,
-    feeRateBps: 0,
-    taker: null,
-    expiration: 0,
+  const appendTag = (input) => {
+    if (!input) return;
+    if (Array.isArray(input)) {
+      input.forEach(appendTag);
+      return;
+    }
+    if (typeof input === "object") {
+      if (input.label) tags.push(String(input.label));
+      else if (input.slug) tags.push(String(input.slug));
+      return;
+    }
+    if (typeof input === "string") tags.push(input);
   };
 
-  return {
-    enabled: true,
-    blocked: blockedReasons.length > 0,
-    blockedReasons,
-    submissionEnabled: builderEnv.realLiveSubmitEnabled,
-    submissionMode: builderEnv.realLiveSubmitEnabled ? "LIVE_SUBMIT_ENABLED" : "SAFE_FALLBACK_ONLY",
-    submitPath: "/api/trade/submit-signed",
-    submitMethod: "POST",
-    orderType: DEFAULT_ORDER_TYPE,
-    postOnly: DEFAULT_POST_ONLY,
-    signableOrder,
-    routingTarget: {
-      baseUrl: CLOB,
-      path: "/order",
-      method: "POST",
-    },
-    clientRequirements: {
-      signedOrderRequired: true,
-      userL2AuthRequired: true,
-      builderSecretsStayServerSide: true,
-      confirmationTextRequired: true,
-    },
-    realSubmitPolicy: {
-      enabled: realSubmitPolicy.enabled,
-      maxSubmitDollars: realSubmitPolicy.maxSubmitDollars,
-      confirmText: realSubmitPolicy.confirmText,
-    },
-    realSubmitReadiness: {
-      handoffReady: blockedReasons.length === 0,
-      serverEnabled: realSubmitPolicy.enabled,
-      requestedSizeDollars: round4(quote.sizeDollars),
-      withinMaxSubmitSize,
-      readyForGuardedSubmit:
-        blockedReasons.length === 0 &&
-        realSubmitPolicy.enabled &&
-        withinMaxSubmitSize,
-      fallbackMode: !realSubmitPolicy.enabled,
-    },
-    orderSummary: {
-      marketId: market.id,
-      question: market.question,
-      outcome,
-      tokenID,
-      selectedPrice: round4(quote.selectedPrice),
-      sizeDollars: round4(quote.sizeDollars),
-      estimatedShares: round4(quote.estimatedShares),
-      walletAddress: readiness.walletAddress || null,
-      funderAddress: readiness.funderAddress || null,
-      signatureType: readiness.signatureType ?? 0,
-    },
-    userAuthSchema: {
-      address: "<user-wallet-address>",
-      apiKey: "<user-api-key>",
-      secret: "<user-api-secret>",
-      passphrase: "<user-api-passphrase>",
-    },
-    notes: [
-      "The user signs the order payload client-side or in an external wallet/SDK flow.",
-      "The backend receives the signed order plus user L2 auth and forwards it with builder attribution headers.",
-      realSubmitPolicy.enabled
-        ? "Real live submission is enabled on the server, but still gated by max size and confirmation checks."
-        : "Real live submission is disabled on the server, so submit stays in safe fallback mode.",
-    ],
-  };
+  appendTag(raw?.tags);
+  appendTag(raw?.events?.flatMap((event) => event?.tags || []));
+  appendTag(raw?.categories);
+
+  return tags;
 }
 
-function buildExecutionPreparation(market, side, sizeDollars) {
-  const quote = buildTradeQuote(market, side, sizeDollars, "LIVE");
-  const readiness = getAccountReadiness();
-  const signedOrderHandoff = buildSignedOrderHandoff(market, side, sizeDollars);
+function deriveCategory(raw) {
+  const directCandidates = [
+    raw?.category,
+    raw?.events?.[0]?.subcategory,
+    raw?.events?.[0]?.category,
+    ...(Array.isArray(raw?.categories)
+      ? raw.categories.map((category) => category?.label || category?.slug || category)
+      : []),
+    ...parseTagLabels(raw),
+  ];
 
-  let message = "Signed-order handoff is blocked by readiness checks.";
-
-  if (!signedOrderHandoff.blocked) {
-    if (!signedOrderHandoff.realSubmitPolicy.enabled) {
-      message =
-        "Signed-order handoff is ready. Real submit remains blocked by server policy until explicitly enabled.";
-    } else if (!signedOrderHandoff.realSubmitReadiness.withinMaxSubmitSize) {
-      message =
-        "Signed-order handoff is ready, but this trade exceeds the current max real submit size guardrail.";
-    } else {
-      message =
-        "Signed-order handoff is ready. Real submit guardrails are satisfied pending signed payload, user auth, and final confirmation.";
+  for (const candidate of directCandidates) {
+    if (isMeaningfulCategory(candidate)) {
+      return normalizeCategoryLabel(candidate);
     }
   }
 
+  const text = [
+    raw?.question,
+    raw?.description,
+    raw?.groupItemTitle,
+    raw?.events?.[0]?.title,
+    raw?.events?.[0]?.subtitle,
+    ...parseTagLabels(raw),
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  if (
+    /(election|president|senate|house|trump|biden|democrat|republican|vote|voting|campaign|governor)/.test(
+      text
+    )
+  ) {
+    return "Politics";
+  }
+  if (
+    /(bitcoin|btc|ethereum|eth|solana|sol|crypto|token|blockchain|dogecoin|doge|xrp)/.test(
+      text
+    )
+  ) {
+    return "Crypto";
+  }
+  if (
+    /(nba|nfl|mlb|nhl|soccer|football|tennis|golf|ufc|fifa|super bowl|champions league|world cup|match|vs\b|defeat|wins? by)/.test(
+      text
+    )
+  ) {
+    return "Sports";
+  }
+  if (
+    /(fed|inflation|cpi|gdp|recession|stocks|stock market|earnings|tesla|apple|nvidia|meta|amazon|microsoft|tariff|yield)/.test(
+      text
+    )
+  ) {
+    return "Business";
+  }
+  if (
+    /(ai|openai|chatgpt|gemini|anthropic|tech|iphone|android|semiconductor|chip)/.test(
+      text
+    )
+  ) {
+    return "Tech";
+  }
+  if (
+    /(movie|film|oscar|music|album|tv|television|celebrity|actor|actress|grammy|box office)/.test(
+      text
+    )
+  ) {
+    return "Culture";
+  }
+  if (
+    /(war|country|prime minister|president of|europe|china|russia|ukraine|israel|gaza|iran)/.test(
+      text
+    )
+  ) {
+    return "World";
+  }
+
+  return "News";
+}
+
+function parseIsoTimestamp(value) {
+  if (!value) return null;
+  const ts = new Date(value).getTime();
+  return Number.isFinite(ts) ? ts : null;
+}
+
+function newestIso(...values) {
+  let bestTs = null;
+  let bestValue = "";
+
+  for (const value of values.flat()) {
+    const ts = parseIsoTimestamp(value);
+    if (ts !== null && (bestTs === null || ts > bestTs)) {
+      bestTs = ts;
+      bestValue = new Date(ts).toISOString();
+    }
+  }
+
+  return bestValue;
+}
+
+function normalizeOneDayPriceChange(value) {
+  const numeric = toNumber(value);
+  if (!Number.isFinite(numeric)) return 0;
+  if (Math.abs(numeric) > 1.5) return numeric / 100;
+  return numeric;
+}
+
+function findOutcomeIndex(outcomes, matcher) {
+  return outcomes.findIndex((value) =>
+    matcher.test(String(value || "").trim())
+  );
+}
+
+function inferYesNoPrices(raw, outcomes, outcomePrices) {
+  const yesIndex = findOutcomeIndex(outcomes, /^yes$/i);
+  const noIndex = findOutcomeIndex(outcomes, /^no$/i);
+
+  let yesPrice = yesIndex >= 0 ? outcomePrices[yesIndex] : null;
+  let noPrice = noIndex >= 0 ? outcomePrices[noIndex] : null;
+
+  const bestBid = toNumber(raw?.bestBid ?? raw?.best_bid);
+  const bestAsk = toNumber(raw?.bestAsk ?? raw?.best_ask);
+  const lastTradePrice = toNumber(raw?.lastTradePrice);
+
+  const midpoint =
+    Number.isFinite(bestBid) &&
+    Number.isFinite(bestAsk) &&
+    bestBid >= 0 &&
+    bestAsk >= 0
+      ? (bestBid + bestAsk) / 2
+      : null;
+
+  const fallbackPrice = firstFinite(midpoint, lastTradePrice);
+
+  if (!Number.isFinite(yesPrice) && Number.isFinite(fallbackPrice)) {
+    yesPrice = fallbackPrice;
+  }
+
+  if (!Number.isFinite(noPrice) && Number.isFinite(yesPrice)) {
+    noPrice = clamp(1 - yesPrice, 0, 1);
+  }
+
   return {
-    dryRun: !signedOrderHandoff.submissionEnabled,
-    builderReady: readiness.builderReady,
-    mode: "LIVE",
-    status: signedOrderHandoff.blocked
-      ? "SIGNED_HANDOFF_BLOCKED"
-      : signedOrderHandoff.realSubmitReadiness.readyForGuardedSubmit
-        ? "GUARDED_REAL_SUBMIT_READY"
-        : "SIGNED_HANDOFF_READY",
-    message,
-    accountReadiness: readiness,
-    signedOrderHandoff,
-    ticket: quote,
-    nextSteps: signedOrderHandoff.blocked
-      ? signedOrderHandoff.blockedReasons
-      : [
-          "Sign the order payload with the user wallet or SDK",
-          "Send the signed order, user L2 auth bundle, and confirmation text to the guarded submit route",
-        ],
+    yesIndex,
+    noIndex,
+    yesPrice: Number.isFinite(yesPrice) ? clamp(yesPrice, 0, 1) : null,
+    noPrice: Number.isFinite(noPrice) ? clamp(noPrice, 0, 1) : null,
+    bestBid,
+    bestAsk,
+    lastTradePrice,
+    midpoint: Number.isFinite(midpoint) ? clamp(midpoint, 0, 1) : null,
   };
 }
 
-// ===============================
-// SIGNAL LOGGING
-// ===============================
+function calculateConfidenceAndSignal(market) {
+  const volumeScore = clamp(
+    Math.log10((market.volume24hr || 0) + 1) * 8,
+    0,
+    32
+  );
+  const liquidityScore = clamp(
+    Math.log10((market.liquidity || 0) + 1) * 7,
+    0,
+    28
+  );
 
-function shouldLogSignal(m) {
-  const key = `${m.id}-${m.actionSignal}`;
-  const last = signalLogTimestamps.get(key) || 0;
-  const now = Date.now();
+  const spread =
+    Number.isFinite(market.bestBid) && Number.isFinite(market.bestAsk)
+      ? Math.max(0, market.bestAsk - market.bestBid)
+      : null;
 
-  if (now - last > SIGNAL_LOG_COOLDOWN_MS) {
-    signalLogTimestamps.set(key, now);
-    return true;
+  const spreadScore = spread === null ? 6 : clamp((0.1 - spread) * 140, 0, 18);
+
+  const moveScore = clamp(
+    Math.abs(market.oneDayPriceChange || 0) * 180,
+    0,
+    14
+  );
+
+  const lastUpdatedTs = parseIsoTimestamp(market.lastUpdated);
+  const freshnessHours =
+    lastUpdatedTs === null ? 9999 : (Date.now() - lastUpdatedTs) / 3_600_000;
+
+  const freshnessScore =
+    freshnessHours <= 6
+      ? 10
+      : freshnessHours <= 24
+        ? 7
+        : freshnessHours <= 72
+          ? 4
+          : 1;
+
+  const confidenceScore = Math.round(
+    clamp(
+      volumeScore + liquidityScore + spreadScore + moveScore + freshnessScore,
+      5,
+      98
+    )
+  );
+
+  let actionSignal = "WATCH";
+  if (
+    confidenceScore >= 70 &&
+    Number.isFinite(market.oneDayPriceChange) &&
+    market.oneDayPriceChange >= 0.03 &&
+    Number.isFinite(market.yesPriceLive) &&
+    market.yesPriceLive >= 0.12 &&
+    market.yesPriceLive <= 0.88
+  ) {
+    actionSignal = "BUY YES";
+  } else if (
+    confidenceScore >= 70 &&
+    Number.isFinite(market.oneDayPriceChange) &&
+    market.oneDayPriceChange <= -0.03 &&
+    Number.isFinite(market.yesPriceLive) &&
+    market.yesPriceLive >= 0.12 &&
+    market.yesPriceLive <= 0.88
+  ) {
+    actionSignal = "BUY NO";
   }
 
-  return false;
-}
-
-function maybeLogSignals(markets) {
-  for (const m of markets) {
-    if (!shouldLogSignal(m)) continue;
-
-    signalLog.unshift({
-      id: `${m.id}-${Date.now()}`,
-      marketId: m.id,
-      question: m.question,
-      slug: m.slug,
-      eventSlug: m.eventSlug,
-      url: m.url,
-      actionSignal: m.actionSignal,
-      actionReason: m.actionReason,
-      confidenceScore: m.confidenceScore,
-      hotScore: m.hotScore,
-      entryYesPrice: m.yesPriceLive,
-      currentYesPrice: m.yesPriceLive,
-      performancePoints: 0,
-      status: "ACTIVE",
-      liquidity: m.liquidity,
-      volume24hr: m.volume24hr,
-      createdAt: nowIso(),
-      updatedAt: nowIso(),
-    });
+  const reasons = [];
+  if ((market.volume24hr || 0) >= 100_000) reasons.push("High 24h volume");
+  if ((market.liquidity || 0) >= 100_000) reasons.push("Deep liquidity");
+  if (Math.abs(market.oneDayPriceChange || 0) >= 0.03) {
+    reasons.push(
+      `${market.oneDayPriceChange > 0 ? "Up" : "Down"} ${(
+        Math.abs(market.oneDayPriceChange) * 100
+      ).toFixed(1)} pts in 24h`
+    );
   }
+  if (freshnessHours <= 24) reasons.push("Recently updated");
 
-  signalLog = signalLog.slice(0, 300);
+  return {
+    confidenceScore,
+    actionSignal,
+    actionReason: reasons[0] || "Balanced market structure",
+    hotScore: Math.round(
+      (market.volume24hr || 0) * 0.55 +
+        (market.liquidity || 0) * 0.35 +
+        confidenceScore * 1000 +
+        Math.abs(market.oneDayPriceChange || 0) * 100_000
+    ),
+  };
 }
 
-// ===============================
-// ALERTS + MOVER HISTORY
-// ===============================
+function buildMarketUrl(raw) {
+  const eventSlug = raw?.events?.[0]?.slug;
+  const slug = raw?.slug || eventSlug || raw?.id;
+  return `https://polymarket.com/event/${encodeURIComponent(eventSlug || slug)}`;
+}
 
-function updatePriceHistory(markets) {
+function normalizeMarket(raw) {
+  const outcomes = parseStringArray(raw?.outcomes);
+  const outcomePrices = parseNumberArray(raw?.outcomePrices);
+  const tokenIds = parseStringArray(raw?.clobTokenIds);
+
+  const prices = inferYesNoPrices(raw, outcomes, outcomePrices);
+
+  const volume = firstFinite(
+    toNumber(raw?.volumeNum),
+    toNumber(raw?.volumeClob),
+    toNumber(raw?.volume),
+    0
+  );
+
+  const volume24hr = firstFinite(
+    toNumber(raw?.volume24hrClob),
+    toNumber(raw?.volume24hr),
+    toNumber(raw?.events?.[0]?.volume24hr),
+    0
+  );
+
+  const liquidity = firstFinite(
+    toNumber(raw?.liquidityClob),
+    toNumber(raw?.liquidityNum),
+    toNumber(raw?.liquidity),
+    toNumber(raw?.events?.[0]?.liquidity),
+    0
+  );
+
+  const category = deriveCategory(raw);
+  const oneDayPriceChange = normalizeOneDayPriceChange(raw?.oneDayPriceChange);
+
+  const lastUpdated = newestIso(
+    raw?.updatedAt,
+    raw?.acceptingOrdersTimestamp,
+    raw?.readyTimestamp,
+    raw?.fundedTimestamp,
+    raw?.published_at,
+    raw?.events?.map((event) => event?.updatedAt),
+    raw?.events?.map((event) => event?.published_at),
+    raw?.events?.map((event) => event?.creationDate),
+    raw?.createdAt
+  );
+
+  const normalized = {
+    id: String(raw?.id || raw?.conditionId || raw?.slug || ""),
+    question: String(raw?.question || raw?.events?.[0]?.title || "Untitled market"),
+    slug: String(raw?.slug || raw?.id || ""),
+    url: buildMarketUrl(raw),
+    category,
+    active: !!raw?.active,
+    closed: !!raw?.closed,
+    liquidity: roundTo(liquidity, 2) || 0,
+    volume: roundTo(volume, 2) || 0,
+    volume24hr: roundTo(volume24hr, 2) || 0,
+    yesPrice: prices.yesPrice,
+    noPrice: prices.noPrice,
+    yesPriceLive: prices.yesPrice,
+    noPriceLive: prices.noPrice,
+    oneDayPriceChange,
+    lastUpdated,
+    outcomes,
+    outcomePrices,
+    tokenIds,
+    yesOutcomeIndex: prices.yesIndex,
+    noOutcomeIndex: prices.noIndex,
+    bestBid: prices.bestBid,
+    bestAsk: prices.bestAsk,
+    midpoint: prices.midpoint,
+    lastTradePrice: prices.lastTradePrice,
+    negRisk: !!raw?.negRisk || !!raw?.events?.[0]?.negRisk,
+    tickSize: firstFinite(
+      toNumber(raw?.orderPriceMinTickSize),
+      toNumber(raw?.tickSize),
+      0.01
+    ),
+    minOrderSize: firstFinite(
+      toNumber(raw?.orderMinSize),
+      toNumber(raw?.minOrderSize),
+      1
+    ),
+    eventTitle: raw?.events?.[0]?.title || "",
+    eventSlug: raw?.events?.[0]?.slug || "",
+    raw,
+  };
+
+  const signalBits = calculateConfidenceAndSignal(normalized);
+
+  return {
+    ...normalized,
+    ...signalBits,
+  };
+}
+
+function updatePriceMemory(markets) {
   const now = Date.now();
 
   for (const market of markets) {
-    if (market.yesPriceLive === null || market.yesPriceLive === undefined) continue;
+    if (!Number.isFinite(market.yesPriceLive)) continue;
 
-    const existing = priceHistory.get(market.id) || [];
-    const next = [
-      ...existing,
-      {
-        timestamp: now,
-        price: Number(market.yesPriceLive),
-      },
-    ].filter((row) => now - row.timestamp <= PRICE_HISTORY_WINDOW_MS);
+    const existing = priceMemoryByMarketId.get(market.id) || [];
+    const lastPoint = existing[existing.length - 1];
 
-    priceHistory.set(market.id, next);
+    if (
+      !lastPoint ||
+      now - lastPoint.t >= PRICE_MEMORY_MIN_SAMPLE_GAP_MS ||
+      Math.abs(lastPoint.p - market.yesPriceLive) >= 0.002
+    ) {
+      existing.push({
+        t: now,
+        p: roundTo(market.yesPriceLive, 4),
+      });
+    }
+
+    const trimmed = existing.filter(
+      (point) => now - point.t <= PRICE_MEMORY_WINDOW_MS
+    );
+    priceMemoryByMarketId.set(market.id, trimmed);
   }
 }
 
-function getPastPrice(marketId, lookbackMs = MOVER_LOOKBACK_MS) {
-  const rows = priceHistory.get(marketId) || [];
-  if (!rows.length) return null;
+function computeMoverForMarket(market) {
+  if (!Number.isFinite(market.yesPriceLive)) return null;
 
-  const target = Date.now() - lookbackMs;
-  let best = rows[0];
+  const history = priceMemoryByMarketId.get(market.id) || [];
+  const now = Date.now();
+  const sixHoursAgo = now - 6 * 60 * 60 * 1000;
+  const targetPoint =
+    history.find((point) => point.t >= sixHoursAgo) || history[0];
 
-  for (const row of rows) {
-    if (Math.abs(row.timestamp - target) < Math.abs(best.timestamp - target)) {
-      best = row;
-    }
+  let pastPrice = Number.isFinite(targetPoint?.p) ? targetPoint.p : null;
+
+  if (
+    (!Number.isFinite(pastPrice) ||
+      history.length < 2 ||
+      Math.abs(market.yesPriceLive - pastPrice) < 0.002) &&
+    Number.isFinite(market.oneDayPriceChange) &&
+    Number.isFinite(market.yesPriceLive - market.oneDayPriceChange)
+  ) {
+    const sourcePast = clamp(
+      market.yesPriceLive - market.oneDayPriceChange,
+      0.01,
+      0.99
+    );
+    pastPrice = sourcePast;
   }
 
-  return typeof best.price === "number" ? best.price : null;
+  if (!Number.isFinite(pastPrice)) return null;
+
+  const priceChange = roundTo(market.yesPriceLive - pastPrice, 4);
+  const percentChange =
+    Number.isFinite(pastPrice) && pastPrice > 0
+      ? roundTo(priceChange / pastPrice, 4)
+      : 0;
+
+  return {
+    ...market,
+    pastPrice: roundTo(pastPrice, 4),
+    priceChange,
+    percentChange,
+  };
 }
 
-function buildAlerts(limit = 8) {
-  return signalLog
-    .slice()
-    .sort((a, b) => new Date(b.updatedAt || b.createdAt) - new Date(a.updatedAt || a.createdAt))
-    .filter((s) => s.actionSignal === "BUY YES" || s.actionSignal === "BUY NO")
-    .slice(0, limit)
-    .map((s) => ({
-      id: s.id,
-      message: `${s.actionSignal}: ${s.question} — ${s.actionReason}`,
-      timestamp: s.updatedAt || s.createdAt || nowIso(),
-    }));
+function buildBiggestMovers(markets) {
+  return (Array.isArray(markets) ? markets : [])
+    .map(computeMoverForMarket)
+    .filter(Boolean)
+    .sort((a, b) => Math.abs(b.priceChange) - Math.abs(a.priceChange))
+    .slice(0, 8);
 }
 
-function buildBiggestMovers(markets, limit = 8) {
-  const movers = markets.map((m) => {
-    const currentPrice = m.yesPriceLive;
+function refreshSignalLog(markets) {
+  const nowIso = new Date().toISOString();
 
-    if (currentPrice === null || currentPrice === undefined) {
-      return {
-        ...m,
-        pastPrice: null,
-        priceChange: 0,
-        percentChange: 0,
-      };
+  for (const market of markets) {
+    const currentYesPrice = market.yesPriceLive;
+
+    if (!Number.isFinite(currentYesPrice)) continue;
+
+    const existing = signalLogByMarketId.get(market.id);
+
+    if (!existing && market.actionSignal !== "WATCH" && market.confidenceScore >= 70) {
+      signalLogByMarketId.set(market.id, {
+        id: `${market.id}:${Date.now()}`,
+        marketId: market.id,
+        question: market.question,
+        actionSignal: market.actionSignal,
+        actionReason: market.actionReason,
+        confidenceScore: market.confidenceScore,
+        entryYesPrice: currentYesPrice,
+        currentYesPrice,
+        performancePoints: 0,
+        status: "ACTIVE",
+        createdAt: nowIso,
+      });
+      continue;
     }
 
-    const historicalPrice = getPastPrice(m.id);
-    const pastPrice =
-      historicalPrice === null || historicalPrice === undefined
-        ? currentPrice
-        : historicalPrice;
+    if (!existing) continue;
 
-    const priceChange = round4(currentPrice - pastPrice);
-    const percentChange =
-      pastPrice > 0 ? round4(priceChange / pastPrice) : 0;
+    existing.question = market.question;
+    existing.actionReason = market.actionReason;
+    existing.confidenceScore = market.confidenceScore;
+    existing.currentYesPrice = currentYesPrice;
 
-    return {
-      ...m,
-      pastPrice: round4(pastPrice),
-      priceChange,
-      percentChange,
-    };
-  });
+    const perf =
+      existing.actionSignal === "BUY YES"
+        ? currentYesPrice - existing.entryYesPrice
+        : existing.entryYesPrice - currentYesPrice;
 
-  return movers
-    .slice()
-    .sort((a, b) => {
-      const changeDiff = Math.abs(b.priceChange) - Math.abs(a.priceChange);
-      if (changeDiff !== 0) return changeDiff;
-      return (b.volume24hr || 0) - (a.volume24hr || 0);
-    })
-    .slice(0, limit);
+    existing.performancePoints = roundTo(perf, 4);
+
+    const ageHours =
+      (Date.now() - new Date(existing.createdAt).getTime()) / 3_600_000;
+
+    if (existing.status === "ACTIVE" && ageHours >= 12 && Math.abs(perf) >= 0.08) {
+      existing.status = perf > 0 ? "WIN" : "LOSS";
+    }
+  }
 }
 
-// ===============================
-// PERFORMANCE STATS
-// ===============================
+function buildSignalLogArray() {
+  return Array.from(signalLogByMarketId.values()).sort(
+    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+  );
+}
 
-function getPerformanceStats() {
-  const signals = signalLog;
-  const resolved = signals.filter((s) => s.status === "WIN" || s.status === "LOSS");
-  const wins = resolved.filter((s) => s.status === "WIN");
-  const losses = resolved.filter((s) => s.status === "LOSS");
-  const active = signals.filter((s) => s.status === "ACTIVE");
+function buildPerformanceStats() {
+  const signals = buildSignalLogArray();
+  const finished = signals.filter(
+    (signal) => signal.status === "WIN" || signal.status === "LOSS"
+  );
+  const wins = finished.filter((signal) => signal.status === "WIN");
+  const losses = finished.filter((signal) => signal.status === "LOSS");
 
-  const totalResolved = resolved.length;
-  const winRate = totalResolved ? wins.length / totalResolved : 0;
-
-  const avgPerformanceAll = avg(signals.map((s) => s.performancePoints || 0));
-  const avgWin = avg(wins.map((s) => s.performancePoints || 0));
-  const avgLoss = avg(losses.map((s) => s.performancePoints || 0));
-  const expectancy = winRate * avgWin + (1 - winRate) * avgLoss;
+  const avg = (items, selector) =>
+    items.length
+      ? items.reduce((sum, item) => sum + selector(item), 0) / items.length
+      : 0;
 
   const bySignal = {};
-
-  for (const s of signals) {
-    if (!bySignal[s.actionSignal]) {
-      bySignal[s.actionSignal] = {
-        total: 0,
-        active: 0,
-        wins: 0,
-        losses: 0,
-        avgPerformance: 0,
-        winRate: 0,
-      };
-    }
-
-    const bucket = bySignal[s.actionSignal];
+  for (const signal of signals) {
+    bySignal[signal.actionSignal] ||= {
+      total: 0,
+      active: 0,
+      wins: 0,
+      losses: 0,
+      winRate: 0,
+      avgPerformance: 0,
+    };
+    const bucket = bySignal[signal.actionSignal];
     bucket.total += 1;
-
-    if (s.status === "ACTIVE") bucket.active += 1;
-    if (s.status === "WIN") bucket.wins += 1;
-    if (s.status === "LOSS") bucket.losses += 1;
+    if (signal.status === "ACTIVE") bucket.active += 1;
+    if (signal.status === "WIN") bucket.wins += 1;
+    if (signal.status === "LOSS") bucket.losses += 1;
   }
 
-  for (const signalType of Object.keys(bySignal)) {
-    const rows = signals.filter((s) => s.actionSignal === signalType);
-    const resolvedRows = rows.filter((s) => s.status === "WIN" || s.status === "LOSS");
-    const winsCount = resolvedRows.filter((s) => s.status === "WIN").length;
-
-    bySignal[signalType].avgPerformance = Number(
-      avg(rows.map((s) => s.performancePoints || 0)).toFixed(4)
+  for (const [signalType, bucket] of Object.entries(bySignal)) {
+    const relevant = signals.filter((signal) => signal.actionSignal === signalType);
+    const bucketFinished = relevant.filter(
+      (signal) => signal.status === "WIN" || signal.status === "LOSS"
     );
-    bySignal[signalType].winRate = resolvedRows.length
-      ? Number((winsCount / resolvedRows.length).toFixed(4))
-      : 0;
+    bucket.winRate = bucketFinished.length ? bucket.wins / bucketFinished.length : 0;
+    bucket.avgPerformance = avg(relevant, (signal) => signal.performancePoints || 0);
   }
+
+  const avgWin = avg(wins, (signal) => signal.performancePoints || 0);
+  const avgLoss = avg(losses, (signal) => signal.performancePoints || 0);
 
   return {
     totalSignals: signals.length,
-    activeSignals: active.length,
+    activeSignals: signals.filter((signal) => signal.status === "ACTIVE").length,
     wins: wins.length,
     losses: losses.length,
-    winRate: Number(winRate.toFixed(4)),
-    avgPerformance: Number(avgPerformanceAll.toFixed(4)),
-    avgWin: Number(avgWin.toFixed(4)),
-    avgLoss: Number(avgLoss.toFixed(4)),
-    expectancy: Number(expectancy.toFixed(4)),
+    winRate: finished.length ? wins.length / finished.length : 0,
+    avgPerformance: avg(signals, (signal) => signal.performancePoints || 0),
+    avgWin,
+    avgLoss,
+    expectancy:
+      wins.length + losses.length
+        ? avgWin * (wins.length / Math.max(1, wins.length + losses.length)) +
+          avgLoss * (losses.length / Math.max(1, wins.length + losses.length))
+        : 0,
     bySignal,
   };
 }
 
-// ===============================
-// DATA FETCH
-// ===============================
+function buildAlerts(markets) {
+  const alerts = [];
+  const movers = buildBiggestMovers(markets);
 
-async function fetchMarkets() {
-  const res = await fetch(`${GAMMA}/events?active=true&closed=false&limit=25`);
+  const topConfidence = [...markets]
+    .sort((a, b) => (b.confidenceScore || 0) - (a.confidenceScore || 0))
+    .slice(0, 2);
 
-  if (!res.ok) {
-    const raw = await res.text();
-    throw new Error(`Gamma fetch failed: ${res.status} | ${raw}`);
+  for (const market of topConfidence) {
+    alerts.push({
+      message: `Top opportunity: ${market.question} • ${market.actionSignal} • ${market.category}`,
+      timestamp: market.lastUpdated || new Date().toISOString(),
+    });
   }
 
-  const events = await res.json();
-
-  const cleaned = events
-    .flatMap((event) =>
-      (event.markets || []).map((m) => ({
-        id: m.id,
-        question: m.question,
-        slug: m.slug,
-        eventSlug: event.slug,
-        liquidity: Number(m.liquidity ?? 0),
-        volume: Number(m.volume ?? 0),
-        volume24hr: Number(m.volume24hr ?? 0),
-        tokenIds: safeJsonParse(m.clobTokenIds, []),
-        active: m.active,
-        closed: m.closed,
-        minimumTickSize: String(m.minimum_tick_size ?? "0.01"),
-        negRisk: Boolean(m.neg_risk ?? event.neg_risk ?? false),
-      }))
-    )
-    .filter((m) => m.active && !m.closed && m.tokenIds.length >= 2);
-
-  const tokenIds = cleaned.map((m) => m.tokenIds[0]).filter(Boolean);
-
-  const priceRes = await fetch(`${CLOB}/last-trades-prices`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(tokenIds.map((id) => ({ token_id: id }))),
-  });
-
-  if (!priceRes.ok) {
-    const raw = await priceRes.text();
-    throw new Error(`CLOB price fetch failed: ${priceRes.status} | ${raw}`);
+  for (const mover of movers.slice(0, 2)) {
+    alerts.push({
+      message: `Mover: ${mover.question} • ${mover.priceChange >= 0 ? "+" : ""}${(
+        mover.priceChange * 100
+      ).toFixed(2)} pts`,
+      timestamp: mover.lastUpdated || new Date().toISOString(),
+    });
   }
 
-  const prices = await priceRes.json();
+  return alerts.slice(0, 6);
+}
 
-  const priceMap = Object.fromEntries(
-    prices.map((p) => [p.token_id, Number(p.price)])
+function getBinarySidePrice(positionSide, yesPrice, noPrice) {
+  return positionSide === "BUY YES" ? yesPrice : noPrice;
+}
+
+function revalueOpenPositions() {
+  for (const position of demoState.paper.positions) {
+    if (position.status !== "OPEN") continue;
+
+    const market = liveDataState.markets.find(
+      (item) => item.id === position.marketId
+    );
+    if (!market) continue;
+
+    position.currentYesPrice = market.yesPriceLive;
+    position.currentNoPrice = market.noPriceLive;
+
+    const currentSidePrice = getBinarySidePrice(
+      position.actionSignal,
+      market.yesPriceLive,
+      market.noPriceLive
+    );
+
+    if (!Number.isFinite(currentSidePrice) || !Number.isFinite(position.shares))
+      continue;
+
+    position.currentValueDollars = roundTo(position.shares * currentSidePrice, 2);
+    position.pnlDollars = roundTo(
+      position.currentValueDollars - position.positionSizeDollars,
+      2
+    );
+    position.pnlPoints = roundTo(
+      position.actionSignal === "BUY YES"
+        ? market.yesPriceLive - position.entryYesPrice
+        : position.entryYesPrice - market.yesPriceLive,
+      4
+    );
+  }
+
+  const openValue = demoState.paper.positions
+    .filter((position) => position.status === "OPEN")
+    .reduce((sum, position) => sum + (position.currentValueDollars || 0), 0);
+
+  demoState.paper.bankroll.equity = roundTo(
+    demoState.paper.bankroll.cash + openValue,
+    2
+  );
+}
+
+function buildPaperStats() {
+  revalueOpenPositions();
+
+  const positions = demoState.paper.positions;
+  const openPositions = positions.filter((position) => position.status === "OPEN");
+  const closedPositions = positions.filter(
+    (position) => position.status === "CLOSED"
+  );
+  const closedWins = closedPositions.filter(
+    (position) => (position.pnlDollars || 0) > 0
   );
 
-  return cleaned.map((m) => ({
-    ...m,
-    yesPriceLive: priceMap[m.tokenIds[0]] ?? null,
-  }));
+  return {
+    bankroll: demoState.paper.bankroll,
+    totalPositions: positions.length,
+    openPositions: openPositions.length,
+    closedPositions: closedPositions.length,
+    closedWins: closedWins.length,
+    closedWinRate: closedPositions.length
+      ? closedWins.length / closedPositions.length
+      : 0,
+    avgOpenPnl: openPositions.length
+      ? openPositions.reduce(
+          (sum, position) => sum + (position.pnlPoints || 0),
+          0
+        ) / openPositions.length
+      : 0,
+    realizedPnl: roundTo(
+      closedPositions.reduce(
+        (sum, position) => sum + (position.pnlDollars || 0),
+        0
+      ),
+      2
+    ),
+    unrealizedPnlDollars: roundTo(
+      openPositions.reduce(
+        (sum, position) => sum + (position.pnlDollars || 0),
+        0
+      ),
+      2
+    ),
+  };
 }
 
-// ===============================
-// BUILD MARKETS
-// ===============================
+function buildAccountBlockers() {
+  const config = getBuilderConfig();
+  const blockers = [];
 
-async function buildMarkets() {
-  const markets = await fetchMarkets();
+  if (!demoState.account.isConnected) blockers.push("Connect an account first.");
+  if (!config.builderApiConfigured)
+    blockers.push("Builder API credentials are not fully configured.");
+  if (!config.relayerReady) blockers.push("Relayer configuration is not ready.");
+  if (!config.liveRoutingEnabled) blockers.push("Live routing is disabled.");
+  if (!config.signedOrderHandoffEnabled)
+    blockers.push("Signed handoff is disabled.");
 
-  return markets.map((m) => {
-    const hotScore = getHotScore(m);
-    const confidenceScore = getConfidenceScore({ ...m, hotScore });
+  return blockers;
+}
 
-    const { actionSignal, actionReason } = getActionSignal({
-      ...m,
-      hotScore,
-      confidenceScore,
+function buildAccountStateResponse() {
+  const config = getBuilderConfig();
+  const blockers = buildAccountBlockers();
+  const builderReady =
+    config.builderApiConfigured &&
+    config.relayerReady &&
+    config.liveRoutingEnabled &&
+    config.signedOrderHandoffEnabled;
+
+  return {
+    ...demoState.account,
+    canEnableLiveMode: demoState.account.isConnected && builderReady,
+    builderReady,
+    builderApiConfigured: config.builderApiConfigured,
+    relayerReady: config.relayerReady,
+    liveRoutingEnabled: config.liveRoutingEnabled,
+    signedOrderHandoffEnabled: config.signedOrderHandoffEnabled,
+    realLiveSubmitEnabled: config.realLiveSubmitEnabled,
+    maxRealSubmitDollars: config.maxRealSubmitDollars,
+    builderConfigSource: config.builderConfigSource,
+    blockers,
+  };
+}
+
+function chooseOutcomeTokenId(market, side) {
+  if (side === "BUY YES") {
+    if (market.yesOutcomeIndex >= 0 && market.tokenIds[market.yesOutcomeIndex]) {
+      return market.tokenIds[market.yesOutcomeIndex];
+    }
+    return market.tokenIds[0] || "";
+  }
+
+  if (market.noOutcomeIndex >= 0 && market.tokenIds[market.noOutcomeIndex]) {
+    return market.tokenIds[market.noOutcomeIndex];
+  }
+  return market.tokenIds[1] || market.tokenIds[0] || "";
+}
+
+function buildTradeQuote(market, side, sizeDollars, mode) {
+  const selectedPrice =
+    side === "BUY YES" ? market.yesPriceLive : market.noPriceLive;
+
+  if (!Number.isFinite(selectedPrice) || selectedPrice <= 0) {
+    throw new Error("Selected market does not have a usable live price");
+  }
+
+  const estimatedShares = roundTo(sizeDollars / selectedPrice, 4);
+  const estimatedMaxLoss = roundTo(sizeDollars, 2);
+  const potentialProfitIfCorrect = roundTo(
+    estimatedShares * (1 - selectedPrice),
+    2
+  );
+
+  return {
+    marketId: market.id,
+    question: market.question,
+    side,
+    sizeDollars: roundTo(sizeDollars, 2),
+    selectedPrice: roundTo(selectedPrice, 4),
+    estimatedShares,
+    estimatedMaxLoss,
+    estimatedProfitIfCorrect: potentialProfitIfCorrect,
+    confidenceScore: market.confidenceScore,
+    actionReason: market.actionReason,
+    mode,
+  };
+}
+
+function buildRealSubmitPolicy() {
+  const config = getBuilderConfig();
+  return {
+    enabled: config.realLiveSubmitEnabled,
+    maxSubmitDollars: config.maxRealSubmitDollars,
+    confirmText: config.confirmText,
+  };
+}
+
+function buildPreparedHandoff(market, side, sizeDollars) {
+  const account = buildAccountStateResponse();
+  const price = side === "BUY YES" ? market.yesPriceLive : market.noPriceLive;
+  const tokenID = chooseOutcomeTokenId(market, side);
+  const shares = roundTo(sizeDollars / Math.max(price || 0, 0.0001), 4);
+
+  const blockers = [];
+  if (!account.isConnected) blockers.push("Account is not connected.");
+  if (!account.liveModeEnabled) blockers.push("Live mode is not enabled.");
+  if (!account.builderReady) blockers.push("Builder routing is not ready.");
+  if (!account.liveRoutingEnabled) blockers.push("Live routing is not enabled.");
+  if (!account.signedOrderHandoffEnabled)
+    blockers.push("Signed handoff is disabled.");
+  if (!tokenID)
+    blockers.push("No valid outcome token ID is available for this market.");
+  if (!Number.isFinite(price) || price <= 0)
+    blockers.push("Selected market price is not usable.");
+  if (!Number.isFinite(shares) || shares <= 0)
+    blockers.push("Selected trade size is not usable.");
+
+  const realSubmitPolicy = buildRealSubmitPolicy();
+  const withinMaxSubmitSize = sizeDollars <= realSubmitPolicy.maxSubmitDollars;
+
+  const signableOrder = {
+    tokenID,
+    price: roundTo(price, 4),
+    size: shares,
+    side: "BUY",
+    tickSize: String(roundTo(market.tickSize || 0.01, 2)),
+    negRisk: !!market.negRisk,
+    feeRateBps: 0,
+  };
+
+  return {
+    blocked: blockers.length > 0,
+    blockedReasons: blockers,
+    submissionMode: realSubmitPolicy.enabled
+      ? "GUARDED_LIVE_SUBMIT"
+      : "SAFE_FALLBACK_ONLY",
+    signableOrder,
+    orderType: "GTC",
+    postOnly: false,
+    userAuthSchema: {
+      address: "0x...",
+      apiKey: "string",
+      secret: "string",
+      passphrase: "string",
+    },
+    realSubmitPolicy,
+    realSubmitReadiness: {
+      requestedSizeDollars: roundTo(sizeDollars, 2),
+      withinMaxSubmitSize,
+      fallbackMode: !realSubmitPolicy.enabled,
+      readyForGuardedSubmit:
+        blockers.length === 0 &&
+        realSubmitPolicy.enabled &&
+        withinMaxSubmitSize,
+    },
+    notes: [
+      "Builder attribution is configured on the server.",
+      "User signing remains client-side.",
+      realSubmitPolicy.enabled
+        ? "Guarded submit may proceed when all final requirements are met."
+        : "Real live submit remains protected by server policy and stays in safe fallback mode.",
+    ],
+  };
+}
+
+function buildSubmitBlockedResponse({
+  market,
+  side,
+  sizeDollars,
+  signedOrder,
+  userAuth,
+  confirmText,
+  blockedReasons,
+}) {
+  const config = getBuilderConfig();
+
+  return {
+    ok: false,
+    blocked: true,
+    dryRunFallback: true,
+    forwarded: false,
+    error: "Guarded submit blocked",
+    result: {
+      status: "SIGNED_HANDOFF_BLOCKED",
+      message: blockedReasons[0] || "Guarded submit blocked by server policy",
+      blockedReasons,
+      requestSummary: {
+        marketId: market?.id || "",
+        question: market?.question || "",
+        side,
+        sizeDollars: roundTo(sizeDollars, 2),
+        builderAttributionAttached: config.builderApiConfigured,
+        userL2AuthAttached: !!userAuth,
+        realSubmissionAttempted: false,
+        confirmTextProvided: !!confirmText,
+        signedOrderProvided: !!signedOrder,
+      },
+    },
+  };
+}
+
+async function fetchJson(url) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: { Accept: "application/json" },
     });
 
-    return {
-      ...m,
-      hotScore,
-      confidenceScore,
-      actionSignal,
-      actionReason,
-      url: `https://polymarket.com/event/${m.eventSlug || m.slug}`,
-    };
-  });
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status} for ${url}`);
+    }
+
+    return await response.json();
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
-// ===============================
-// ENGINE LOOP
-// ===============================
+async function fetchGammaMarkets() {
+  const collected = [];
+  let afterCursor = "";
 
-async function runEngine() {
-  const markets = await buildMarkets();
+  for (let page = 0; page < 2; page += 1) {
+    const keysetUrl = new URL(`${GAMMA_BASE}/markets/keyset`);
+    keysetUrl.searchParams.set("limit", String(LIVE_MARKET_LIMIT));
+    keysetUrl.searchParams.set("active", "true");
+    keysetUrl.searchParams.set("closed", "false");
+    keysetUrl.searchParams.set("archived", "false");
+    if (afterCursor) keysetUrl.searchParams.set("after_cursor", afterCursor);
 
-  updatePriceHistory(markets);
+    let payload = null;
+    try {
+      payload = await fetchJson(keysetUrl.toString());
+    } catch (error) {
+      if (page > 0) break;
 
-  const top = markets
-    .slice()
-    .sort((a, b) => b.confidenceScore - a.confidenceScore)
-    .slice(0, 10);
+      const fallbackUrl = new URL(`${GAMMA_BASE}/markets`);
+      fallbackUrl.searchParams.set("limit", String(LIVE_MARKET_LIMIT));
+      fallbackUrl.searchParams.set("active", "true");
+      fallbackUrl.searchParams.set("closed", "false");
+      fallbackUrl.searchParams.set("archived", "false");
+      payload = await fetchJson(fallbackUrl.toString());
+    }
 
-  updateSignalPerformance(markets);
-  maybeLogSignals(top);
+    const pageMarkets = Array.isArray(payload?.markets)
+      ? payload.markets
+      : Array.isArray(payload)
+        ? payload
+        : [];
 
-  updatePaperPortfolio(markets);
-  // Intentionally no auto-open paper positions here.
-  // Paper trading starts clean and only opens from explicit user actions.
+    collected.push(...pageMarkets);
+
+    if (!payload?.next_cursor || payload.next_cursor === afterCursor) {
+      break;
+    }
+
+    afterCursor = payload.next_cursor;
+  }
+
+  return collected;
 }
 
-// ===============================
-// ROUTES
-// ===============================
+async function refreshLiveMarkets(force = false) {
+  if (
+    !force &&
+    liveDataState.markets.length &&
+    Date.now() - liveDataState.lastFetchedAt < LIVE_CACHE_MS
+  ) {
+    return liveDataState.markets;
+  }
 
-app.post("/api/public-demo/reset", (_, res) => {
+  const rawMarkets = await fetchGammaMarkets();
+  const normalized = rawMarkets
+    .map(normalizeMarket)
+    .filter((market) => market.id && market.question)
+    .sort((a, b) => (b.volume24hr || 0) - (a.volume24hr || 0));
+
+  liveDataState.markets = normalized;
+  liveDataState.lastFetchedAt = Date.now();
+
+  updatePriceMemory(normalized);
+  refreshSignalLog(normalized);
+  revalueOpenPositions();
+
+  return normalized;
+}
+
+function getMarketById(marketId) {
+  return liveDataState.markets.find(
+    (market) => String(market.id) === String(marketId)
+  );
+}
+
+app.get("/api/liveMarkets", async (req, res) => {
   try {
-    const state = resetPublicDemoState();
-
+    const markets = await refreshLiveMarkets();
     res.json({
       ok: true,
-      reset: true,
-      account: state.account,
-      stats: state.stats,
-      message: "Public demo state reset to a clean default load.",
+      markets,
+      lastRefreshedAt: new Date(liveDataState.lastFetchedAt).toISOString(),
     });
-  } catch (err) {
-    res.status(500).json({
-      ok: false,
-      error: err.message || "Failed to reset public demo state",
-    });
+  } catch (error) {
+    res
+      .status(500)
+      .json({ ok: false, error: error.message || "Failed to load live markets" });
   }
 });
 
-app.get("/api/liveMarkets", async (_, res) => {
+app.get("/api/biggestMovers", async (req, res) => {
   try {
-    const markets = await buildMarkets();
-    res.json({ ok: true, markets });
-  } catch (err) {
-    res.status(500).json({
-      ok: false,
-      error: err.message || "Failed to fetch markets",
+    const markets = await refreshLiveMarkets();
+    res.json({
+      ok: true,
+      markets: buildBiggestMovers(markets),
+      lastRefreshedAt: new Date(liveDataState.lastFetchedAt).toISOString(),
     });
+  } catch (error) {
+    res
+      .status(500)
+      .json({
+        ok: false,
+        error: error.message || "Failed to load biggest movers",
+      });
   }
 });
 
-app.get("/api/alerts", (_, res) => {
+app.get("/api/alerts", async (req, res) => {
   try {
-    const alerts = buildAlerts();
-    res.json({ ok: true, alerts });
-  } catch (err) {
-    res.status(500).json({
-      ok: false,
-      error: err.message || "Failed to load alerts",
+    const markets = await refreshLiveMarkets();
+    res.json({
+      ok: true,
+      alerts: buildAlerts(markets),
     });
+  } catch (error) {
+    res
+      .status(500)
+      .json({ ok: false, error: error.message || "Failed to load alerts" });
   }
 });
 
-app.get("/api/biggestMovers", async (_, res) => {
+app.get("/api/signal-log", async (req, res) => {
   try {
-    const markets = await buildMarkets();
-    const movers = buildBiggestMovers(markets);
-    res.json({ ok: true, markets: movers });
-  } catch (err) {
+    await refreshLiveMarkets();
+    res.json({
+      ok: true,
+      signals: buildSignalLogArray(),
+    });
+  } catch (error) {
+    res
+      .status(500)
+      .json({ ok: false, error: error.message || "Failed to load signal log" });
+  }
+});
+
+app.get("/api/performance-stats", async (req, res) => {
+  try {
+    await refreshLiveMarkets();
+    res.json({
+      ok: true,
+      stats: buildPerformanceStats(),
+    });
+  } catch (error) {
     res.status(500).json({
       ok: false,
-      error: err.message || "Failed to load biggest movers",
+      error: error.message || "Failed to load performance stats",
     });
   }
 });
 
-app.get("/api/signal-log", (_, res) => {
-  res.json({ ok: true, signals: signalLog });
-});
-
-app.get("/api/performance-stats", (_, res) => {
-  res.json({ ok: true, stats: getPerformanceStats() });
-});
-
-app.get("/api/paper-portfolio", (_, res) => {
+app.get("/api/account-state", (req, res) => {
   res.json({
     ok: true,
-    positions: paperPortfolio,
-    stats: getPaperPortfolioStats(),
-  });
-});
-
-app.get("/api/account-state", (_, res) => {
-  res.json({
-    ok: true,
-    account: getAccountReadiness(),
+    account: buildAccountStateResponse(),
   });
 });
 
 app.post("/api/account/connect", (req, res) => {
-  try {
-    const {
-      walletAddress,
-      walletType,
-      proxyWalletAddress,
-      signatureType,
-      funderAddress,
-    } = req.body || {};
-
-    if (!walletAddress) {
-      throw new Error("walletAddress is required");
-    }
-
-    const account = connectAccount({
-      walletAddress,
-      walletType: walletType || "EOA",
-      proxyWalletAddress: proxyWalletAddress || "",
-      signatureType: Number(signatureType || 0),
-      funderAddress: funderAddress || walletAddress,
-    });
-
-    res.json({ ok: true, account });
-  } catch (err) {
-    res.status(400).json({
-      ok: false,
-      error: err.message || "Failed to connect account",
-    });
+  const walletAddress = String(req.body?.walletAddress || "").trim();
+  if (!walletAddress) {
+    return res.status(400).json({ ok: false, error: "walletAddress is required" });
   }
+
+  demoState.account = {
+    isConnected: true,
+    walletType: String(req.body?.walletType || "EOA"),
+    walletAddress,
+    proxyWalletAddress: String(req.body?.proxyWalletAddress || "").trim(),
+    signatureType: Number(req.body?.signatureType ?? 0) || 0,
+    funderAddress: String(req.body?.funderAddress || walletAddress).trim(),
+    liveModeEnabled: false,
+  };
+
+  return res.json({
+    ok: true,
+    account: buildAccountStateResponse(),
+  });
 });
 
-app.post("/api/account/disconnect", (_, res) => {
-  try {
-    const account = disconnectAccount();
-    res.json({ ok: true, account });
-  } catch (err) {
-    res.status(400).json({
-      ok: false,
-      error: err.message || "Failed to disconnect account",
-    });
-  }
+app.post("/api/account/disconnect", (req, res) => {
+  demoState.account = createInitialAccountState();
+  return res.json({
+    ok: true,
+    account: buildAccountStateResponse(),
+  });
 });
 
 app.post("/api/account/live-mode", (req, res) => {
-  try {
-    const { enabled } = req.body || {};
-    const account = updateLiveMode(!!enabled);
-    res.json({ ok: true, account });
-  } catch (err) {
-    res.status(400).json({
+  const enabled = !!req.body?.enabled;
+  const account = buildAccountStateResponse();
+
+  if (enabled && !account.canEnableLiveMode) {
+    return res.status(400).json({
       ok: false,
-      error: err.message || "Failed to update live mode",
+      error: account.blockers[0] || "Live mode requirements are not met",
     });
   }
+
+  demoState.account.liveModeEnabled = enabled;
+
+  return res.json({
+    ok: true,
+    account: buildAccountStateResponse(),
+  });
 });
 
-app.post("/api/account/builder-settings", (req, res) => {
+app.get("/api/paper-portfolio", async (req, res) => {
   try {
-    const account = updateBuilderSettings(req.body || {});
-    res.json({ ok: true, account });
-  } catch (err) {
-    res.status(400).json({
+    await refreshLiveMarkets();
+    res.json({
+      ok: true,
+      positions: demoState.paper.positions,
+      stats: buildPaperStats(),
+    });
+  } catch (error) {
+    res.status(500).json({
       ok: false,
-      error: err.message || "Failed to update builder settings",
+      error: error.message || "Failed to load paper portfolio",
     });
   }
 });
 
 app.post("/api/paper-portfolio/open", async (req, res) => {
   try {
-    const { marketId, actionSignal, positionSizeDollars } = req.body || {};
+    await refreshLiveMarkets();
 
-    if (!marketId || !actionSignal || !positionSizeDollars) {
-      throw new Error("marketId, actionSignal, and positionSizeDollars are required");
+    const marketId = String(req.body?.marketId || "").trim();
+    const actionSignal = String(req.body?.actionSignal || "").trim();
+    const positionSizeDollars = Number(req.body?.positionSizeDollars || 0);
+
+    const market = getMarketById(marketId);
+    if (!market) {
+      return res.status(404).json({ ok: false, error: "Market not found" });
+    }
+    if (!["BUY YES", "BUY NO"].includes(actionSignal)) {
+      return res.status(400).json({ ok: false, error: "Invalid actionSignal" });
+    }
+    if (!Number.isFinite(positionSizeDollars) || positionSizeDollars <= 0) {
+      return res
+        .status(400)
+        .json({ ok: false, error: "positionSizeDollars must be positive" });
+    }
+    if (positionSizeDollars > demoState.paper.bankroll.cash) {
+      return res
+        .status(400)
+        .json({ ok: false, error: "Not enough paper cash available" });
     }
 
-    const markets = await buildMarkets();
-    const market = markets.find((m) => String(m.id) === String(marketId));
-
-    if (!market) throw new Error("Market not found");
-
-    const position = manuallyOpenPaperPosition(
-      market,
+    const entrySidePrice = getBinarySidePrice(
       actionSignal,
-      round4(Number(positionSizeDollars))
+      market.yesPriceLive,
+      market.noPriceLive
+    );
+    if (!Number.isFinite(entrySidePrice) || entrySidePrice <= 0) {
+      return res
+        .status(400)
+        .json({ ok: false, error: "Market price is not usable" });
+    }
+
+    const shares = roundTo(positionSizeDollars / entrySidePrice, 4);
+    demoState.paper.bankroll.cash = roundTo(
+      demoState.paper.bankroll.cash - positionSizeDollars,
+      2
     );
 
-    res.json({
+    const position = {
+      id: `paper_${Date.now()}`,
+      marketId: market.id,
+      question: market.question,
+      source: "MANUAL",
+      actionSignal,
+      actionReason: market.actionReason,
+      confidenceScore: market.confidenceScore,
+      positionSizeDollars: roundTo(positionSizeDollars, 2),
+      shares,
+      entryYesPrice: market.yesPriceLive,
+      currentYesPrice: market.yesPriceLive,
+      currentNoPrice: market.noPriceLive,
+      currentValueDollars: roundTo(positionSizeDollars, 2),
+      pnlDollars: 0,
+      pnlPoints: 0,
+      status: "OPEN",
+      openedAt: new Date().toISOString(),
+      closeReason: "",
+      closedAt: "",
+    };
+
+    demoState.paper.positions.unshift(position);
+    revalueOpenPositions();
+
+    return res.json({
       ok: true,
       position,
-      stats: getPaperPortfolioStats(),
+      stats: buildPaperStats(),
     });
-  } catch (err) {
-    res.status(400).json({
-      ok: false,
-      error: err.message || "Failed to open paper position",
-    });
+  } catch (error) {
+    return res
+      .status(500)
+      .json({ ok: false, error: error.message || "Failed to open position" });
   }
 });
 
-app.post("/api/paper-portfolio/close", (req, res) => {
+app.post("/api/paper-portfolio/close", async (req, res) => {
   try {
-    const { positionId, reason } = req.body || {};
+    await refreshLiveMarkets();
 
-    if (!positionId) {
-      throw new Error("positionId is required");
+    const positionId = String(req.body?.positionId || "").trim();
+    const reason = String(req.body?.reason || "Manual Close").trim();
+
+    const position = demoState.paper.positions.find((item) => item.id === positionId);
+    if (!position) {
+      return res.status(404).json({ ok: false, error: "Position not found" });
+    }
+    if (position.status !== "OPEN") {
+      return res.status(400).json({ ok: false, error: "Position is already closed" });
     }
 
-    const position = manuallyClosePaperPosition(positionId, reason || "Manual Close");
+    revalueOpenPositions();
 
-    res.json({
+    demoState.paper.bankroll.cash = roundTo(
+      demoState.paper.bankroll.cash + (position.currentValueDollars || 0),
+      2
+    );
+
+    position.status = "CLOSED";
+    position.closeReason = reason;
+    position.closedAt = new Date().toISOString();
+
+    revalueOpenPositions();
+
+    return res.json({
       ok: true,
       position,
-      stats: getPaperPortfolioStats(),
+      stats: buildPaperStats(),
     });
-  } catch (err) {
-    res.status(400).json({
-      ok: false,
-      error: err.message || "Failed to close paper position",
-    });
+  } catch (error) {
+    return res
+      .status(500)
+      .json({ ok: false, error: error.message || "Failed to close position" });
   }
 });
 
 app.post("/api/paper-portfolio/reset", (req, res) => {
-  try {
-    const { startingBankroll, defaultPositionSize } = req.body || {};
+  const startingBankroll = Number(req.body?.startingBankroll || 1000);
+  const defaultPositionSize = Number(req.body?.defaultPositionSize || 50);
 
-    resetPaperPortfolio(
-      Number(startingBankroll) || 1000,
-      Number(defaultPositionSize) || 50
-    );
+  demoState.paper = {
+    bankroll: {
+      startingBankroll: Number.isFinite(startingBankroll) ? startingBankroll : 1000,
+      cash: Number.isFinite(startingBankroll) ? startingBankroll : 1000,
+      equity: Number.isFinite(startingBankroll) ? startingBankroll : 1000,
+      defaultPositionSize: Number.isFinite(defaultPositionSize)
+        ? defaultPositionSize
+        : 50,
+    },
+    positions: [],
+  };
 
-    res.json({
-      ok: true,
-      stats: getPaperPortfolioStats(),
-    });
-  } catch (err) {
-    res.status(400).json({
-      ok: false,
-      error: err.message || "Failed to reset paper portfolio",
-    });
-  }
+  return res.json({
+    ok: true,
+    stats: buildPaperStats(),
+  });
 });
-
-// ===============================
-// EXECUTION-READY TRADE ROUTES
-// ===============================
 
 app.post("/api/trade/quote", async (req, res) => {
   try {
-    const { marketId, side, sizeDollars, mode } = req.body || {};
+    await refreshLiveMarkets();
 
-    if (!marketId || !side || !sizeDollars) {
-      throw new Error("marketId, side, and sizeDollars are required");
+    const marketId = String(req.body?.marketId || "").trim();
+    const side = String(req.body?.side || "").trim();
+    const sizeDollars = Number(req.body?.sizeDollars || 0);
+    const mode = String(req.body?.mode || "PAPER").trim();
+
+    if (!["BUY YES", "BUY NO"].includes(side)) {
+      return res.status(400).json({ ok: false, error: "Invalid trade side" });
     }
 
-    const markets = await buildMarkets();
-    const market = markets.find((m) => String(m.id) === String(marketId));
-
-    if (!market) throw new Error("Market not found");
-
-    const quote = buildTradeQuote(
-      market,
-      side,
-      Number(sizeDollars),
-      mode || "PAPER"
-    );
-
-    res.json({ ok: true, quote });
-  } catch (err) {
-    res.status(400).json({
-      ok: false,
-      error: err.message || "Failed to build trade quote",
-    });
-  }
-});
-
-app.post("/api/trade/prepare", async (req, res) => {
-  try {
-    const { marketId, side, sizeDollars } = req.body || {};
-
-    if (!marketId || !side || !sizeDollars) {
-      throw new Error("marketId, side, and sizeDollars are required");
+    const market = getMarketById(marketId);
+    if (!market) {
+      return res.status(404).json({ ok: false, error: "Market not found" });
     }
 
-    const markets = await buildMarkets();
-    const market = markets.find((m) => String(m.id) === String(marketId));
-
-    if (!market) throw new Error("Market not found");
-
-    const preparation = buildExecutionPreparation(
-      market,
-      side,
-      Number(sizeDollars)
-    );
-
-    res.json({ ok: true, preparation });
-  } catch (err) {
-    res.status(400).json({
-      ok: false,
-      error: err.message || "Failed to prepare trade",
-    });
-  }
-});
-
-app.post("/api/trade/submit-signed", async (req, res) => {
-  try {
-    const {
-      marketId,
-      side,
-      sizeDollars,
-      signedOrder,
-      userAuth,
-      orderType = DEFAULT_ORDER_TYPE,
-      postOnly = DEFAULT_POST_ONLY,
-      confirmText = "",
-    } = req.body || {};
-
-    if (!marketId || !side || !sizeDollars) {
-      throw new Error("marketId, side, and sizeDollars are required");
-    }
-
-    const parsedSignedOrder = tryParseJsonObject(signedOrder);
-    const parsedUserAuth = tryParseJsonObject(userAuth);
-    const signedOrderSummary = summarizeSignedOrder(parsedSignedOrder);
-    const missingUserAuthFields = getMissingUserAuthFields(parsedUserAuth);
-
-    const markets = await buildMarkets();
-    const market = markets.find((m) => String(m.id) === String(marketId));
-
-    if (!market) throw new Error("Market not found");
-
-    const preparation = buildExecutionPreparation(
-      market,
-      side,
-      Number(sizeDollars)
-    );
-
-    const realSubmitPolicy = getRealSubmitPolicy();
-
-    const blockedReasons = [
-      ...(preparation.signedOrderHandoff?.blockedReasons || []),
-      !realSubmitPolicy.enabled ? "Real live submit is disabled on the server" : null,
-      Number(sizeDollars) > realSubmitPolicy.maxSubmitDollars
-        ? `Requested size exceeds max real submit limit of $${realSubmitPolicy.maxSubmitDollars}`
-        : null,
-      String(confirmText || "").trim() !== realSubmitPolicy.confirmText
-        ? "Confirmation text is missing or invalid"
-        : null,
-      !signedOrderSummary?.hasSignature
-        ? "Signed order payload is missing a signature"
-        : null,
-      missingUserAuthFields.length
-        ? `User auth is missing: ${missingUserAuthFields.join(", ")}`
-        : null,
-    ].filter(Boolean);
-
-    const requestPath = "/order";
-    const requestMethod = "POST";
-    const requestSummary = buildRealSubmitSummary({
-      requestPath,
-      requestMethod,
-      orderType,
-      postOnly,
-      signedOrder: parsedSignedOrder,
-      sizeDollars,
-      policy: realSubmitPolicy,
-      confirmText,
-      builderAttributionAttached: false,
-      userL2AuthAttached: false,
-      realSubmissionAttempted: false,
-    });
-
-    if (blockedReasons.length > 0) {
-      const disabledFallback = !realSubmitPolicy.enabled;
-      const status = disabledFallback
-        ? "REAL_SUBMIT_DISABLED_FALLBACK"
-        : "REAL_SUBMIT_BLOCKED";
-
-      logRealSubmitAudit("blocked_attempt", {
-        status,
-        marketId: String(marketId),
-        side,
-        sizeDollars: round4(Number(sizeDollars)),
-        walletAddress: maskAddress(accountState.walletAddress),
-        blockedReasons,
-      });
-
-      return res.json({
-        ok: true,
-        forwarded: false,
-        blocked: true,
-        dryRunFallback: disabledFallback,
-        result: {
-          status,
-          message: disabledFallback
-            ? "Real live submission is disabled on the server. The request stayed in safe fallback mode."
-            : "Real live submission was blocked by one or more safety guardrails.",
-          blockedReasons,
-          requestSummary,
-        },
-      });
-    }
-
-    const submissionBody = buildOrderSubmissionBody(
-      parsedSignedOrder,
-      orderType,
-      postOnly
-    );
-    const bodyString = safeJsonStringify(submissionBody);
-
-    const userHeaders = buildUserL2Headers(
-      parsedUserAuth,
-      requestMethod,
-      requestPath,
-      bodyString
-    );
-    const builderHeaders = await buildBuilderHeaders(
-      requestMethod,
-      requestPath,
-      bodyString
-    );
-
-    const allowedSummary = buildRealSubmitSummary({
-      requestPath,
-      requestMethod,
-      orderType,
-      postOnly,
-      signedOrder: parsedSignedOrder,
-      sizeDollars,
-      policy: realSubmitPolicy,
-      confirmText,
-      builderAttributionAttached: true,
-      userL2AuthAttached: true,
-      realSubmissionAttempted: true,
-    });
-
-    logRealSubmitAudit("allowed_attempt", {
-      marketId: String(marketId),
-      side,
-      sizeDollars: round4(Number(sizeDollars)),
-      walletAddress: maskAddress(parsedUserAuth.address),
-      maxSubmitDollars: realSubmitPolicy.maxSubmitDollars,
-    });
-
-    const clobRes = await fetch(`${CLOB}${requestPath}`, {
-      method: requestMethod,
-      headers: {
-        "Content-Type": "application/json",
-        ...userHeaders,
-        ...builderHeaders,
-      },
-      body: bodyString,
-    });
-
-    const raw = await clobRes.text();
-    let parsed;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      parsed = { raw };
-    }
-
-    if (!clobRes.ok) {
-      logRealSubmitAudit("forward_failure", {
-        marketId: String(marketId),
-        side,
-        sizeDollars: round4(Number(sizeDollars)),
-        walletAddress: maskAddress(parsedUserAuth.address),
-        httpStatus: clobRes.status,
-      });
-
-      return res.json({
-        ok: true,
-        forwarded: false,
-        blocked: false,
-        dryRunFallback: false,
-        result: {
-          status: "FORWARD_REJECTED",
-          message: "The signed order was handed off, but the CLOB rejected the request.",
-          requestSummary: allowedSummary,
-          clobResponse: parsed,
-        },
-      });
-    }
-
-    logRealSubmitAudit("forward_success", {
-      marketId: String(marketId),
-      side,
-      sizeDollars: round4(Number(sizeDollars)),
-      walletAddress: maskAddress(parsedUserAuth.address),
-      httpStatus: clobRes.status,
-    });
+    const normalizedSize =
+      Number.isFinite(sizeDollars) && sizeDollars > 0
+        ? sizeDollars
+        : demoState.paper.bankroll.defaultPositionSize;
 
     return res.json({
       ok: true,
-      forwarded: true,
-      blocked: false,
-      dryRunFallback: false,
-      result: {
-        status: "FORWARDED_TO_CLOB",
-        message:
-          "Signed order handed off successfully. The backend forwarded the signed order with builder attribution attached.",
-        requestSummary: allowedSummary,
-        clobResponse: parsed,
-      },
+      quote: buildTradeQuote(market, side, normalizedSize, mode),
     });
-  } catch (err) {
-    logRealSubmitAudit("unexpected_error", {
-      message: err.message || "Unknown error",
-    });
-
-    res.status(400).json({
-      ok: false,
-      error: err.message || "Failed to submit signed order handoff",
-    });
+  } catch (error) {
+    return res
+      .status(500)
+      .json({ ok: false, error: error.message || "Failed to quote trade" });
   }
 });
 
 app.post("/api/trade/execute", async (req, res) => {
   try {
-    const { marketId, side, sizeDollars, mode } = req.body || {};
+    await refreshLiveMarkets();
 
-    if (!marketId || !side || !sizeDollars) {
-      throw new Error("marketId, side, and sizeDollars are required");
+    const marketId = String(req.body?.marketId || "").trim();
+    const side = String(req.body?.side || "").trim();
+    const sizeDollars = Number(req.body?.sizeDollars || 0);
+    const mode = String(req.body?.mode || "PAPER").trim();
+
+    if (mode !== "PAPER") {
+      return res.status(400).json({ ok: false, error: "Only PAPER execution is enabled" });
     }
 
-    const markets = await buildMarkets();
-    const market = markets.find((m) => String(m.id) === String(marketId));
-
-    if (!market) throw new Error("Market not found");
-
-    if ((mode || "PAPER") === "PAPER") {
-      const position = manuallyOpenPaperPosition(
-        market,
-        side,
-        round4(Number(sizeDollars))
-      );
-
-      return res.json({
-        ok: true,
-        mode: "PAPER",
-        message: "Paper trade executed",
-        position,
-        stats: getPaperPortfolioStats(),
-      });
+    const market = getMarketById(marketId);
+    if (!market) {
+      return res.status(404).json({ ok: false, error: "Market not found" });
+    }
+    if (!["BUY YES", "BUY NO"].includes(side)) {
+      return res.status(400).json({ ok: false, error: "Invalid trade side" });
+    }
+    if (!Number.isFinite(sizeDollars) || sizeDollars <= 0) {
+      return res.status(400).json({ ok: false, error: "Trade size must be positive" });
+    }
+    if (sizeDollars > demoState.paper.bankroll.cash) {
+      return res.status(400).json({ ok: false, error: "Not enough paper cash available" });
     }
 
-    const preparation = buildExecutionPreparation(
-      market,
+    const entrySidePrice = getBinarySidePrice(
       side,
-      Number(sizeDollars)
+      market.yesPriceLive,
+      market.noPriceLive
     );
+    if (!Number.isFinite(entrySidePrice) || entrySidePrice <= 0) {
+      return res.status(400).json({ ok: false, error: "Market price is not usable" });
+    }
+
+    const shares = roundTo(sizeDollars / entrySidePrice, 4);
+    demoState.paper.bankroll.cash = roundTo(
+      demoState.paper.bankroll.cash - sizeDollars,
+      2
+    );
+
+    const position = {
+      id: `paper_${Date.now()}`,
+      marketId: market.id,
+      question: market.question,
+      source: "TRADE_TICKET",
+      actionSignal: side,
+      actionReason: market.actionReason,
+      confidenceScore: market.confidenceScore,
+      positionSizeDollars: roundTo(sizeDollars, 2),
+      shares,
+      entryYesPrice: market.yesPriceLive,
+      currentYesPrice: market.yesPriceLive,
+      currentNoPrice: market.noPriceLive,
+      currentValueDollars: roundTo(sizeDollars, 2),
+      pnlDollars: 0,
+      pnlPoints: 0,
+      status: "OPEN",
+      openedAt: new Date().toISOString(),
+      closeReason: "",
+      closedAt: "",
+    };
+
+    demoState.paper.positions.unshift(position);
+    revalueOpenPositions();
 
     return res.json({
       ok: true,
-      mode: "LIVE",
-      message:
-        "Live mode uses signed-order handoff architecture. Real submission stays guarded by server policy, max size, confirmation, and readiness checks.",
-      preparation,
+      position,
+      stats: buildPaperStats(),
     });
-  } catch (err) {
-    res.status(400).json({
+  } catch (error) {
+    return res
+      .status(500)
+      .json({ ok: false, error: error.message || "Failed to execute trade" });
+  }
+});
+
+app.post("/api/trade/prepare", async (req, res) => {
+  try {
+    await refreshLiveMarkets();
+
+    const marketId = String(req.body?.marketId || "").trim();
+    const side = String(req.body?.side || "").trim();
+    const sizeDollars = Number(req.body?.sizeDollars || 0);
+
+    const market = getMarketById(marketId);
+    if (!market) {
+      return res.status(404).json({ ok: false, error: "Market not found" });
+    }
+    if (!["BUY YES", "BUY NO"].includes(side)) {
+      return res.status(400).json({ ok: false, error: "Invalid trade side" });
+    }
+    if (!Number.isFinite(sizeDollars) || sizeDollars <= 0) {
+      return res.status(400).json({ ok: false, error: "Invalid trade size" });
+    }
+
+    const ticket = buildTradeQuote(market, side, sizeDollars, "LIVE");
+    const signedOrderHandoff = buildPreparedHandoff(market, side, sizeDollars);
+
+    return res.json({
+      ok: true,
+      preparation: {
+        mode: "LIVE",
+        status: signedOrderHandoff.blocked
+          ? "SIGNED_HANDOFF_BLOCKED"
+          : "DRY_RUN_READY",
+        builderReady: buildAccountStateResponse().builderReady,
+        message: signedOrderHandoff.blocked
+          ? "Live trade preparation is blocked until readiness requirements are met."
+          : "Builder attribution is configured on the server. Live routing shell is ready for the next integration step.",
+        ticket,
+        signedOrderHandoff,
+        nextSteps: signedOrderHandoff.blocked
+          ? ["Resolve the listed blockers, then prepare the trade again."]
+          : [
+              "Review the signable order payload.",
+              "Sign the order client-side with the connected wallet.",
+              "Prepare L2 auth inputs for guarded submit.",
+            ],
+      },
+    });
+  } catch (error) {
+    return res
+      .status(500)
+      .json({ ok: false, error: error.message || "Failed to prepare trade" });
+  }
+});
+
+app.post("/api/trade/submit-signed", async (req, res) => {
+  try {
+    await refreshLiveMarkets();
+
+    const marketId = String(req.body?.marketId || "").trim();
+    const side = String(req.body?.side || "").trim();
+    const sizeDollars = Number(req.body?.sizeDollars || 0);
+    const signedOrder = req.body?.signedOrder;
+    const userAuth = req.body?.userAuth;
+    const confirmText = String(req.body?.confirmText || "").trim();
+
+    const market = getMarketById(marketId);
+    if (!market) {
+      return res.status(404).json({ ok: false, error: "Market not found" });
+    }
+
+    const account = buildAccountStateResponse();
+    const policy = buildRealSubmitPolicy();
+    const blockedReasons = [];
+
+    if (!account.isConnected) blockedReasons.push("Account is not connected.");
+    if (!account.liveModeEnabled) blockedReasons.push("Live mode is not enabled.");
+    if (!account.builderReady) blockedReasons.push("Builder routing is not ready.");
+    if (!policy.enabled)
+      blockedReasons.push("Real live submit is disabled by server policy.");
+    if (!Number.isFinite(sizeDollars) || sizeDollars <= 0)
+      blockedReasons.push("Trade size is invalid.");
+    if (sizeDollars > policy.maxSubmitDollars)
+      blockedReasons.push("Trade size exceeds the guarded submit limit.");
+    if (!signedOrder || typeof signedOrder !== "object")
+      blockedReasons.push("Signed order payload is missing.");
+    if (!userAuth || typeof userAuth !== "object")
+      blockedReasons.push("User L2 auth bundle is missing.");
+    if (confirmText !== policy.confirmText)
+      blockedReasons.push("Confirmation text does not match.");
+
+    if (blockedReasons.length > 0) {
+      console.log("[guarded-submit] blocked", {
+        marketId,
+        side,
+        sizeDollars,
+        reasons: blockedReasons,
+      });
+
+      return res.status(403).json(
+        buildSubmitBlockedResponse({
+          market,
+          side,
+          sizeDollars,
+          signedOrder,
+          userAuth,
+          confirmText,
+          blockedReasons,
+        })
+      );
+    }
+
+    const config = getBuilderConfig();
+    console.log("[guarded-submit] allowed", {
+      marketId,
+      side,
+      sizeDollars,
+      relayerConfigured: !!config.relayerUrl,
+    });
+
+    if (!config.relayerUrl) {
+      return res.status(503).json(
+        buildSubmitBlockedResponse({
+          market,
+          side,
+          sizeDollars,
+          signedOrder,
+          userAuth,
+          confirmText,
+          blockedReasons: ["Relayer URL is not configured."],
+        })
+      );
+    }
+
+    return res.status(503).json(
+      buildSubmitBlockedResponse({
+        market,
+        side,
+        sizeDollars,
+        signedOrder,
+        userAuth,
+        confirmText,
+        blockedReasons: [
+          "Live submit forwarding is intentionally unavailable in this deployment.",
+        ],
+      })
+    );
+  } catch (error) {
+    return res.status(500).json({
       ok: false,
-      error: err.message || "Failed to execute trade",
+      error: error.message || "Failed to submit signed order",
     });
   }
 });
 
-// ===============================
-// START
-// ===============================
+app.post("/api/public-demo/reset", (req, res) => {
+  demoState.account = createInitialAccountState();
+  demoState.paper = createInitialPaperState();
+  signalLogByMarketId.clear();
 
-const PORT = process.env.PORT || 3001;
+  return res.json({ ok: true });
+});
 
-app.listen(PORT, async () => {
-  const builderEnv = getBuilderEnvStatus();
-  const realSubmitPolicy = getRealSubmitPolicy();
+app.get("*", (req, res) => {
+  res.sendFile(path.join(PUBLIC_DIR, "index.html"));
+});
 
-  // Ensure a clean public state on each deploy / boot.
-  resetPublicDemoState();
+refreshLiveMarkets(true).catch((error) => {
+  console.error("Initial live market refresh failed:", error.message);
+});
 
-  console.log(`Running on http://localhost:${PORT}`);
-  console.log(
-    `[Builder] configured=${builderEnv.configured} liveRoutingEnabled=${builderEnv.liveRoutingEnabled} relayerReady=${builderEnv.relayerReady} realLiveSubmitEnabled=${builderEnv.realLiveSubmitEnabled}`
-  );
-  console.log(
-    `[RealSubmitPolicy] enabled=${realSubmitPolicy.enabled} maxSubmitDollars=${realSubmitPolicy.maxSubmitDollars} confirmText=${realSubmitPolicy.confirmText}`
-  );
+setInterval(() => {
+  refreshLiveMarkets(true).catch((error) => {
+    console.error("Background live market refresh failed:", error.message);
+  });
+}, LIVE_REFRESH_INTERVAL_MS);
 
-  try {
-    await runEngine();
-  } catch (err) {
-    console.error("Initial engine run failed:", err.message || err);
-  }
-
-  setInterval(async () => {
-    try {
-      await runEngine();
-    } catch (err) {
-      console.error("Scheduled engine run failed:", err.message || err);
-    }
-  }, 60000);
+app.listen(PORT, () => {
+  console.log(`Paid by Polymarket OS running on port ${PORT}`);
+  console.log(`Serving public assets from: ${PUBLIC_DIR}`);
 });
