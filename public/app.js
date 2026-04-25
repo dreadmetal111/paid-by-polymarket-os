@@ -3,6 +3,9 @@ const POLYMARKET_CHAIN_ID = 137;
 const POLYGON_HEX_CHAIN_ID = "0x89";
 
 let hotMarketsCache = [];
+let liveMarketsCache = [];
+let lastHomepageDiscoveryRefreshAt = "";
+let activeHomepageCategory = "ALL";
 let currentTradeTicket = null;
 let accountStateCache = null;
 let currentLivePreparation = null;
@@ -95,6 +98,333 @@ function formatJsonBlock(value) {
   return escapeHtml(stringifyJsonForUi(value));
 }
 
+function normalizeCategoryValue(value) {
+  const trimmed = String(value || "").trim();
+  return trimmed ? trimmed.toUpperCase() : "UNCATEGORIZED";
+}
+
+function getCategoryDisplayLabel(value) {
+  const trimmed = String(value || "").trim();
+  return trimmed || "Uncategorized";
+}
+
+function getAvailableHomepageCategories(markets) {
+  const categoryMap = new Map();
+
+  (Array.isArray(markets) ? markets : []).forEach((market) => {
+    const key = normalizeCategoryValue(market?.category);
+    const label = getCategoryDisplayLabel(market?.category);
+    if (!categoryMap.has(key)) {
+      categoryMap.set(key, label);
+    }
+  });
+
+  return Array.from(categoryMap.entries()).sort((a, b) => a[1].localeCompare(b[1]));
+}
+
+function getCategoryFilteredMarkets(markets) {
+  const base = Array.isArray(markets) ? markets : [];
+  if (activeHomepageCategory === "ALL") return base;
+  return base.filter(
+    (market) => normalizeCategoryValue(market?.category) === activeHomepageCategory
+  );
+}
+
+function getUsableHomepageMarkets() {
+  return getCategoryFilteredMarkets(liveMarketsCache).filter(
+    (market) => market && market.question && market.url
+  );
+}
+
+function getDiscoveryBaseMarkets() {
+  return getUsableHomepageMarkets().filter(
+    (market) => market.active !== false && !market.closed
+  );
+}
+
+function updateHomepageLastRefreshedLabel() {
+  const label = document.getElementById("homepageLastRefreshed");
+  if (!label) return;
+  label.textContent = lastHomepageDiscoveryRefreshAt
+    ? `Last refreshed: ${formatTimestamp(lastHomepageDiscoveryRefreshAt)}`
+    : "Last refreshed: —";
+}
+
+function renderHomepageCategoryFilterOptions() {
+  const select = document.getElementById("homepageCategoryFilter");
+  if (!select) return;
+
+  const categories = getAvailableHomepageCategories(liveMarketsCache);
+  select.innerHTML = `
+    <option value="ALL">All Categories</option>
+    ${categories
+      .map(
+        ([value, label]) =>
+          `<option value="${escapeHtml(value)}">${escapeHtml(label)}</option>`
+      )
+      .join("")}
+  `;
+
+  const hasCurrent = categories.some(([value]) => value === activeHomepageCategory);
+  if (activeHomepageCategory !== "ALL" && !hasCurrent) {
+    activeHomepageCategory = "ALL";
+  }
+
+  select.value = activeHomepageCategory;
+}
+
+function ensureHomepageStrategyLayer() {
+  if (document.getElementById("homepageStrategyLayer")) {
+    renderHomepageCategoryFilterOptions();
+    updateHomepageLastRefreshedLabel();
+    bindHomepageStrategyLayerControls();
+    return;
+  }
+
+  const anchor = document.getElementById("topOpportunities") || document.getElementById("hotMarkets");
+  if (!anchor) return;
+
+  const anchorSection = anchor.closest("section") || anchor.parentElement;
+  const strategySection = document.createElement("section");
+  strategySection.id = "homepageStrategyLayer";
+  strategySection.innerHTML = `
+    <div class="market-grid">
+      <article class="market-card">
+        <h3>Homepage Strategy Layer</h3>
+        <div class="alert-item">
+          <div class="alert-message">Scan the board faster with ranked discovery views built from the normalized market feed.</div>
+          <div class="alert-time">Filter applies to Top Opportunities, Highest Volume, Most Liquid, New / Emerging Markets, and Hot Markets.</div>
+        </div>
+        <div style="margin-top: 14px; display:flex; gap:12px; flex-wrap:wrap; align-items:end;">
+          <label style="display:flex; flex-direction:column; gap:6px; min-width:220px;">
+            <span class="meta-label">Category Filter</span>
+            <select id="homepageCategoryFilter">
+              <option value="ALL">All Categories</option>
+            </select>
+          </label>
+          <button id="refreshHomepageStrategyLayer" type="button">Refresh Discovery</button>
+          <span id="homepageLastRefreshed" class="market-small">Last refreshed: —</span>
+        </div>
+      </article>
+    </div>
+
+    <div class="market-grid" style="margin-top: 18px;">
+      <div class="market-card">
+        <h3>Highest Volume</h3>
+        <div class="alert-time">Markets attracting the most trading activity right now.</div>
+        <div id="highestVolumeMarkets" class="market-grid" style="margin-top: 14px;"></div>
+      </div>
+    </div>
+
+    <div class="market-grid" style="margin-top: 18px;">
+      <div class="market-card">
+        <h3>Most Liquid</h3>
+        <div class="alert-time">Markets with the deepest liquidity for cleaner entry and exit.</div>
+        <div id="mostLiquidMarkets" class="market-grid" style="margin-top: 14px;"></div>
+      </div>
+    </div>
+
+    <div class="market-grid" style="margin-top: 18px;">
+      <div class="market-card">
+        <h3>New / Emerging Markets</h3>
+        <div class="alert-time">Recently updated markets that are starting to build activity.</div>
+        <div id="emergingMarkets" class="market-grid" style="margin-top: 14px;"></div>
+      </div>
+    </div>
+  `;
+
+  if (anchorSection?.parentElement) {
+    anchorSection.insertAdjacentElement("afterend", strategySection);
+  } else {
+    anchor.insertAdjacentElement("afterend", strategySection);
+  }
+
+  renderHomepageCategoryFilterOptions();
+  updateHomepageLastRefreshedLabel();
+  bindHomepageStrategyLayerControls();
+}
+
+function bindHomepageStrategyLayerControls() {
+  const refreshBtn = document.getElementById("refreshHomepageStrategyLayer");
+  const categorySelect = document.getElementById("homepageCategoryFilter");
+
+  if (refreshBtn) {
+    refreshBtn.onclick = () => loadHomepageDiscoveryData(true);
+  }
+
+  if (categorySelect) {
+    categorySelect.onchange = (event) => {
+      activeHomepageCategory = event.target.value || "ALL";
+      renderTopOpportunitiesFromCache();
+      renderHomepageDiscoveryFromCache();
+      applyHotFilters();
+    };
+  }
+}
+
+function renderDiscoveryMarketCollection(containerId, markets, emptyMessage) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+
+  if (!Array.isArray(markets) || markets.length === 0) {
+    container.innerHTML = `<p class="empty">${emptyMessage}</p>`;
+    return;
+  }
+
+  container.innerHTML = markets.map(renderHotCard).join("");
+}
+
+function setHomepageDiscoveryLoadingState() {
+  const highestVolume = document.getElementById("highestVolumeMarkets");
+  const mostLiquid = document.getElementById("mostLiquidMarkets");
+  const emerging = document.getElementById("emergingMarkets");
+
+  if (highestVolume) highestVolume.innerHTML = `<p class="loading">Loading highest volume markets...</p>`;
+  if (mostLiquid) mostLiquid.innerHTML = `<p class="loading">Loading liquid markets...</p>`;
+  if (emerging) emerging.innerHTML = `<p class="loading">Loading emerging markets...</p>`;
+}
+
+function getEmergingMarkets(markets) {
+  const now = Date.now();
+
+  const scored = (Array.isArray(markets) ? markets : [])
+    .map((market) => {
+      const updatedTs = market.lastUpdated ? new Date(market.lastUpdated).getTime() : 0;
+      const hoursOld = updatedTs ? (now - updatedTs) / 3600000 : 9999;
+      const recencyScore = Math.max(0, 96 - hoursOld);
+      const lowerVolumeScore = Math.max(0, 200000 - (market.volume24hr || 0)) / 5000;
+      const lowerLiquidityScore = Math.max(0, 150000 - (market.liquidity || 0)) / 5000;
+      const confidenceScore = (market.confidenceScore || 0) / 10;
+
+      return {
+        ...market,
+        _emergingScore: recencyScore + lowerVolumeScore + lowerLiquidityScore + confidenceScore,
+      };
+    })
+    .filter((market) => market.lastUpdated || market.volume24hr || market.liquidity);
+
+  return scored.sort((a, b) => b._emergingScore - a._emergingScore).slice(0, 4);
+}
+
+function renderHomepageDiscoveryFromCache() {
+  ensureHomepageStrategyLayer();
+  renderHomepageCategoryFilterOptions();
+  updateHomepageLastRefreshedLabel();
+
+  const baseMarkets = getDiscoveryBaseMarkets();
+  const highestVolume = [...baseMarkets]
+    .sort((a, b) => (b.volume24hr || 0) - (a.volume24hr || 0))
+    .slice(0, 4);
+
+  const mostLiquid = [...baseMarkets]
+    .sort((a, b) => (b.liquidity || 0) - (a.liquidity || 0))
+    .slice(0, 4);
+
+  const emergingMarkets = getEmergingMarkets(baseMarkets);
+
+  const categoryLabel =
+    activeHomepageCategory === "ALL"
+      ? ""
+      : ` in ${getCategoryDisplayLabel(
+          getAvailableHomepageCategories(liveMarketsCache).find(
+            ([value]) => value === activeHomepageCategory
+          )?.[1] || ""
+        )}`;
+
+  renderDiscoveryMarketCollection(
+    "highestVolumeMarkets",
+    highestVolume,
+    `No high-volume markets found${categoryLabel}.`
+  );
+  renderDiscoveryMarketCollection(
+    "mostLiquidMarkets",
+    mostLiquid,
+    `No liquid markets found${categoryLabel}.`
+  );
+  renderDiscoveryMarketCollection(
+    "emergingMarkets",
+    emergingMarkets,
+    `No emerging markets found${categoryLabel}.`
+  );
+
+  bindTradeActionButtons();
+}
+
+function renderTopOpportunitiesFromCache() {
+  const container = document.getElementById("topOpportunities");
+  if (!container) return;
+
+  const ranked = getDiscoveryBaseMarkets()
+    .slice()
+    .sort((a, b) => (b.confidenceScore || 0) - (a.confidenceScore || 0))
+    .slice(0, 6);
+
+  if (ranked.length === 0) {
+    container.innerHTML = `<p class="empty">No opportunities found for the current filter.</p>`;
+    return;
+  }
+
+  container.innerHTML = ranked.map(renderHotCard).join("");
+  bindTradeActionButtons();
+}
+
+async function loadHomepageDiscoveryData() {
+  const topContainer = document.getElementById("topOpportunities");
+  const hotContainer = document.getElementById("hotMarkets");
+
+  ensureHomepageStrategyLayer();
+
+  if (topContainer) {
+    topContainer.innerHTML = `<p class="loading">Loading opportunities...</p>`;
+  }
+  if (hotContainer) {
+    hotContainer.innerHTML = `<p class="loading">Loading hot markets...</p>`;
+  }
+  setHomepageDiscoveryLoadingState();
+
+  try {
+    const res = await fetch("/api/liveMarkets");
+    const data = await res.json();
+
+    if (!data.ok || !Array.isArray(data.markets)) {
+      throw new Error("Invalid live markets response");
+    }
+
+    liveMarketsCache = data.markets;
+    hotMarketsCache = data.markets;
+    lastHomepageDiscoveryRefreshAt = new Date().toISOString();
+
+    renderTopOpportunitiesFromCache();
+    renderHomepageDiscoveryFromCache();
+    applyHotFilters();
+  } catch (err) {
+    console.error("Homepage discovery load error:", err);
+
+    if (topContainer) {
+      topContainer.innerHTML = `<p class="empty">Failed to load opportunities.</p>`;
+    }
+    if (hotContainer) {
+      hotContainer.innerHTML = `<p class="empty">Failed to load hot markets.</p>`;
+    }
+
+    renderDiscoveryMarketCollection(
+      "highestVolumeMarkets",
+      [],
+      "Failed to load highest volume markets."
+    );
+    renderDiscoveryMarketCollection(
+      "mostLiquidMarkets",
+      [],
+      "Failed to load liquid markets."
+    );
+    renderDiscoveryMarketCollection(
+      "emergingMarkets",
+      [],
+      "Failed to load emerging markets."
+    );
+  }
+}
+
 function hasBrowserWalletProvider() {
   return typeof window !== "undefined" && !!window.ethereum?.request;
 }
@@ -102,22 +432,6 @@ function hasBrowserWalletProvider() {
 function getCurrentTradeMode() {
   const modeSelect = document.getElementById("tradeModeSelect");
   return modeSelect?.value || "PAPER";
-}
-
-function getMarketSignals(market) {
-  const signals = [];
-
-  if (market.actionSignal === "BUY YES") signals.push("🟢 BUY YES");
-  else if (market.actionSignal === "BUY NO") signals.push("🔴 BUY NO");
-  else signals.push("👀 WATCH");
-
-  if ((market.hotScore || 0) > 800000) signals.push("🔥 Momentum");
-  if (market.yesPriceLive > 0.4 && market.yesPriceLive < 0.6) signals.push("⚖️ Balanced");
-  if ((market.liquidity || 0) > 200000) signals.push("💧 Liquid");
-  if (market.yesPriceLive < 0.08 || market.yesPriceLive > 0.92) signals.push("⚠️ Extreme");
-  if ((market.confidenceScore || 0) >= 80) signals.push("🎯 High Confidence");
-
-  return signals;
 }
 
 function parseJsonText(value, label) {
@@ -303,6 +617,9 @@ function clearBrowserDemoState() {
 
 function resetFrontendDemoUiState() {
   hotMarketsCache = [];
+  liveMarketsCache = [];
+  lastHomepageDiscoveryRefreshAt = "";
+  activeHomepageCategory = "ALL";
   currentTradeTicket = null;
   currentLivePreparation = null;
   currentClientSignedOrder = null;
@@ -1367,14 +1684,24 @@ function renderLivePreparation(preparation) {
 }
 
 function renderHotCard(market) {
-  const signals = getMarketSignals(market);
-
   return `
     <article class="market-card">
       <h3>${market.question}</h3>
 
       <div class="signals">
-        ${signals.map((signal) => `<span class="signal">${signal}</span>`).join("")}
+        ${[
+          market.actionSignal === "BUY YES"
+            ? "🟢 BUY YES"
+            : market.actionSignal === "BUY NO"
+              ? "🔴 BUY NO"
+              : "👀 WATCH",
+          (market.hotScore || 0) > 800000 ? "🔥 Momentum" : "",
+          (market.liquidity || 0) > 200000 ? "💧 Liquid" : "",
+          (market.confidenceScore || 0) >= 80 ? "🎯 High Confidence" : "",
+        ]
+          .filter(Boolean)
+          .map((signal) => `<span class="signal">${signal}</span>`)
+          .join("")}
       </div>
 
       <div class="market-meta">
@@ -1382,12 +1709,13 @@ function renderHotCard(market) {
         <div class="meta-box"><span class="meta-label">24h Volume</span><span class="meta-value">${formatMoney(market.volume24hr)}</span></div>
         <div class="meta-box"><span class="meta-label">Liquidity</span><span class="meta-value">${formatMoney(market.liquidity)}</span></div>
         <div class="meta-box"><span class="meta-label">Confidence</span><span class="meta-value">${market.confidenceScore ?? "—"}/100</span></div>
+        <div class="meta-box"><span class="meta-label">Category</span><span class="meta-value">${getCategoryDisplayLabel(market.category)}</span></div>
         <div class="meta-box"><span class="meta-label">Signal</span><span class="meta-value">${market.actionSignal ?? "WATCH"}</span></div>
         <div class="meta-box"><span class="meta-label">Why it matters</span><span class="meta-value">${market.actionReason ?? "No reason yet"}</span></div>
       </div>
 
       <div class="market-footer">
-        <span class="market-small">${market.slug}</span>
+        <span class="market-small">${market.slug} • Updated ${market.lastUpdated ? formatTimestamp(market.lastUpdated) : "—"}</span>
         <a class="market-link" href="${market.url}" target="_blank" rel="noopener noreferrer">Open Market</a>
       </div>
 
@@ -1411,6 +1739,7 @@ function renderMoverCard(market) {
         <div class="meta-box"><span class="meta-label">Recent Price</span><span class="meta-value">${formatProbability(market.pastPrice)}</span></div>
         <div class="meta-box"><span class="meta-label">Price Change</span><span class="meta-value ${changeClass}">${formatChangeAsProbability(market.priceChange)}</span></div>
         <div class="meta-box"><span class="meta-label">Percent Change</span><span class="meta-value ${changeClass}">${formatPercentChange(market.percentChange)}</span></div>
+        <div class="meta-box"><span class="meta-label">Category</span><span class="meta-value">${getCategoryDisplayLabel(market.category)}</span></div>
       </div>
 
       <div class="market-footer">
@@ -1429,7 +1758,7 @@ function applyHotFilters() {
   const minPrice = Number(document.getElementById("minPrice")?.value) || 0;
   const maxPrice = Number(document.getElementById("maxPrice")?.value) || 1;
 
-  const filtered = hotMarketsCache.filter(
+  const filtered = getCategoryFilteredMarkets(hotMarketsCache).filter(
     (market) =>
       market.volume24hr >= minVolume &&
       market.yesPriceLive >= minPrice &&
@@ -2008,63 +2337,19 @@ async function loadPaperPortfolio() {
 }
 
 async function loadTopOpportunities() {
-  const container = document.getElementById("topOpportunities");
-  if (!container) return;
-
-  container.innerHTML = `<p class="loading">Loading opportunities...</p>`;
-
-  try {
-    const res = await fetch("/api/liveMarkets");
-    const data = await res.json();
-
-    if (!data.ok || !Array.isArray(data.markets)) {
-      throw new Error("Invalid opportunities response");
-    }
-
-    const ranked = data.markets
-      .slice()
-      .sort((a, b) => (b.confidenceScore || 0) - (a.confidenceScore || 0))
-      .slice(0, 6);
-
-    if (ranked.length === 0) {
-      container.innerHTML = `<p class="empty">No opportunities found.</p>`;
-      return;
-    }
-
-    container.innerHTML = ranked.map(renderHotCard).join("");
-    bindTradeActionButtons();
-  } catch (err) {
-    console.error("Top opportunities load error:", err);
-    container.innerHTML = `<p class="empty">Failed to load opportunities.</p>`;
+  if (!liveMarketsCache.length) {
+    await loadHomepageDiscoveryData();
+    return;
   }
+  renderTopOpportunitiesFromCache();
 }
 
 async function loadHotMarkets() {
-  const container = document.getElementById("hotMarkets");
-  if (!container) return;
-
-  container.innerHTML = `<p class="loading">Loading hot markets...</p>`;
-
-  try {
-    const res = await fetch("/api/liveMarkets");
-    const data = await res.json();
-
-    if (!data.ok || !Array.isArray(data.markets)) {
-      throw new Error("Invalid hot markets response");
-    }
-
-    if (data.markets.length === 0) {
-      hotMarketsCache = [];
-      container.innerHTML = `<p class="empty">No hot markets found.</p>`;
-      return;
-    }
-
-    hotMarketsCache = data.markets;
-    applyHotFilters();
-  } catch (err) {
-    console.error("Hot markets load error:", err);
-    container.innerHTML = `<p class="empty">Failed to load hot markets.</p>`;
+  if (!liveMarketsCache.length) {
+    await loadHomepageDiscoveryData();
+    return;
   }
+  applyHotFilters();
 }
 
 async function loadBiggestMovers() {
@@ -2104,9 +2389,11 @@ document.addEventListener("DOMContentLoaded", async () => {
   const refreshAccount = document.getElementById("refreshAccount");
   const applyBtn = document.getElementById("applyFilters");
 
+  ensureHomepageStrategyLayer();
+
   if (refreshAlerts) refreshAlerts.addEventListener("click", loadAlerts);
-  if (refreshOpp) refreshOpp.addEventListener("click", loadTopOpportunities);
-  if (refreshHot) refreshHot.addEventListener("click", loadHotMarkets);
+  if (refreshOpp) refreshOpp.addEventListener("click", () => loadHomepageDiscoveryData(true));
+  if (refreshHot) refreshHot.addEventListener("click", () => loadHomepageDiscoveryData(true));
   if (refreshMovers) refreshMovers.addEventListener("click", loadBiggestMovers);
   if (refreshSignals) refreshSignals.addEventListener("click", loadSignalLog);
   if (refreshPerformance) refreshPerformance.addEventListener("click", loadPerformanceStats);
@@ -2126,8 +2413,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   await loadPerformanceStats();
   await loadPaperPortfolio();
   await loadSignalLog();
-  await loadTopOpportunities();
-  await loadHotMarkets();
+  await loadHomepageDiscoveryData(true);
   await loadBiggestMovers();
 
   setInterval(loadAccountState, 60000);
@@ -2135,7 +2421,6 @@ document.addEventListener("DOMContentLoaded", async () => {
   setInterval(loadPerformanceStats, 60000);
   setInterval(loadPaperPortfolio, 60000);
   setInterval(loadSignalLog, 60000);
-  setInterval(loadTopOpportunities, 60000);
-  setInterval(loadHotMarkets, 60000);
+  setInterval(() => loadHomepageDiscoveryData(true), 60000);
   setInterval(loadBiggestMovers, 60000);
 });
