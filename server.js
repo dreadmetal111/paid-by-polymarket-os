@@ -86,31 +86,40 @@ function envNumber(defaultValue, ...names) {
 
 function getBuilderConfig() {
   const builderApiKey = envFirst(
+    "POLY_BUILDER_API_KEY",
     "PBP_BUILDER_API_KEY",
     "POLYMARKET_BUILDER_API_KEY",
     "BUILDER_API_KEY"
   );
+
   const builderApiSecret = envFirst(
+    "POLY_BUILDER_SECRET",
     "PBP_BUILDER_API_SECRET",
     "POLYMARKET_BUILDER_API_SECRET",
     "BUILDER_API_SECRET"
   );
+
   const builderApiPassphrase = envFirst(
+    "POLY_BUILDER_PASSPHRASE",
     "PBP_BUILDER_API_PASSPHRASE",
     "POLYMARKET_BUILDER_API_PASSPHRASE",
     "BUILDER_API_PASSPHRASE"
   );
+
   const relayerUrl = envFirst(
+    "POLYMARKET_RELAYER_BASE_URL",
     "PBP_RELAYER_URL",
     "POLYMARKET_RELAYER_URL",
     "BUILDER_RELAYER_URL",
     "RELAYER_URL"
   );
+
   const builderProfileId = envFirst(
     "PBP_BUILDER_PROFILE_ID",
     "POLYMARKET_BUILDER_PROFILE_ID",
     "BUILDER_PROFILE_ID"
   );
+
   const builderName = envFirst(
     "PBP_BUILDER_NAME",
     "POLYMARKET_BUILDER_NAME",
@@ -123,16 +132,27 @@ function getBuilderConfig() {
     builderApiPassphrase
   );
 
-  const relayerReady =
-    envFlag("PBP_RELAYER_READY", "POLYMARKET_RELAYER_READY", "RELAYER_READY") ||
-    !!relayerUrl;
+  const liveRoutingRequested = envFlag(
+    "PBP_ENABLE_BUILDER_LIVE_ROUTING",
+    "PBP_LIVE_ROUTING_ENABLED",
+    "POLYMARKET_LIVE_ROUTING_ENABLED",
+    "LIVE_ROUTING_ENABLED"
+  );
 
-  const liveRoutingEnabled =
-    envFlag(
-      "PBP_LIVE_ROUTING_ENABLED",
-      "POLYMARKET_LIVE_ROUTING_ENABLED",
-      "LIVE_ROUTING_ENABLED"
-    ) || relayerReady;
+  const relayerExplicitReady = envFlag(
+    "PBP_RELAYER_READY",
+    "POLYMARKET_RELAYER_READY",
+    "RELAYER_READY"
+  );
+
+  // Keep this shell-friendly:
+  // if live routing is explicitly enabled via the older project contract,
+  // treat the relayer shell as READY even if a separate relayer-ready flag
+  // or base URL is not present yet.
+  const relayerReady =
+    relayerExplicitReady || !!relayerUrl || liveRoutingRequested;
+
+  const liveRoutingEnabled = liveRoutingRequested || relayerReady;
 
   const signedOrderHandoffEnabled =
     envFirst(
@@ -148,6 +168,7 @@ function getBuilderConfig() {
         );
 
   const realLiveSubmitEnabled = envFlag(
+    "PBP_ENABLE_REAL_LIVE_SUBMIT",
     "PBP_REAL_LIVE_SUBMIT_ENABLED",
     "POLYMARKET_REAL_LIVE_SUBMIT_ENABLED",
     "REAL_LIVE_SUBMIT_ENABLED"
@@ -155,6 +176,7 @@ function getBuilderConfig() {
 
   const maxRealSubmitDollars = envNumber(
     25,
+    "PBP_MAX_REAL_SUBMIT_DOLLARS",
     "PBP_REAL_LIVE_SUBMIT_MAX_DOLLARS",
     "POLYMARKET_REAL_LIVE_SUBMIT_MAX_DOLLARS",
     "REAL_LIVE_SUBMIT_MAX_DOLLARS"
@@ -162,6 +184,7 @@ function getBuilderConfig() {
 
   const confirmText =
     envFirst(
+      "PBP_REAL_SUBMIT_CONFIRM_TEXT",
       "PBP_REAL_LIVE_SUBMIT_CONFIRM_TEXT",
       "POLYMARKET_REAL_LIVE_SUBMIT_CONFIRM_TEXT",
       "REAL_LIVE_SUBMIT_CONFIRM_TEXT"
