@@ -6,6 +6,7 @@ let hotMarketsCache = [];
 let liveMarketsCache = [];
 let lastHomepageDiscoveryRefreshAt = "";
 let activeHomepageCategory = "ALL";
+let currentTopLevelView = "discover";
 let currentTradeTicket = null;
 let accountStateCache = null;
 let currentLivePreparation = null;
@@ -173,11 +174,177 @@ function renderHomepageCategoryFilterOptions() {
   select.value = activeHomepageCategory;
 }
 
+function ensureTopLevelNavStyles() {
+  if (document.getElementById("pbpTopLevelNavStyles")) return;
+
+  const style = document.createElement("style");
+  style.id = "pbpTopLevelNavStyles";
+  style.textContent = `
+    #pbpTopLevelTabsSection .pbp-top-tabs {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-top: 14px;
+    }
+
+    #pbpTopLevelTabsSection .pbp-top-tab-btn {
+      min-width: 120px;
+    }
+
+    #pbpTopLevelTabsSection .pbp-top-tab-btn.active {
+      outline: 2px solid rgba(148, 163, 184, 0.45);
+      outline-offset: 1px;
+    }
+
+    .pbp-tab-section-hidden {
+      display: none !important;
+    }
+  `;
+  document.head.appendChild(style);
+}
+
+function getClosestSectionByElementId(id) {
+  const element = document.getElementById(id);
+  return element ? element.closest("section") : null;
+}
+
+function uniqueSections(sections) {
+  const seen = new Set();
+  const result = [];
+
+  sections.forEach((section) => {
+    if (!section || seen.has(section)) return;
+    seen.add(section);
+    result.push(section);
+  });
+
+  return result;
+}
+
+function getManagedTopLevelSections() {
+  const discoverSections = uniqueSections([
+    document.getElementById("homepageStrategyLayer"),
+    getClosestSectionByElementId("alertsPanel"),
+    getClosestSectionByElementId("topOpportunities"),
+    getClosestSectionByElementId("biggestMovers"),
+    getClosestSectionByElementId("hotMarkets"),
+  ]);
+
+  const tradeSections = uniqueSections([
+    getClosestSectionByElementId("tradeTicketPanel"),
+    getClosestSectionByElementId("tradeExecutionPanel"),
+    getClosestSectionByElementId("accountStatePanel"),
+    getClosestSectionByElementId("accountControlsPanel"),
+  ]);
+
+  const portfolioSections = uniqueSections([
+    getClosestSectionByElementId("paperPortfolioStatsPanel"),
+    getClosestSectionByElementId("paperPortfolioControlsPanel"),
+    getClosestSectionByElementId("performanceStatsPanel"),
+    getClosestSectionByElementId("signalLogPanel"),
+    getClosestSectionByElementId("openPositionsPanel"),
+    getClosestSectionByElementId("closedPositionsPanel"),
+  ]);
+
+  return {
+    discover: discoverSections,
+    trade: tradeSections,
+    portfolio: portfolioSections,
+  };
+}
+
+function updateTopLevelTabButtons() {
+  const buttonMap = {
+    discover: document.getElementById("pbpTabDiscoverBtn"),
+    trade: document.getElementById("pbpTabTradeBtn"),
+    portfolio: document.getElementById("pbpTabPortfolioBtn"),
+  };
+
+  Object.entries(buttonMap).forEach(([view, button]) => {
+    if (!button) return;
+    const isActive = currentTopLevelView === view;
+    button.classList.toggle("active", isActive);
+    button.setAttribute("aria-selected", isActive ? "true" : "false");
+  });
+}
+
+function applyTopLevelView() {
+  const groups = getManagedTopLevelSections();
+  const activeSections = new Set(groups[currentTopLevelView] || []);
+  const allSections = new Set([
+    ...groups.discover,
+    ...groups.trade,
+    ...groups.portfolio,
+  ]);
+
+  allSections.forEach((section) => {
+    const shouldShow = activeSections.has(section);
+    section.classList.toggle("pbp-tab-section-hidden", !shouldShow);
+  });
+
+  updateTopLevelTabButtons();
+}
+
+function setTopLevelView(nextView) {
+  if (!["discover", "trade", "portfolio"].includes(nextView)) return;
+  currentTopLevelView = nextView;
+  applyTopLevelView();
+}
+
+function ensureTopLevelTabs() {
+  ensureTopLevelNavStyles();
+
+  const existing = document.getElementById("pbpTopLevelTabsSection");
+  if (existing) {
+    applyTopLevelView();
+    return;
+  }
+
+  const groups = getManagedTopLevelSections();
+  const firstManagedSection =
+    groups.discover[0] || groups.trade[0] || groups.portfolio[0];
+
+  if (!firstManagedSection || !firstManagedSection.parentElement) return;
+
+  const tabsSection = document.createElement("section");
+  tabsSection.id = "pbpTopLevelTabsSection";
+  tabsSection.innerHTML = `
+    <div class="market-grid">
+      <article class="market-card">
+        <h3>Workspace</h3>
+        <div class="alert-item">
+          <div class="alert-message">Switch between discovery, trade flow, and portfolio views without scrolling through the full product stack.</div>
+          <div class="alert-time">Discovery opens by default so the product still leads with market scanning.</div>
+        </div>
+        <div class="pbp-top-tabs" role="tablist" aria-label="Top-level product views">
+          <button id="pbpTabDiscoverBtn" class="pbp-top-tab-btn" role="tab" type="button">Discover</button>
+          <button id="pbpTabTradeBtn" class="pbp-top-tab-btn" role="tab" type="button">Trade</button>
+          <button id="pbpTabPortfolioBtn" class="pbp-top-tab-btn" role="tab" type="button">Portfolio</button>
+        </div>
+      </article>
+    </div>
+  `;
+
+  firstManagedSection.parentElement.insertBefore(tabsSection, firstManagedSection);
+
+  const discoverBtn = document.getElementById("pbpTabDiscoverBtn");
+  const tradeBtn = document.getElementById("pbpTabTradeBtn");
+  const portfolioBtn = document.getElementById("pbpTabPortfolioBtn");
+
+  if (discoverBtn) discoverBtn.onclick = () => setTopLevelView("discover");
+  if (tradeBtn) tradeBtn.onclick = () => setTopLevelView("trade");
+  if (portfolioBtn) portfolioBtn.onclick = () => setTopLevelView("portfolio");
+
+  applyTopLevelView();
+}
+
 function ensureHomepageStrategyLayer() {
   if (document.getElementById("homepageStrategyLayer")) {
     renderHomepageCategoryFilterOptions();
     updateHomepageLastRefreshedLabel();
     bindHomepageStrategyLayerControls();
+    ensureTopLevelTabs();
+    applyTopLevelView();
     return;
   }
 
@@ -242,6 +409,8 @@ function ensureHomepageStrategyLayer() {
   renderHomepageCategoryFilterOptions();
   updateHomepageLastRefreshedLabel();
   bindHomepageStrategyLayerControls();
+  ensureTopLevelTabs();
+  applyTopLevelView();
 }
 
 function bindHomepageStrategyLayerControls() {
@@ -322,14 +491,14 @@ function renderHomepageDiscoveryFromCache() {
 
   const emergingMarkets = getEmergingMarkets(baseMarkets);
 
+  const selectedCategoryEntry = getAvailableHomepageCategories(liveMarketsCache).find(
+    ([value]) => value === activeHomepageCategory
+  );
+
   const categoryLabel =
     activeHomepageCategory === "ALL"
       ? ""
-      : ` in ${getCategoryDisplayLabel(
-          getAvailableHomepageCategories(liveMarketsCache).find(
-            ([value]) => value === activeHomepageCategory
-          )?.[1] || ""
-        )}`;
+      : ` in ${getCategoryDisplayLabel(selectedCategoryEntry?.[1] || "")}`;
 
   renderDiscoveryMarketCollection(
     "highestVolumeMarkets",
@@ -348,6 +517,7 @@ function renderHomepageDiscoveryFromCache() {
   );
 
   bindTradeActionButtons();
+  applyTopLevelView();
 }
 
 function renderTopOpportunitiesFromCache() {
@@ -397,6 +567,7 @@ async function loadHomepageDiscoveryData() {
     renderTopOpportunitiesFromCache();
     renderHomepageDiscoveryFromCache();
     applyHotFilters();
+    applyTopLevelView();
   } catch (err) {
     console.error("Homepage discovery load error:", err);
 
@@ -620,6 +791,7 @@ function resetFrontendDemoUiState() {
   liveMarketsCache = [];
   lastHomepageDiscoveryRefreshAt = "";
   activeHomepageCategory = "ALL";
+  currentTopLevelView = "discover";
   currentTradeTicket = null;
   currentLivePreparation = null;
   currentClientSignedOrder = null;
@@ -1966,6 +2138,7 @@ async function handleExecutePaperTrade() {
 
     await loadPaperPortfolio();
     renderTradeExecutionResult(`<p class="loading">Paper trade executed successfully.</p>`);
+    setTopLevelView("portfolio");
   } catch (err) {
     alert(err.message || "Failed to execute paper trade");
   }
@@ -1993,6 +2166,7 @@ async function handlePrepareLiveTrade() {
     clearUserAuthInlineStatus();
     renderTradeExecutionResult(renderLivePreparation(data.preparation));
     bindLiveHandoffControls();
+    setTopLevelView("trade");
   } catch (err) {
     alert(err.message || "Failed to prepare live trade");
   }
@@ -2011,6 +2185,7 @@ async function handleSignPreparedOrder() {
 
     renderTradeExecutionResult(renderLivePreparation(currentLivePreparation));
     bindLiveHandoffControls();
+    setTopLevelView("trade");
   } catch (err) {
     alert(err.message || "Failed to sign prepared order");
   }
@@ -2078,10 +2253,12 @@ async function handleSubmitSignedOrderHandoff() {
 
     if (!response.httpOk || response.data?.ok === false) {
       renderTradeExecutionResult(renderSignedOrderSubmitResult(response.data, true));
+      setTopLevelView("trade");
       return;
     }
 
     renderTradeExecutionResult(renderSignedOrderSubmitResult(response.data, false));
+    setTopLevelView("trade");
   } catch (err) {
     alert(err.message || "Failed to submit signed-order handoff");
   }
@@ -2113,7 +2290,10 @@ function renderTradeExecutionResult(html) {
 
 function bindTradeActionButtons() {
   document.querySelectorAll(".trade-action-btn").forEach((btn) => {
-    btn.onclick = () => handleQuoteTrade(btn.dataset.marketId, btn.dataset.side);
+    btn.onclick = () => {
+      handleQuoteTrade(btn.dataset.marketId, btn.dataset.side);
+      setTopLevelView("trade");
+    };
   });
 }
 
@@ -2390,6 +2570,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   const applyBtn = document.getElementById("applyFilters");
 
   ensureHomepageStrategyLayer();
+  ensureTopLevelTabs();
+  setTopLevelView("discover");
 
   if (refreshAlerts) refreshAlerts.addEventListener("click", loadAlerts);
   if (refreshOpp) refreshOpp.addEventListener("click", () => loadHomepageDiscoveryData(true));
@@ -2407,6 +2589,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   renderTradeTicketPanel();
   renderTradeExecutionResult(`<p class="empty">No execution prep run yet.</p>`);
+  applyTopLevelView();
 
   await loadAccountState();
   await loadAlerts();
@@ -2415,6 +2598,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   await loadSignalLog();
   await loadHomepageDiscoveryData(true);
   await loadBiggestMovers();
+
+  setTopLevelView("discover");
 
   setInterval(loadAccountState, 60000);
   setInterval(loadAlerts, 60000);
