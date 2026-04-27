@@ -19,6 +19,160 @@ const FETCH_TIMEOUT_MS = 15_000;
 const PRICE_MEMORY_WINDOW_MS = 24 * 60 * 60 * 1000;
 const PRICE_MEMORY_MIN_SAMPLE_GAP_MS = 60_000;
 
+const TRUSTED_TOP_LEVEL_CATEGORIES = new Set([
+  "Politics",
+  "Sports",
+  "Business",
+  "Tech",
+  "World",
+  "Culture",
+  "Crypto",
+  "News",
+]);
+
+const GENERIC_CATEGORY_VALUES = new Set([
+  "",
+  "all",
+  "featured",
+  "new",
+  "markets",
+  "market",
+  "events",
+  "event",
+  "homepage",
+  "trending",
+  "uncategorized",
+  "general",
+  "misc",
+  "other",
+  "everything",
+]);
+
+const DIRECT_SOURCE_CATEGORY_RULES = [
+  {
+    category: "Sports",
+    patterns: [
+      /\bsports?\b/,
+      /\bnba\b/,
+      /\bwnba\b/,
+      /\bnfl\b/,
+      /\bmlb\b/,
+      /\bnhl\b/,
+      /\bsoccer\b/,
+      /\bfootball\b/,
+      /\bbaseball\b/,
+      /\bbasketball\b/,
+      /\btennis\b/,
+      /\bgolf\b/,
+      /\bboxing\b/,
+      /\bmma\b/,
+      /\bufc\b/,
+      /\bcricket\b/,
+      /\brugby\b/,
+      /\bf1\b/,
+      /\bformula[\s-]?1\b/,
+    ],
+  },
+  {
+    category: "Politics",
+    patterns: [
+      /\bpolitic(?:s|al)?\b/,
+      /\belections?\b/,
+      /\bgovernment\b/,
+      /\bpolicy\b/,
+      /\bcampaign\b/,
+      /\bcongress\b/,
+      /\bsenate\b/,
+      /\bhouse\b/,
+      /\bpresident(?:ial)?\b/,
+      /\bprime minister\b/,
+      /\bgovernor\b/,
+      /\bmayor\b/,
+      /\bparliament\b/,
+    ],
+  },
+  {
+    category: "Business",
+    patterns: [
+      /\bbusiness\b/,
+      /\bfinance\b/,
+      /\bfinancial\b/,
+      /\beconom(?:y|ic|ics)\b/,
+      /\bmacro\b/,
+      /\bmarkets?\b/,
+      /\bstocks?\b/,
+      /\bearnings\b/,
+      /\bcompany\b/,
+      /\bcompanies\b/,
+    ],
+  },
+  {
+    category: "Tech",
+    patterns: [
+      /\btech\b/,
+      /\btechnology\b/,
+      /\bai\b/,
+      /\bartificial intelligence\b/,
+      /\bsoftware\b/,
+      /\bhardware\b/,
+      /\bsemiconductor\b/,
+      /\bchip(?:s)?\b/,
+      /\binternet\b/,
+      /\bstartup(?:s)?\b/,
+    ],
+  },
+  {
+    category: "World",
+    patterns: [
+      /\bworld\b/,
+      /\binternational\b/,
+      /\bglobal\b/,
+      /\bgeopolitic(?:s|al)?\b/,
+      /\bforeign\b/,
+      /\bmiddle east\b/,
+      /\beurope\b/,
+      /\basia\b/,
+      /\bafrica\b/,
+      /\blatin america\b/,
+    ],
+  },
+  {
+    category: "Culture",
+    patterns: [
+      /\bculture\b/,
+      /\bentertainment\b/,
+      /\bcelebrit(?:y|ies)\b/,
+      /\bmovies?\b/,
+      /\bfilm\b/,
+      /\btv\b/,
+      /\btelevision\b/,
+      /\bmusic\b/,
+      /\bawards?\b/,
+      /\bpop culture\b/,
+    ],
+  },
+  {
+    category: "Crypto",
+    patterns: [
+      /\bcrypto\b/,
+      /\bcryptocurrency\b/,
+      /\bblockchain\b/,
+      /\bweb3\b/,
+      /\bdefi\b/,
+      /\bnft(?:s)?\b/,
+      /\bbitcoin\b/,
+      /\bethereum\b/,
+      /\bsolana\b/,
+      /\bdogecoin\b/,
+      /\bxrp\b/,
+    ],
+  },
+  {
+    category: "News",
+    patterns: [/\bnews\b/, /\bcurrent events\b/, /\bheadlines?\b/],
+  },
+];
+
 const liveDataState = {
   markets: [],
   lastFetchedAt: 0,
@@ -145,10 +299,6 @@ function getBuilderConfig() {
     "RELAYER_READY"
   );
 
-  // Keep this shell-friendly:
-  // if live routing is explicitly enabled via the older project contract,
-  // treat the relayer shell as READY even if a separate relayer-ready flag
-  // or base URL is not present yet.
   const relayerReady =
     relayerExplicitReady || !!relayerUrl || liveRoutingRequested;
 
@@ -247,50 +397,98 @@ function normalizeCategoryLabel(value) {
 
   const lower = cleaned.toLowerCase();
 
-  const map = {
+  const exactMap = {
     politics: "Politics",
+    political: "Politics",
     election: "Politics",
     elections: "Politics",
+    government: "Politics",
+    policy: "Politics",
+
+    sports: "Sports",
+    sport: "Sports",
+    nba: "Sports",
+    wnba: "Sports",
+    nfl: "Sports",
+    mlb: "Sports",
+    nhl: "Sports",
+    soccer: "Sports",
+    football: "Sports",
+    baseball: "Sports",
+    basketball: "Sports",
+    tennis: "Sports",
+    golf: "Sports",
+    boxing: "Sports",
+    mma: "Sports",
+    ufc: "Sports",
+
+    business: "Business",
+    finance: "Business",
+    financial: "Business",
+    economy: "Business",
+    economic: "Business",
+    macro: "Business",
+
+    technology: "Tech",
+    tech: "Tech",
+    ai: "Tech",
+    "artificial intelligence": "Tech",
+
+    world: "World",
+    international: "World",
+    geopolitics: "World",
+    geopolitical: "World",
+    global: "World",
+
+    entertainment: "Culture",
+    culture: "Culture",
+    popculture: "Culture",
+    "pop culture": "Culture",
+    pop: "Culture",
+    celebrity: "Culture",
+    celebrities: "Culture",
+
     crypto: "Crypto",
     cryptocurrency: "Crypto",
     bitcoin: "Crypto",
     ethereum: "Crypto",
-    sports: "Sports",
-    sport: "Sports",
-    business: "Business",
-    economy: "Business",
-    macro: "Business",
-    technology: "Tech",
-    tech: "Tech",
-    entertainment: "Culture",
-    culture: "Culture",
-    popculture: "Culture",
-    pop: "Culture",
-    world: "World",
+    blockchain: "Crypto",
+    web3: "Crypto",
+
     news: "News",
+    currentevents: "News",
+    current: "News",
+    headlines: "News",
   };
 
-  return map[lower] || titleCase(cleaned);
+  if (exactMap[lower]) return exactMap[lower];
+
+  for (const rule of DIRECT_SOURCE_CATEGORY_RULES) {
+    if (rule.patterns.some((pattern) => pattern.test(lower))) {
+      return rule.category;
+    }
+  }
+
+  return titleCase(cleaned);
+}
+
+function isGenericCategoryValue(value) {
+  const normalized = String(value || "")
+    .toLowerCase()
+    .replace(/[_/]+/g, " ")
+    .trim();
+
+  return GENERIC_CATEGORY_VALUES.has(normalized);
+}
+
+function isTopLevelCategory(value) {
+  return TRUSTED_TOP_LEVEL_CATEGORIES.has(String(value || "").trim());
 }
 
 function isMeaningfulCategory(value) {
   const normalized = normalizeCategoryLabel(value);
   if (!normalized) return false;
-
-  const blocked = new Set([
-    "All",
-    "Featured",
-    "New",
-    "Markets",
-    "Market",
-    "Events",
-    "Event",
-    "Homepage",
-    "Trending",
-    "Uncategorized",
-  ]);
-
-  return !blocked.has(normalized);
+  return isTopLevelCategory(normalized);
 }
 
 function parseStringArray(value) {
@@ -348,83 +546,242 @@ function parseTagLabels(raw) {
   return tags;
 }
 
-function deriveCategory(raw) {
-  const directCandidates = [
-    raw?.category,
-    raw?.events?.[0]?.subcategory,
-    raw?.events?.[0]?.category,
-    ...(Array.isArray(raw?.categories)
-      ? raw.categories.map((category) => category?.label || category?.slug || category)
-      : []),
-    ...parseTagLabels(raw),
-  ];
+function normalizeTrustedCategoryCandidate(value) {
+  if (isGenericCategoryValue(value)) return "";
+  const normalized = normalizeCategoryLabel(value);
+  return isMeaningfulCategory(normalized) ? normalized : "";
+}
 
-  for (const candidate of directCandidates) {
-    if (isMeaningfulCategory(candidate)) {
-      return normalizeCategoryLabel(candidate);
+function classifySourceCategoryText(value) {
+  const raw = String(value || "").trim();
+  if (!raw || isGenericCategoryValue(raw)) return "";
+
+  const normalized = normalizeCategoryLabel(raw);
+  if (isTopLevelCategory(normalized)) return normalized;
+
+  const lower = raw.toLowerCase();
+
+  for (const rule of DIRECT_SOURCE_CATEGORY_RULES) {
+    if (rule.patterns.some((pattern) => pattern.test(lower))) {
+      return rule.category;
     }
   }
 
-  const text = [
+  return "";
+}
+
+function getDirectSourceCategory(raw) {
+  const directCandidates = [
+    raw?.category,
+    raw?.events?.[0]?.category,
+    raw?.events?.[0]?.subcategory,
+    ...(Array.isArray(raw?.categories)
+      ? raw.categories.flatMap((category) => [
+          category?.label,
+          category?.slug,
+          category,
+        ])
+      : []),
+  ];
+
+  for (const candidate of directCandidates) {
+    const classified = classifySourceCategoryText(candidate);
+    if (classified) return classified;
+  }
+
+  return "";
+}
+
+function getTagHintCategory(raw) {
+  const tagCategories = [
+    ...new Set(
+      parseTagLabels(raw)
+        .map((tag) => classifySourceCategoryText(tag))
+        .filter(Boolean)
+    ),
+  ];
+
+  if (tagCategories.length === 1) {
+    return tagCategories[0];
+  }
+
+  if (
+    tagCategories.length === 2 &&
+    tagCategories.includes("News") &&
+    tagCategories.some((category) => category !== "News")
+  ) {
+    return tagCategories.find((category) => category !== "News") || "";
+  }
+
+  return "";
+}
+
+function buildCategoryText(raw) {
+  return [
     raw?.question,
     raw?.description,
     raw?.groupItemTitle,
+    raw?.category,
+    raw?.events?.[0]?.category,
+    raw?.events?.[0]?.subcategory,
     raw?.events?.[0]?.title,
     raw?.events?.[0]?.subtitle,
+    raw?.events?.[0]?.description,
+    ...(Array.isArray(raw?.categories)
+      ? raw.categories.map(
+          (category) => category?.label || category?.slug || category
+        )
+      : []),
     ...parseTagLabels(raw),
   ]
     .filter(Boolean)
     .join(" ")
     .toLowerCase();
+}
+
+function scoreRegexMatches(text, patterns) {
+  return patterns.reduce(
+    (sum, pattern) => sum + (pattern.test(text) ? 1 : 0),
+    0
+  );
+}
+
+function scoreCategoryHeuristics(text) {
+  const scores = {
+    Politics: scoreRegexMatches(text, [
+      /\b(election|elections|primary|president|presidential|senate|house|governor|mayor|congress|parliament)\b/,
+      /\b(trump|biden|democrat|democrats|republican|republicans|labour|conservative|campaign)\b/,
+      /\b(vote|voting|ballot|polls?|administration|cabinet)\b/,
+    ]),
+    Sports: scoreRegexMatches(text, [
+      /\b(nba|wnba|nfl|mlb|nhl|ufc|mma|fifa|uefa|atp|wta|pga|ncaa|olympics?|formula 1|grand prix)\b/,
+      /\b(soccer|football|baseball|basketball|hockey|tennis|golf|boxing|cricket|rugby)\b/,
+      /\b(match|game|games|tournament|final|semifinal|quarterfinal|playoff|championship|super bowl|world cup|season opener)\b/,
+      /\b(vs|vs\.|beat|beats|defeat|defeats|wins?|score|scores|fight night)\b/,
+    ]),
+    Business: scoreRegexMatches(text, [
+      /\b(fed|inflation|cpi|ppi|gdp|recession|rate cut|interest rates?|yield)\b/,
+      /\b(earnings|revenue|guidance|stocks?|shares?|s&p|nasdaq|dow|ipo)\b/,
+      /\b(tariff|economy|economic|macro|treasury|bond market)\b/,
+      /\b(apple|microsoft|amazon|meta|tesla|nvidia|coinbase)\b/,
+    ]),
+    Tech: scoreRegexMatches(text, [
+      /\b(ai|artificial intelligence|openai|chatgpt|anthropic|gemini)\b/,
+      /\b(iphone|android|semiconductor|chip|chips|software|hardware)\b/,
+      /\b(technology|tech|robotics|datacenter)\b/,
+    ]),
+    World: scoreRegexMatches(text, [
+      /\b(ukraine|russia|china|taiwan|israel|gaza|iran|europe|eu|nato)\b/,
+      /\b(prime minister|foreign minister|ceasefire|war|conflict|sanctions|border)\b/,
+      /\b(country|countries|international|global|treaty)\b/,
+    ]),
+    Culture: scoreRegexMatches(text, [
+      /\b(movie|film|tv|television|series|season finale|album|music|artist|actor|actress)\b/,
+      /\b(oscar|oscars|grammy|grammys|emmy|emmys|box office)\b/,
+      /\b(celebrity|hollywood|reality show)\b/,
+    ]),
+    Crypto: scoreRegexMatches(text, [
+      /\b(bitcoin|btc|ethereum|eth|solana|dogecoin|doge|xrp|litecoin|cardano|avalanche|avax)\b/,
+      /\b(crypto|cryptocurrency|blockchain|web3|defi|nft|nfts|memecoin|stablecoin|onchain)\b/,
+      /\b(spot bitcoin|spot ether|ethereum etf|bitcoin etf)\b/,
+    ]),
+  };
+
+  if (scores.Sports > 0) scores.Crypto = Math.max(0, scores.Crypto - 4);
+  if (scores.Politics > 0) scores.Crypto = Math.max(0, scores.Crypto - 3);
+  if (scores.Business > 0) scores.Crypto = Math.max(0, scores.Crypto - 2);
+  if (scores.World > 0) scores.Crypto = Math.max(0, scores.Crypto - 3);
+  if (scores.Culture > 0) scores.Crypto = Math.max(0, scores.Crypto - 3);
+
+  return scores;
+}
+
+function hasExplicitCryptoAssetMention(text) {
+  return /\b(bitcoin|btc|ethereum|eth|solana|dogecoin|doge|xrp|litecoin|cardano|avalanche|avax|crypto|cryptocurrency|blockchain|web3|defi|nft|nfts|memecoin|stablecoin)\b/.test(
+    text
+  );
+}
+
+function applySourceCategorySafetyOverride(sourceCategory, raw) {
+  if (!sourceCategory) return "";
+
+  const text = buildCategoryText(raw);
+  const scores = scoreCategoryHeuristics(text);
+
+  if (sourceCategory === "Crypto") {
+    if (scores.Sports >= 2) return "Sports";
+    if (scores.Politics >= 2) return "Politics";
+    if (scores.Culture >= 2) return "Culture";
+    if (scores.World >= 2 && scores.Crypto <= 1) return "World";
+    if (scores.Business >= 2 && scores.Crypto <= 1) return "Business";
+  }
+
+  return sourceCategory;
+}
+
+function deriveCategory(raw) {
+  const directSourceCategory = applySourceCategorySafetyOverride(
+    getDirectSourceCategory(raw),
+    raw
+  );
+  if (directSourceCategory) return directSourceCategory;
+
+  const tagHintCategory = applySourceCategorySafetyOverride(
+    getTagHintCategory(raw),
+    raw
+  );
+  if (tagHintCategory) return tagHintCategory;
+
+  const text = buildCategoryText(raw);
+  const scores = scoreCategoryHeuristics(text);
+
+  const strongSports = scores.Sports >= 2;
+  const strongPolitics = scores.Politics >= 2;
+  const strongBusiness = scores.Business >= 2;
+  const strongTech = scores.Tech >= 2;
+  const strongWorld = scores.World >= 2;
+  const strongCulture = scores.Culture >= 2;
+  const strongCrypto =
+    scores.Crypto >= 3 &&
+    hasExplicitCryptoAssetMention(text) &&
+    !strongSports &&
+    !strongPolitics &&
+    !strongCulture &&
+    scores.Crypto >= scores.Business + 1 &&
+    scores.Crypto >= scores.World + 1;
+
+  if (strongSports) return "Sports";
+  if (strongPolitics) return "Politics";
 
   if (
-    /(election|president|senate|house|trump|biden|democrat|republican|vote|voting|campaign|governor)/.test(
-      text
-    )
+    strongWorld &&
+    scores.World >= Math.max(scores.Business, scores.Tech, scores.Crypto)
   ) {
-    return "Politics";
+    return "World";
   }
+
   if (
-    /(bitcoin|btc|ethereum|eth|solana|sol|crypto|token|blockchain|dogecoin|doge|xrp)/.test(
-      text
-    )
-  ) {
-    return "Crypto";
-  }
-  if (
-    /(nba|nfl|mlb|nhl|soccer|football|tennis|golf|ufc|fifa|super bowl|champions league|world cup|match|vs\b|defeat|wins? by)/.test(
-      text
-    )
-  ) {
-    return "Sports";
-  }
-  if (
-    /(fed|inflation|cpi|gdp|recession|stocks|stock market|earnings|tesla|apple|nvidia|meta|amazon|microsoft|tariff|yield)/.test(
-      text
-    )
-  ) {
-    return "Business";
-  }
-  if (
-    /(ai|openai|chatgpt|gemini|anthropic|tech|iphone|android|semiconductor|chip)/.test(
-      text
-    )
-  ) {
-    return "Tech";
-  }
-  if (
-    /(movie|film|oscar|music|album|tv|television|celebrity|actor|actress|grammy|box office)/.test(
-      text
-    )
+    strongCulture &&
+    scores.Culture >= Math.max(scores.Business, scores.Tech, scores.Crypto)
   ) {
     return "Culture";
   }
+
   if (
-    /(war|country|prime minister|president of|europe|china|russia|ukraine|israel|gaza|iran)/.test(
-      text
-    )
+    strongTech &&
+    scores.Tech >= scores.Business + 1 &&
+    !strongSports &&
+    !strongPolitics
   ) {
-    return "World";
+    return "Tech";
+  }
+
+  if (strongBusiness && !strongSports && !strongPolitics) {
+    return "Business";
+  }
+
+  if (strongCrypto) {
+    return "Crypto";
   }
 
   return "News";
@@ -939,8 +1296,9 @@ function revalueOpenPositions() {
       market.noPriceLive
     );
 
-    if (!Number.isFinite(currentSidePrice) || !Number.isFinite(position.shares))
+    if (!Number.isFinite(currentSidePrice) || !Number.isFinite(position.shares)) {
       continue;
+    }
 
     position.currentValueDollars = roundTo(position.shares * currentSidePrice, 2);
     position.pnlDollars = roundTo(
@@ -1014,12 +1372,12 @@ function buildAccountBlockers() {
   const blockers = [];
 
   if (!demoState.account.isConnected) blockers.push("Connect an account first.");
-  if (!config.builderApiConfigured)
+  if (!config.builderApiConfigured) {
     blockers.push("Builder API credentials are not fully configured.");
+  }
   if (!config.relayerReady) blockers.push("Relayer configuration is not ready.");
   if (!config.liveRoutingEnabled) blockers.push("Live routing is disabled.");
-  if (!config.signedOrderHandoffEnabled)
-    blockers.push("Signed handoff is disabled.");
+  if (!config.signedOrderHandoffEnabled) blockers.push("Signed handoff is disabled.");
 
   return blockers;
 }
@@ -1112,14 +1470,10 @@ function buildPreparedHandoff(market, side, sizeDollars) {
   if (!account.liveModeEnabled) blockers.push("Live mode is not enabled.");
   if (!account.builderReady) blockers.push("Builder routing is not ready.");
   if (!account.liveRoutingEnabled) blockers.push("Live routing is not enabled.");
-  if (!account.signedOrderHandoffEnabled)
-    blockers.push("Signed handoff is disabled.");
-  if (!tokenID)
-    blockers.push("No valid outcome token ID is available for this market.");
-  if (!Number.isFinite(price) || price <= 0)
-    blockers.push("Selected market price is not usable.");
-  if (!Number.isFinite(shares) || shares <= 0)
-    blockers.push("Selected trade size is not usable.");
+  if (!account.signedOrderHandoffEnabled) blockers.push("Signed handoff is disabled.");
+  if (!tokenID) blockers.push("No valid outcome token ID is available for this market.");
+  if (!Number.isFinite(price) || price <= 0) blockers.push("Selected market price is not usable.");
+  if (!Number.isFinite(shares) || shares <= 0) blockers.push("Selected trade size is not usable.");
 
   const realSubmitPolicy = buildRealSubmitPolicy();
   const withinMaxSubmitSize = sizeDollars <= realSubmitPolicy.maxSubmitDollars;
@@ -1777,18 +2131,12 @@ app.post("/api/trade/submit-signed", async (req, res) => {
     if (!account.isConnected) blockedReasons.push("Account is not connected.");
     if (!account.liveModeEnabled) blockedReasons.push("Live mode is not enabled.");
     if (!account.builderReady) blockedReasons.push("Builder routing is not ready.");
-    if (!policy.enabled)
-      blockedReasons.push("Real live submit is disabled by server policy.");
-    if (!Number.isFinite(sizeDollars) || sizeDollars <= 0)
-      blockedReasons.push("Trade size is invalid.");
-    if (sizeDollars > policy.maxSubmitDollars)
-      blockedReasons.push("Trade size exceeds the guarded submit limit.");
-    if (!signedOrder || typeof signedOrder !== "object")
-      blockedReasons.push("Signed order payload is missing.");
-    if (!userAuth || typeof userAuth !== "object")
-      blockedReasons.push("User L2 auth bundle is missing.");
-    if (confirmText !== policy.confirmText)
-      blockedReasons.push("Confirmation text does not match.");
+    if (!policy.enabled) blockedReasons.push("Real live submit is disabled by server policy.");
+    if (!Number.isFinite(sizeDollars) || sizeDollars <= 0) blockedReasons.push("Trade size is invalid.");
+    if (sizeDollars > policy.maxSubmitDollars) blockedReasons.push("Trade size exceeds the guarded submit limit.");
+    if (!signedOrder || typeof signedOrder !== "object") blockedReasons.push("Signed order payload is missing.");
+    if (!userAuth || typeof userAuth !== "object") blockedReasons.push("User L2 auth bundle is missing.");
+    if (confirmText !== policy.confirmText) blockedReasons.push("Confirmation text does not match.");
 
     if (blockedReasons.length > 0) {
       console.log("[guarded-submit] blocked", {
