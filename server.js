@@ -20,14 +20,13 @@ const PRICE_MEMORY_WINDOW_MS = 24 * 60 * 60 * 1000;
 const PRICE_MEMORY_MIN_SAMPLE_GAP_MS = 60_000;
 
 const TRUSTED_TOP_LEVEL_CATEGORIES = new Set([
+  "News",
   "Politics",
   "Sports",
+  "Crypto",
   "Business",
-  "Tech",
   "World",
   "Culture",
-  "Crypto",
-  "News",
 ]);
 
 const GENERIC_CATEGORY_VALUES = new Set([
@@ -69,8 +68,8 @@ const DIRECT_SOURCE_CATEGORY_RULES = [
       /\bufc\b/,
       /\bcricket\b/,
       /\brugby\b/,
-      /\bf1\b/,
       /\bformula[\s-]?1\b/,
+      /\bf1\b/,
     ],
   },
   {
@@ -78,6 +77,7 @@ const DIRECT_SOURCE_CATEGORY_RULES = [
     patterns: [
       /\bpolitic(?:s|al)?\b/,
       /\belections?\b/,
+      /\belection\s*202[0-9]\b/,
       /\bgovernment\b/,
       /\bpolicy\b/,
       /\bcampaign\b/,
@@ -97,28 +97,29 @@ const DIRECT_SOURCE_CATEGORY_RULES = [
       /\bbusiness\b/,
       /\bfinance\b/,
       /\bfinancial\b/,
-      /\beconom(?:y|ic|ics)\b/,
-      /\bmacro\b/,
-      /\bmarkets?\b/,
-      /\bstocks?\b/,
       /\bearnings\b/,
+      /\brevenue\b/,
       /\bcompany\b/,
       /\bcompanies\b/,
-    ],
-  },
-  {
-    category: "Tech",
-    patterns: [
-      /\btech\b/,
-      /\btechnology\b/,
-      /\bai\b/,
-      /\bartificial intelligence\b/,
-      /\bsoftware\b/,
-      /\bhardware\b/,
-      /\bsemiconductor\b/,
-      /\bchip(?:s)?\b/,
-      /\binternet\b/,
-      /\bstartup(?:s)?\b/,
+      /\bstock\b/,
+      /\bstocks\b/,
+      /\bshare\b/,
+      /\bshares\b/,
+      /\binflation\b/,
+      /\bcpi\b/,
+      /\bgdp\b/,
+      /\bfed\b/,
+      /\brate cuts?\b/,
+      /\binterest rates?\b/,
+      /\btreasury\b/,
+      /\byields?\b/,
+      /\bmacro\b/,
+      /\beconomic\b/,
+      /\beconomy\b/,
+      /\brecession\b/,
+      /\btariffs?\b/,
+      /\bbanking\b/,
+      /\bipo\b/,
     ],
   },
   {
@@ -142,7 +143,7 @@ const DIRECT_SOURCE_CATEGORY_RULES = [
       /\bculture\b/,
       /\bentertainment\b/,
       /\bcelebrit(?:y|ies)\b/,
-      /\bmovies?\b/,
+      /\bmovie(?:s)?\b/,
       /\bfilm\b/,
       /\btv\b/,
       /\btelevision\b/,
@@ -165,6 +166,8 @@ const DIRECT_SOURCE_CATEGORY_RULES = [
       /\bsolana\b/,
       /\bdogecoin\b/,
       /\bxrp\b/,
+      /\bbtc\b/,
+      /\beth\b/,
     ],
   },
   {
@@ -429,11 +432,6 @@ function normalizeCategoryLabel(value) {
     economic: "Business",
     macro: "Business",
 
-    technology: "Tech",
-    tech: "Tech",
-    ai: "Tech",
-    "artificial intelligence": "Tech",
-
     world: "World",
     international: "World",
     geopolitics: "World",
@@ -651,7 +649,7 @@ function scoreCategoryHeuristics(text) {
     Politics: scoreRegexMatches(text, [
       /\b(election|elections|primary|president|presidential|senate|house|governor|mayor|congress|parliament)\b/,
       /\b(trump|biden|democrat|democrats|republican|republicans|labour|conservative|campaign)\b/,
-      /\b(vote|voting|ballot|polls?|administration|cabinet)\b/,
+      /\b(vote|voting|ballot|polls?|administration|cabinet|referendum)\b/,
     ]),
     Sports: scoreRegexMatches(text, [
       /\b(nba|wnba|nfl|mlb|nhl|ufc|mma|fifa|uefa|atp|wta|pga|ncaa|olympics?|formula 1|grand prix)\b/,
@@ -660,15 +658,10 @@ function scoreCategoryHeuristics(text) {
       /\b(vs|vs\.|beat|beats|defeat|defeats|wins?|score|scores|fight night)\b/,
     ]),
     Business: scoreRegexMatches(text, [
-      /\b(fed|inflation|cpi|ppi|gdp|recession|rate cut|interest rates?|yield)\b/,
-      /\b(earnings|revenue|guidance|stocks?|shares?|s&p|nasdaq|dow|ipo)\b/,
-      /\b(tariff|economy|economic|macro|treasury|bond market)\b/,
-      /\b(apple|microsoft|amazon|meta|tesla|nvidia|coinbase)\b/,
-    ]),
-    Tech: scoreRegexMatches(text, [
-      /\b(ai|artificial intelligence|openai|chatgpt|anthropic|gemini)\b/,
-      /\b(iphone|android|semiconductor|chip|chips|software|hardware)\b/,
-      /\b(technology|tech|robotics|datacenter)\b/,
+      /\b(fed|inflation|cpi|ppi|gdp|recession|rate cut|rate cuts|interest rates?|yield|yields)\b/,
+      /\b(earnings|revenue|guidance|stocks?|shares?|ipo)\b/,
+      /\b(tariff|tariffs|economy|economic|macro|treasury|bond market|banking)\b/,
+      /\b(company|companies)\b/,
     ]),
     World: scoreRegexMatches(text, [
       /\b(ukraine|russia|china|taiwan|israel|gaza|iran|europe|eu|nato)\b/,
@@ -678,7 +671,7 @@ function scoreCategoryHeuristics(text) {
     Culture: scoreRegexMatches(text, [
       /\b(movie|film|tv|television|series|season finale|album|music|artist|actor|actress)\b/,
       /\b(oscar|oscars|grammy|grammys|emmy|emmys|box office)\b/,
-      /\b(celebrity|hollywood|reality show)\b/,
+      /\b(celebrity|hollywood|reality show|netflix)\b/,
     ]),
     Crypto: scoreRegexMatches(text, [
       /\b(bitcoin|btc|ethereum|eth|solana|dogecoin|doge|xrp|litecoin|cardano|avalanche|avax)\b/,
@@ -738,7 +731,6 @@ function deriveCategory(raw) {
   const strongSports = scores.Sports >= 2;
   const strongPolitics = scores.Politics >= 2;
   const strongBusiness = scores.Business >= 2;
-  const strongTech = scores.Tech >= 2;
   const strongWorld = scores.World >= 2;
   const strongCulture = scores.Culture >= 2;
   const strongCrypto =
@@ -755,25 +747,16 @@ function deriveCategory(raw) {
 
   if (
     strongWorld &&
-    scores.World >= Math.max(scores.Business, scores.Tech, scores.Crypto)
+    scores.World >= Math.max(scores.Business, scores.Crypto, scores.Culture)
   ) {
     return "World";
   }
 
   if (
     strongCulture &&
-    scores.Culture >= Math.max(scores.Business, scores.Tech, scores.Crypto)
+    scores.Culture >= Math.max(scores.Business, scores.Crypto, scores.World)
   ) {
     return "Culture";
-  }
-
-  if (
-    strongTech &&
-    scores.Tech >= scores.Business + 1 &&
-    !strongSports &&
-    !strongPolitics
-  ) {
-    return "Tech";
   }
 
   if (strongBusiness && !strongSports && !strongPolitics) {
