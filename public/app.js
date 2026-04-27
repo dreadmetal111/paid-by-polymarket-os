@@ -2,18 +2,53 @@ const POLYMARKET_CLOB_HOST = "https://clob.polymarket.com";
 const POLYMARKET_CHAIN_ID = 137;
 const POLYGON_HEX_CHAIN_ID = "0x89";
 
+const DISCOVER_VIEWS = {
+  opportunities: {
+    label: "Top Opportunities",
+    description: "Best blend of confidence, liquidity, and current activity.",
+    empty: "No top opportunities found for the current filter.",
+    type: "market",
+  },
+  movers: {
+    label: "Biggest Movers",
+    description: "Markets moving the most versus recent tracked pricing.",
+    empty: "Mover data is still warming up for the current filter.",
+    type: "mover",
+  },
+  volume: {
+    label: "Highest Volume",
+    description: "Markets attracting the most current trading activity.",
+    empty: "No high-volume markets found for the current filter.",
+    type: "market",
+  },
+  liquid: {
+    label: "Most Liquid",
+    description: "Markets with deeper liquidity for cleaner entry and exit.",
+    empty: "No liquid markets found for the current filter.",
+    type: "market",
+  },
+  new: {
+    label: "New / Emerging",
+    description: "Recently updated markets beginning to build activity.",
+    empty: "No emerging markets found for the current filter.",
+    type: "market",
+  },
+};
+
 let hotMarketsCache = [];
 let liveMarketsCache = [];
+let biggestMoversCache = [];
 let lastHomepageDiscoveryRefreshAt = "";
 let activeHomepageCategory = "ALL";
 let currentTopLevelView = "discover";
+let currentDiscoverView = "opportunities";
 let currentTradeTicket = null;
 let accountStateCache = null;
 let currentLivePreparation = null;
 let currentClientSignedOrder = null;
 let currentUserAuthDraft = createEmptyUserAuthDraft();
 let currentUserAuthUiState = createEmptyUserAuthUiState();
-let walletConnectionSource = "NONE"; // NONE | BROWSER | MANUAL
+let walletConnectionSource = "NONE";
 let browserWalletEventsBound = false;
 let polymarketBrowserModulesPromise = null;
 
@@ -109,6 +144,14 @@ function getCategoryDisplayLabel(value) {
   return trimmed || "Uncategorized";
 }
 
+function getCategoryOptionLabel(value) {
+  if (value === "ALL") return "All";
+  const match = getAvailableHomepageCategories(liveMarketsCache).find(
+    ([key]) => key === value
+  );
+  return match ? match[1] : "All";
+}
+
 function getAvailableHomepageCategories(markets) {
   const categoryMap = new Map();
 
@@ -121,6 +164,29 @@ function getAvailableHomepageCategories(markets) {
   });
 
   return Array.from(categoryMap.entries()).sort((a, b) => a[1].localeCompare(b[1]));
+}
+
+function getCategoryCounts(markets) {
+  const counts = new Map();
+
+  (Array.isArray(markets) ? markets : []).forEach((market) => {
+    const key = normalizeCategoryValue(market?.category);
+    const label = getCategoryDisplayLabel(market?.category);
+    const existing = counts.get(key) || { label, count: 0 };
+    existing.count += 1;
+    counts.set(key, existing);
+  });
+
+  return Array.from(counts.entries())
+    .map(([value, info]) => ({
+      value,
+      label: info.label,
+      count: info.count,
+    }))
+    .sort((a, b) => {
+      if (b.count !== a.count) return b.count - a.count;
+      return a.label.localeCompare(b.label);
+    });
 }
 
 function getCategoryFilteredMarkets(markets) {
@@ -151,27 +217,184 @@ function updateHomepageLastRefreshedLabel() {
     : "Last refreshed: —";
 }
 
-function renderHomepageCategoryFilterOptions() {
-  const select = document.getElementById("homepageCategoryFilter");
-  if (!select) return;
+function renderHomepageCategoryChipRail() {
+  const rail = document.getElementById("homepageCategoryChipRail");
+  if (!rail) return;
 
-  const categories = getAvailableHomepageCategories(liveMarketsCache);
-  select.innerHTML = `
-    <option value="ALL">All Categories</option>
-    ${categories
-      .map(
-        ([value, label]) =>
-          `<option value="${escapeHtml(value)}">${escapeHtml(label)}</option>`
-      )
-      .join("")}
-  `;
+  const categories = getCategoryCounts(
+    (Array.isArray(liveMarketsCache) ? liveMarketsCache : []).filter(
+      (market) => market.active !== false && !market.closed
+    )
+  );
 
-  const hasCurrent = categories.some(([value]) => value === activeHomepageCategory);
-  if (activeHomepageCategory !== "ALL" && !hasCurrent) {
-    activeHomepageCategory = "ALL";
+  const buttons = [
+    `<button class="control-chip ${activeHomepageCategory === "ALL" ? "active" : ""}" data-category-value="ALL" type="button">All</button>`,
+    ...categories.map(
+      (category) => `
+        <button
+          class="control-chip ${activeHomepageCategory === category.value ? "active" : ""}"
+          data-category-value="${escapeHtml(category.value)}"
+          type="button"
+        >
+          ${escapeHtml(category.label)}
+        </button>
+      `
+    ),
+  ];
+
+  rail.innerHTML = buttons.join("");
+
+  rail.querySelectorAll("[data-category-value]").forEach((button) => {
+    button.onclick = () => {
+      activeHomepageCategory = button.dataset.categoryValue || "ALL";
+      renderHomepageCategoryChipRail();
+      renderDiscoverPrimaryView();
+    };
+  });
+}
+
+function renderHomepageDiscoverViewRail() {
+  const rail = document.getElementById("homepageDiscoverViewRail");
+  if (!rail) return;
+
+  rail.innerHTML = Object.entries(DISCOVER_VIEWS)
+    .map(
+      ([key, view]) => `
+        <button
+          class="control-chip ${currentDiscoverView === key ? "active" : ""}"
+          data-discover-view="${key}"
+          type="button"
+        >
+          ${escapeHtml(view.label)}
+        </button>
+      `
+    )
+    .join("");
+
+  rail.querySelectorAll("[data-discover-view]").forEach((button) => {
+    button.onclick = () => {
+      setDiscoverView(button.dataset.discoverView);
+    };
+  });
+}
+
+function getDiscoverViewMeta(viewKey = currentDiscoverView) {
+  return DISCOVER_VIEWS[viewKey] || DISCOVER_VIEWS.opportunities;
+}
+
+function getEmergingMarkets(markets) {
+  const now = Date.now();
+
+  const scored = (Array.isArray(markets) ? markets : [])
+    .map((market) => {
+      const updatedTs = market.lastUpdated ? new Date(market.lastUpdated).getTime() : 0;
+      const hoursOld = updatedTs ? (now - updatedTs) / 3600000 : 9999;
+      const recencyScore = Math.max(0, 96 - hoursOld);
+      const lowerVolumeScore = Math.max(0, 200000 - (market.volume24hr || 0)) / 5000;
+      const lowerLiquidityScore = Math.max(0, 150000 - (market.liquidity || 0)) / 5000;
+      const confidenceScore = (market.confidenceScore || 0) / 10;
+
+      return {
+        ...market,
+        _emergingScore: recencyScore + lowerVolumeScore + lowerLiquidityScore + confidenceScore,
+      };
+    })
+    .filter((market) => market.lastUpdated || market.volume24hr || market.liquidity);
+
+  return scored.sort((a, b) => b._emergingScore - a._emergingScore).slice(0, 8);
+}
+
+function getDiscoverMarketsForCurrentView() {
+  const baseMarkets = getDiscoveryBaseMarkets();
+
+  switch (currentDiscoverView) {
+    case "movers":
+      return getCategoryFilteredMarkets(biggestMoversCache).slice(0, 8);
+    case "volume":
+      return [...baseMarkets]
+        .sort((a, b) => (b.volume24hr || 0) - (a.volume24hr || 0))
+        .slice(0, 8);
+    case "liquid":
+      return [...baseMarkets]
+        .sort((a, b) => (b.liquidity || 0) - (a.liquidity || 0))
+        .slice(0, 8);
+    case "new":
+      return getEmergingMarkets(baseMarkets);
+    case "opportunities":
+    default:
+      return [...baseMarkets]
+        .sort((a, b) => (b.confidenceScore || 0) - (a.confidenceScore || 0))
+        .slice(0, 8);
+  }
+}
+
+function getDiscoverFilteredCount() {
+  if (currentDiscoverView === "movers") {
+    return getCategoryFilteredMarkets(biggestMoversCache).length;
+  }
+  return getDiscoveryBaseMarkets().length;
+}
+
+function renderDiscoverPrimaryView() {
+  ensureHomepageStrategyLayer();
+  renderHomepageCategoryChipRail();
+  renderHomepageDiscoverViewRail();
+  updateHomepageLastRefreshedLabel();
+
+  const titleEl = document.getElementById("discoverPrimaryViewLabel");
+  const descriptionEl = document.getElementById("discoverPrimaryViewDescription");
+  const summaryEl = document.getElementById("discoverPrimaryViewSummary");
+  const resultsEl = document.getElementById("discoverPrimaryResults");
+
+  if (!titleEl || !descriptionEl || !summaryEl || !resultsEl) return;
+
+  const meta = getDiscoverViewMeta();
+  titleEl.textContent = meta.label;
+  descriptionEl.textContent = meta.description;
+
+  const totalCount = getDiscoverFilteredCount();
+  const categoryLabel =
+    activeHomepageCategory === "ALL"
+      ? "all categories"
+      : getCategoryOptionLabel(activeHomepageCategory);
+
+  summaryEl.textContent = `Showing ${Math.min(totalCount, 8)} of ${totalCount} markets from ${categoryLabel}. Click Preview BUY YES or Preview BUY NO to send a market into Trade.`;
+
+  if (currentDiscoverView === "movers" && !biggestMoversCache.length) {
+    resultsEl.innerHTML = `<p class="loading">Loading biggest movers...</p>`;
+    return;
   }
 
-  select.value = activeHomepageCategory;
+  const items = getDiscoverMarketsForCurrentView();
+
+  if (!Array.isArray(items) || items.length === 0) {
+    resultsEl.innerHTML = `<p class="empty">${meta.empty}</p>`;
+    return;
+  }
+
+  resultsEl.innerHTML = items
+    .map((item) => (meta.type === "mover" ? renderMoverCard(item) : renderHotCard(item)))
+    .join("");
+
+  bindTradeActionButtons();
+  applyTopLevelView();
+}
+
+function setDiscoverView(nextView) {
+  if (!DISCOVER_VIEWS[nextView]) return;
+  currentDiscoverView = nextView;
+  renderHomepageDiscoverViewRail();
+
+  if (nextView === "movers" && biggestMoversCache.length === 0) {
+    const resultsEl = document.getElementById("discoverPrimaryResults");
+    if (resultsEl) {
+      resultsEl.innerHTML = `<p class="loading">Loading biggest movers...</p>`;
+    }
+    loadBiggestMovers();
+    return;
+  }
+
+  renderDiscoverPrimaryView();
 }
 
 function ensureTopLevelNavStyles() {
@@ -203,6 +426,33 @@ function ensureTopLevelNavStyles() {
   document.head.appendChild(style);
 }
 
+function getWorkspaceTabsAnchorSection() {
+  const explicitSelectors = [
+    "#hero",
+    "#heroSection",
+    "#pageHero",
+    "#homeHero",
+    "#siteHero",
+    "#headerSection",
+    "#pageHeader",
+  ];
+
+  for (const selector of explicitSelectors) {
+    const element = document.querySelector(selector);
+    if (element) {
+      return element.closest("section") || element;
+    }
+  }
+
+  const firstMainSection =
+    document.querySelector("main > section") ||
+    document.querySelector("main section") ||
+    document.querySelector(".container > section") ||
+    document.querySelector("section");
+
+  return firstMainSection ? firstMainSection.closest("section") || firstMainSection : null;
+}
+
 function getClosestSectionByElementId(id) {
   const element = document.getElementById(id);
   return element ? element.closest("section") : null;
@@ -221,14 +471,15 @@ function uniqueSections(sections) {
   return result;
 }
 
+function hideLegacyDiscoverSections() {
+  ["alertsPanel", "topOpportunities", "biggestMovers", "hotMarkets"].forEach((id) => {
+    const section = getClosestSectionByElementId(id);
+    if (section) section.classList.add("pbp-tab-section-hidden");
+  });
+}
+
 function getManagedTopLevelSections() {
-  const discoverSections = uniqueSections([
-    document.getElementById("homepageStrategyLayer"),
-    getClosestSectionByElementId("alertsPanel"),
-    getClosestSectionByElementId("topOpportunities"),
-    getClosestSectionByElementId("biggestMovers"),
-    getClosestSectionByElementId("hotMarkets"),
-  ]);
+  const discoverSections = uniqueSections([document.getElementById("homepageStrategyLayer")]);
 
   const tradeSections = uniqueSections([
     getClosestSectionByElementId("tradeTicketPanel"),
@@ -282,6 +533,7 @@ function applyTopLevelView() {
     section.classList.toggle("pbp-tab-section-hidden", !shouldShow);
   });
 
+  hideLegacyDiscoverSections();
   updateTopLevelTabButtons();
 }
 
@@ -304,7 +556,10 @@ function ensureTopLevelTabs() {
   const firstManagedSection =
     groups.discover[0] || groups.trade[0] || groups.portfolio[0];
 
-  if (!firstManagedSection || !firstManagedSection.parentElement) return;
+  const preferredAnchorSection = getWorkspaceTabsAnchorSection();
+  const insertionAnchor = preferredAnchorSection || firstManagedSection;
+
+  if (!insertionAnchor?.parentElement) return;
 
   const tabsSection = document.createElement("section");
   tabsSection.id = "pbpTopLevelTabsSection";
@@ -314,7 +569,7 @@ function ensureTopLevelTabs() {
         <h3>Workspace</h3>
         <div class="alert-item">
           <div class="alert-message">Switch between discovery, trade flow, and portfolio views without scrolling through the full product stack.</div>
-          <div class="alert-time">Discovery opens by default so the product still leads with market scanning.</div>
+          <div class="alert-time">Discover opens by default so the product still leads with market scanning.</div>
         </div>
         <div class="pbp-top-tabs" role="tablist" aria-label="Top-level product views">
           <button id="pbpTabDiscoverBtn" class="pbp-top-tab-btn" role="tab" type="button">Discover</button>
@@ -325,7 +580,7 @@ function ensureTopLevelTabs() {
     </div>
   `;
 
-  firstManagedSection.parentElement.insertBefore(tabsSection, firstManagedSection);
+  insertionAnchor.insertAdjacentElement("afterend", tabsSection);
 
   const discoverBtn = document.getElementById("pbpTabDiscoverBtn");
   const tradeBtn = document.getElementById("pbpTabTradeBtn");
@@ -340,216 +595,120 @@ function ensureTopLevelTabs() {
 
 function ensureHomepageStrategyLayer() {
   if (document.getElementById("homepageStrategyLayer")) {
-    renderHomepageCategoryFilterOptions();
+    renderHomepageCategoryChipRail();
+    renderHomepageDiscoverViewRail();
     updateHomepageLastRefreshedLabel();
     bindHomepageStrategyLayerControls();
+    hideLegacyDiscoverSections();
     ensureTopLevelTabs();
     applyTopLevelView();
     return;
   }
 
-  const anchor = document.getElementById("topOpportunities") || document.getElementById("hotMarkets");
-  if (!anchor) return;
+  const tabsSection = document.getElementById("pbpTopLevelTabsSection");
+  const fallbackAnchor = getWorkspaceTabsAnchorSection();
+  const insertionAnchor = tabsSection || fallbackAnchor;
 
-  const anchorSection = anchor.closest("section") || anchor.parentElement;
+  if (!insertionAnchor) return;
+
   const strategySection = document.createElement("section");
   strategySection.id = "homepageStrategyLayer";
   strategySection.innerHTML = `
     <div class="market-grid">
-      <article class="market-card">
-        <h3>Homepage Strategy Layer</h3>
-        <div class="alert-item">
-          <div class="alert-message">Scan the board faster with ranked discovery views built from the normalized market feed.</div>
-          <div class="alert-time">Filter applies to Top Opportunities, Highest Volume, Most Liquid, New / Emerging Markets, and Hot Markets.</div>
+      <article class="market-card discover-front-door-card">
+        <h3>Start Here</h3>
+        <div class="alerts-list">
+          <div class="alert-item">
+            <div class="alert-message">Paid by Polymarket is a faster front door for scanning live prediction markets.</div>
+          </div>
+          <div class="alert-item">
+            <div class="alert-message">Pick a category, switch a view, and scan one board at a time.</div>
+          </div>
+          <div class="alert-item">
+            <div class="alert-message">Click Preview BUY YES or Preview BUY NO on any market worth a closer look.</div>
+          </div>
         </div>
-        <div style="margin-top: 14px; display:flex; gap:12px; flex-wrap:wrap; align-items:end;">
-          <label style="display:flex; flex-direction:column; gap:6px; min-width:220px;">
-            <span class="meta-label">Category Filter</span>
-            <select id="homepageCategoryFilter">
-              <option value="ALL">All Categories</option>
-            </select>
-          </label>
-          <button id="refreshHomepageStrategyLayer" type="button">Refresh Discovery</button>
-          <span id="homepageLastRefreshed" class="market-small">Last refreshed: —</span>
+      </article>
+
+      <article class="market-card discover-control-card">
+        <h3>Discover Markets</h3>
+        <div class="discover-control-stack">
+          <div>
+            <div class="rail-label">Categories</div>
+            <div id="homepageCategoryChipRail" class="control-chip-rail"></div>
+          </div>
+
+          <div>
+            <div class="rail-label">Views</div>
+            <div id="homepageDiscoverViewRail" class="control-chip-rail"></div>
+          </div>
+
+          <div class="discover-utility-row">
+            <button id="refreshHomepageStrategyLayer" type="button">Refresh Discovery</button>
+            <span id="homepageLastRefreshed" class="market-small">Last refreshed: —</span>
+          </div>
+
+          <div class="discover-inline-notes">
+            <div class="alert-time">Start with Top Opportunities for a quick scan. Switch to Movers, Volume, Liquid, or New when you want a different lens.</div>
+          </div>
         </div>
       </article>
     </div>
 
-    <div class="market-grid" style="margin-top: 18px;">
-      <div class="market-card">
-        <h3>Highest Volume</h3>
-        <div class="alert-time">Markets attracting the most trading activity right now.</div>
-        <div id="highestVolumeMarkets" class="market-grid" style="margin-top: 14px;"></div>
-      </div>
+    <div class="market-grid discover-board-shell" style="margin-top: 18px;">
+      <article class="market-card">
+        <div class="discover-results-header">
+          <div>
+            <h3 id="discoverPrimaryViewLabel">Top Opportunities</h3>
+            <div id="discoverPrimaryViewDescription" class="alert-time">Best blend of confidence, liquidity, and current activity.</div>
+          </div>
+        </div>
+        <div id="discoverPrimaryViewSummary" class="discover-primary-summary"></div>
+        <div id="discoverPrimaryResults" class="market-grid discover-results-grid" style="margin-top: 14px;"></div>
+      </article>
     </div>
 
-    <div class="market-grid" style="margin-top: 18px;">
-      <div class="market-card">
-        <h3>Most Liquid</h3>
-        <div class="alert-time">Markets with the deepest liquidity for cleaner entry and exit.</div>
-        <div id="mostLiquidMarkets" class="market-grid" style="margin-top: 14px;"></div>
-      </div>
-    </div>
-
-    <div class="market-grid" style="margin-top: 18px;">
-      <div class="market-card">
-        <h3>New / Emerging Markets</h3>
-        <div class="alert-time">Recently updated markets that are starting to build activity.</div>
-        <div id="emergingMarkets" class="market-grid" style="margin-top: 14px;"></div>
-      </div>
+    <div class="market-grid discover-notes-shell" style="margin-top: 18px;">
+      <article class="market-card">
+        <h3>Live Feed Notes</h3>
+        <div class="alert-time">Small live notes from the current market feed. The main scanning surface stays above.</div>
+        <div id="extraDiscoveryAlerts" class="alerts-list" style="margin-top: 14px;"></div>
+      </article>
     </div>
   `;
 
-  if (anchorSection?.parentElement) {
-    anchorSection.insertAdjacentElement("afterend", strategySection);
-  } else {
-    anchor.insertAdjacentElement("afterend", strategySection);
-  }
+  insertionAnchor.insertAdjacentElement("afterend", strategySection);
 
-  renderHomepageCategoryFilterOptions();
+  renderHomepageCategoryChipRail();
+  renderHomepageDiscoverViewRail();
   updateHomepageLastRefreshedLabel();
   bindHomepageStrategyLayerControls();
+  hideLegacyDiscoverSections();
   ensureTopLevelTabs();
   applyTopLevelView();
 }
 
 function bindHomepageStrategyLayerControls() {
   const refreshBtn = document.getElementById("refreshHomepageStrategyLayer");
-  const categorySelect = document.getElementById("homepageCategoryFilter");
-
   if (refreshBtn) {
     refreshBtn.onclick = () => loadHomepageDiscoveryData(true);
   }
-
-  if (categorySelect) {
-    categorySelect.onchange = (event) => {
-      activeHomepageCategory = event.target.value || "ALL";
-      renderTopOpportunitiesFromCache();
-      renderHomepageDiscoveryFromCache();
-      applyHotFilters();
-    };
-  }
-}
-
-function renderDiscoveryMarketCollection(containerId, markets, emptyMessage) {
-  const container = document.getElementById(containerId);
-  if (!container) return;
-
-  if (!Array.isArray(markets) || markets.length === 0) {
-    container.innerHTML = `<p class="empty">${emptyMessage}</p>`;
-    return;
-  }
-
-  container.innerHTML = markets.map(renderHotCard).join("");
 }
 
 function setHomepageDiscoveryLoadingState() {
-  const highestVolume = document.getElementById("highestVolumeMarkets");
-  const mostLiquid = document.getElementById("mostLiquidMarkets");
-  const emerging = document.getElementById("emergingMarkets");
-
-  if (highestVolume) highestVolume.innerHTML = `<p class="loading">Loading highest volume markets...</p>`;
-  if (mostLiquid) mostLiquid.innerHTML = `<p class="loading">Loading liquid markets...</p>`;
-  if (emerging) emerging.innerHTML = `<p class="loading">Loading emerging markets...</p>`;
-}
-
-function getEmergingMarkets(markets) {
-  const now = Date.now();
-
-  const scored = (Array.isArray(markets) ? markets : [])
-    .map((market) => {
-      const updatedTs = market.lastUpdated ? new Date(market.lastUpdated).getTime() : 0;
-      const hoursOld = updatedTs ? (now - updatedTs) / 3600000 : 9999;
-      const recencyScore = Math.max(0, 96 - hoursOld);
-      const lowerVolumeScore = Math.max(0, 200000 - (market.volume24hr || 0)) / 5000;
-      const lowerLiquidityScore = Math.max(0, 150000 - (market.liquidity || 0)) / 5000;
-      const confidenceScore = (market.confidenceScore || 0) / 10;
-
-      return {
-        ...market,
-        _emergingScore: recencyScore + lowerVolumeScore + lowerLiquidityScore + confidenceScore,
-      };
-    })
-    .filter((market) => market.lastUpdated || market.volume24hr || market.liquidity);
-
-  return scored.sort((a, b) => b._emergingScore - a._emergingScore).slice(0, 4);
-}
-
-function renderHomepageDiscoveryFromCache() {
-  ensureHomepageStrategyLayer();
-  renderHomepageCategoryFilterOptions();
-  updateHomepageLastRefreshedLabel();
-
-  const baseMarkets = getDiscoveryBaseMarkets();
-  const highestVolume = [...baseMarkets]
-    .sort((a, b) => (b.volume24hr || 0) - (a.volume24hr || 0))
-    .slice(0, 4);
-
-  const mostLiquid = [...baseMarkets]
-    .sort((a, b) => (b.liquidity || 0) - (a.liquidity || 0))
-    .slice(0, 4);
-
-  const emergingMarkets = getEmergingMarkets(baseMarkets);
-
-  const selectedCategoryEntry = getAvailableHomepageCategories(liveMarketsCache).find(
-    ([value]) => value === activeHomepageCategory
-  );
-
-  const categoryLabel =
-    activeHomepageCategory === "ALL"
-      ? ""
-      : ` in ${getCategoryDisplayLabel(selectedCategoryEntry?.[1] || "")}`;
-
-  renderDiscoveryMarketCollection(
-    "highestVolumeMarkets",
-    highestVolume,
-    `No high-volume markets found${categoryLabel}.`
-  );
-  renderDiscoveryMarketCollection(
-    "mostLiquidMarkets",
-    mostLiquid,
-    `No liquid markets found${categoryLabel}.`
-  );
-  renderDiscoveryMarketCollection(
-    "emergingMarkets",
-    emergingMarkets,
-    `No emerging markets found${categoryLabel}.`
-  );
-
-  bindTradeActionButtons();
-  applyTopLevelView();
-}
-
-function renderTopOpportunitiesFromCache() {
-  const container = document.getElementById("topOpportunities");
+  const container = document.getElementById("discoverPrimaryResults");
   if (!container) return;
 
-  const ranked = getDiscoveryBaseMarkets()
-    .slice()
-    .sort((a, b) => (b.confidenceScore || 0) - (a.confidenceScore || 0))
-    .slice(0, 6);
+  const loadingLabel =
+    currentDiscoverView === "movers"
+      ? "Loading biggest movers..."
+      : "Loading discovery view...";
 
-  if (ranked.length === 0) {
-    container.innerHTML = `<p class="empty">No opportunities found for the current filter.</p>`;
-    return;
-  }
-
-  container.innerHTML = ranked.map(renderHotCard).join("");
-  bindTradeActionButtons();
+  container.innerHTML = `<p class="loading">${loadingLabel}</p>`;
 }
 
 async function loadHomepageDiscoveryData() {
-  const topContainer = document.getElementById("topOpportunities");
-  const hotContainer = document.getElementById("hotMarkets");
-
   ensureHomepageStrategyLayer();
-
-  if (topContainer) {
-    topContainer.innerHTML = `<p class="loading">Loading opportunities...</p>`;
-  }
-  if (hotContainer) {
-    hotContainer.innerHTML = `<p class="loading">Loading hot markets...</p>`;
-  }
   setHomepageDiscoveryLoadingState();
 
   try {
@@ -564,35 +723,21 @@ async function loadHomepageDiscoveryData() {
     hotMarketsCache = data.markets;
     lastHomepageDiscoveryRefreshAt = new Date().toISOString();
 
-    renderTopOpportunitiesFromCache();
-    renderHomepageDiscoveryFromCache();
-    applyHotFilters();
+    renderHomepageCategoryChipRail();
+
+    if (currentDiscoverView === "movers") {
+      await loadBiggestMovers();
+    } else {
+      renderDiscoverPrimaryView();
+    }
+
     applyTopLevelView();
   } catch (err) {
     console.error("Homepage discovery load error:", err);
-
-    if (topContainer) {
-      topContainer.innerHTML = `<p class="empty">Failed to load opportunities.</p>`;
+    const resultsEl = document.getElementById("discoverPrimaryResults");
+    if (resultsEl) {
+      resultsEl.innerHTML = `<p class="empty">Failed to load discovery markets.</p>`;
     }
-    if (hotContainer) {
-      hotContainer.innerHTML = `<p class="empty">Failed to load hot markets.</p>`;
-    }
-
-    renderDiscoveryMarketCollection(
-      "highestVolumeMarkets",
-      [],
-      "Failed to load highest volume markets."
-    );
-    renderDiscoveryMarketCollection(
-      "mostLiquidMarkets",
-      [],
-      "Failed to load liquid markets."
-    );
-    renderDiscoveryMarketCollection(
-      "emergingMarkets",
-      [],
-      "Failed to load emerging markets."
-    );
   }
 }
 
@@ -789,9 +934,11 @@ function clearBrowserDemoState() {
 function resetFrontendDemoUiState() {
   hotMarketsCache = [];
   liveMarketsCache = [];
+  biggestMoversCache = [];
   lastHomepageDiscoveryRefreshAt = "";
   activeHomepageCategory = "ALL";
   currentTopLevelView = "discover";
+  currentDiscoverView = "opportunities";
   currentTradeTicket = null;
   currentLivePreparation = null;
   currentClientSignedOrder = null;
@@ -1918,32 +2065,17 @@ function renderMoverCard(market) {
         <span class="market-small">24h Vol: ${formatMoney(market.volume24hr)}</span>
         <a class="market-link" href="${market.url}" target="_blank" rel="noopener noreferrer">Open Market</a>
       </div>
+
+      <div class="market-footer" style="margin-top: 12px;">
+        <button class="trade-action-btn" data-market-id="${market.id}" data-side="BUY YES">Preview BUY YES</button>
+        <button class="trade-action-btn" data-market-id="${market.id}" data-side="BUY NO">Preview BUY NO</button>
+      </div>
     </article>
   `;
 }
 
 function applyHotFilters() {
-  const container = document.getElementById("hotMarkets");
-  if (!container) return;
-
-  const minVolume = Number(document.getElementById("minVolume")?.value) || 0;
-  const minPrice = Number(document.getElementById("minPrice")?.value) || 0;
-  const maxPrice = Number(document.getElementById("maxPrice")?.value) || 1;
-
-  const filtered = getCategoryFilteredMarkets(hotMarketsCache).filter(
-    (market) =>
-      market.volume24hr >= minVolume &&
-      market.yesPriceLive >= minPrice &&
-      market.yesPriceLive <= maxPrice
-  );
-
-  if (filtered.length === 0) {
-    container.innerHTML = `<p class="empty">No markets match your filters.</p>`;
-    return;
-  }
-
-  container.innerHTML = filtered.map(renderHotCard).join("");
-  bindTradeActionButtons();
+  renderDiscoverPrimaryView();
 }
 
 async function postJson(url, body) {
@@ -2336,25 +2468,11 @@ function bindLiveHandoffControls() {
     }
   });
 
-  if (fillAddressBtn) {
-    fillAddressBtn.onclick = fillUserAuthAddressFromConnectedWallet;
-  }
-
-  if (clearFieldsBtn) {
-    clearFieldsBtn.onclick = handleClearUserAuthFields;
-  }
-
-  if (applyAuthJsonBtn) {
-    applyAuthJsonBtn.onclick = handleApplyUserAuthJsonToFields;
-  }
-
-  if (signBtn && !signBtn.disabled) {
-    signBtn.onclick = handleSignPreparedOrder;
-  }
-
-  if (submitBtn && !submitBtn.disabled) {
-    submitBtn.onclick = handleSubmitSignedOrderHandoff;
-  }
+  if (fillAddressBtn) fillAddressBtn.onclick = fillUserAuthAddressFromConnectedWallet;
+  if (clearFieldsBtn) clearFieldsBtn.onclick = handleClearUserAuthFields;
+  if (applyAuthJsonBtn) applyAuthJsonBtn.onclick = handleApplyUserAuthJsonToFields;
+  if (signBtn && !signBtn.disabled) signBtn.onclick = handleSignPreparedOrder;
+  if (submitBtn && !submitBtn.disabled) submitBtn.onclick = handleSubmitSignedOrderHandoff;
 
   if (signedOrderInput && currentClientSignedOrder) {
     signedOrderInput.value = stringifyJsonForUi(currentClientSignedOrder);
@@ -2377,11 +2495,29 @@ function bindAccountControls() {
   if (tradeModeSelect) tradeModeSelect.onchange = () => renderTradeTicketPanel();
 }
 
-async function loadAlerts() {
-  const container = document.getElementById("alertsPanel");
-  if (!container) return;
+function getAlertsRenderTargets() {
+  const targets = [];
+  const compactTarget = document.getElementById("extraDiscoveryAlerts");
+  const legacyTarget = document.getElementById("alertsPanel");
 
-  container.innerHTML = `<p class="loading">Loading alerts...</p>`;
+  if (compactTarget) targets.push(compactTarget);
+  if (legacyTarget && legacyTarget !== compactTarget) targets.push(legacyTarget);
+
+  return targets;
+}
+
+function setAlertsRenderTargets(html) {
+  const targets = getAlertsRenderTargets();
+  targets.forEach((target) => {
+    target.innerHTML = html;
+  });
+}
+
+async function loadAlerts() {
+  const targets = getAlertsRenderTargets();
+  if (!targets.length) return;
+
+  setAlertsRenderTargets(`<p class="loading">Loading alerts...</p>`);
 
   try {
     const res = await fetch("/api/alerts");
@@ -2390,14 +2526,14 @@ async function loadAlerts() {
     if (!data.ok || !Array.isArray(data.alerts)) throw new Error("Invalid alerts response");
 
     if (data.alerts.length === 0) {
-      container.innerHTML = `<p class="empty">No priority alerts right now.</p>`;
+      setAlertsRenderTargets(`<p class="empty">No priority alerts right now.</p>`);
       return;
     }
 
-    container.innerHTML = data.alerts.map(renderAlertItem).join("");
+    setAlertsRenderTargets(data.alerts.map(renderAlertItem).join(""));
   } catch (err) {
     console.error("Alerts load error:", err);
-    container.innerHTML = `<p class="empty">Failed to load alerts.</p>`;
+    setAlertsRenderTargets(`<p class="empty">Failed to load alerts.</p>`);
   }
 }
 
@@ -2517,26 +2653,17 @@ async function loadPaperPortfolio() {
 }
 
 async function loadTopOpportunities() {
-  if (!liveMarketsCache.length) {
-    await loadHomepageDiscoveryData();
-    return;
-  }
-  renderTopOpportunitiesFromCache();
+  renderDiscoverPrimaryView();
 }
 
 async function loadHotMarkets() {
-  if (!liveMarketsCache.length) {
-    await loadHomepageDiscoveryData();
-    return;
-  }
-  applyHotFilters();
+  renderDiscoverPrimaryView();
 }
 
 async function loadBiggestMovers() {
-  const container = document.getElementById("biggestMovers");
-  if (!container) return;
-
-  container.innerHTML = `<p class="loading">Loading biggest movers...</p>`;
+  if (currentDiscoverView === "movers") {
+    setHomepageDiscoveryLoadingState();
+  }
 
   try {
     const res = await fetch("/api/biggestMovers");
@@ -2546,15 +2673,17 @@ async function loadBiggestMovers() {
       throw new Error("Invalid biggest movers response");
     }
 
-    if (data.markets.length === 0) {
-      container.innerHTML = `<p class="empty">Mover data is warming up. Check back shortly.</p>`;
-      return;
-    }
-
-    container.innerHTML = data.markets.map(renderMoverCard).join("");
+    biggestMoversCache = data.markets;
+    renderDiscoverPrimaryView();
   } catch (err) {
     console.error("Biggest movers load error:", err);
-    container.innerHTML = `<p class="empty">Failed to load biggest movers.</p>`;
+    biggestMoversCache = [];
+    if (currentDiscoverView === "movers") {
+      const resultsEl = document.getElementById("discoverPrimaryResults");
+      if (resultsEl) {
+        resultsEl.innerHTML = `<p class="empty">Failed to load biggest movers.</p>`;
+      }
+    }
   }
 }
 
@@ -2571,6 +2700,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   ensureHomepageStrategyLayer();
   ensureTopLevelTabs();
+  hideLegacyDiscoverSections();
   setTopLevelView("discover");
 
   if (refreshAlerts) refreshAlerts.addEventListener("click", loadAlerts);

@@ -1,272 +1,294 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Paid by Polymarket</title>
-  <link rel="stylesheet" href="/style.css" />
-</head>
-<body>
-  <header class="site-header">
-    <div class="wrap">
-      <h1>Paid by Polymarket</h1>
-      <p class="subtitle">Signal engine, performance tracker, paper portfolio dashboard, and builder-ready execution shell</p>
-    </div>
-  </header>
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0"
+    />
+    <title>Paid by Polymarket OS</title>
+    <meta
+      name="description"
+      content="Paid by Polymarket OS is a live market-discovery and execution-prep product for scanning prediction markets faster."
+    />
+    <link rel="stylesheet" href="/style.css?v=ftu-clarity-pass-2" />
+  </head>
+  <body>
+    <header id="hero">
+      <section>
+        <div class="market-grid">
+          <article class="market-card">
+            <p class="market-small">Paid by Polymarket OS</p>
+            <h1>Scan live prediction markets faster.</h1>
+            <p class="alert-time" style="max-width: 760px; margin-top: 10px;">
+              A builder-demo product for finding high-signal markets, previewing
+              trade ideas, and moving from discovery to execution prep in one place.
+            </p>
+          </article>
 
-  <main class="wrap">
-    <section class="hero">
-      <div class="hero-card">
-        <h2>📊 Performance Engine</h2>
-        <p>Track win rate, expectancy, signal quality, and paper trade performance across BUY YES, BUY NO, and WATCH calls.</p>
-      </div>
-      <div class="hero-card">
-        <h2>🔐 Live Mode Shell</h2>
-        <p>Manage wallet/account readiness, toggle live mode, and prepare the app for future Polymarket builder execution routing.</p>
-      </div>
-    </section>
-
-    <section class="panel builder-overview-panel">
-      <div class="panel-header">
-        <h2>🚀 Builder Overview</h2>
-      </div>
-
-      <div class="builder-overview-grid">
-        <article class="builder-card">
-          <span class="builder-kicker">Product</span>
-          <h3>What is Paid by Polymarket?</h3>
-          <p>
-            Paid by Polymarket is a signal-driven prediction market terminal built to help users discover high-conviction
-            opportunities, paper trade them, evaluate performance, and eventually route live execution through a builder-ready workflow.
-          </p>
-        </article>
-
-        <article class="builder-card">
-          <span class="builder-kicker">User Problem</span>
-          <h3>Why would traders use it?</h3>
-          <p>
-            Polymarket users often face too many markets, unclear prioritization, and little structure around decision quality.
-            This dashboard turns noisy market discovery into a repeatable workflow: rank, analyze, simulate, track, and prepare to execute.
-          </p>
-        </article>
-
-        <article class="builder-card">
-          <span class="builder-kicker">Polymarket Value</span>
-          <h3>Why this helps the ecosystem</h3>
-          <p>
-            The product is designed to increase useful trading activity by helping users surface actionable markets faster,
-            improve confidence before executing, and move from paper mode into live builder-routed execution as the app matures.
-          </p>
-        </article>
-
-        <article class="builder-card">
-          <span class="builder-kicker">Monetization</span>
-          <h3>How this can become a business</h3>
-          <p>
-            Paid by Polymarket can evolve into a premium signal terminal with subscription tiers, advanced alerts,
-            portfolio analytics, execution tooling, and later a builder-routed live trading experience.
-          </p>
-        </article>
-      </div>
-
-      <div class="builder-feature-strip">
-        <div class="builder-pill">Signals</div>
-        <div class="builder-pill">Confidence Scoring</div>
-        <div class="builder-pill">Alerts</div>
-        <div class="builder-pill">Paper Portfolio</div>
-        <div class="builder-pill">Performance Dashboard</div>
-        <div class="builder-pill">Execution Tickets</div>
-        <div class="builder-pill">Live Mode Shell</div>
-        <div class="builder-pill">Builder-Ready Workflow</div>
-      </div>
-
-      <div class="builder-roadmap">
-        <article class="builder-roadmap-card">
-          <h3>Current Build</h3>
-          <ul>
-            <li>Signal generation and ranking</li>
-            <li>Paper trading and bankroll controls</li>
-            <li>Performance and signal tracking</li>
-            <li>Execution-ready ticket flow</li>
-            <li>Account and live-mode shell</li>
-          </ul>
-        </article>
-
-        <article class="builder-roadmap-card">
-          <h3>Next Builder Steps</h3>
-          <ul>
-            <li>Wallet connection shell upgrade</li>
-            <li>Builder attribution integration</li>
-            <li>Order signing flow</li>
-            <li>Relayer-connected live execution</li>
-            <li>Submission/demo polish</li>
-          </ul>
-        </article>
-
-        <article class="builder-roadmap-card">
-          <h3>Submission Positioning</h3>
-          <ul>
-            <li>Prediction market intelligence terminal</li>
-            <li>Decision support + execution preparation</li>
-            <li>Paper-to-live workflow for Polymarket users</li>
-            <li>Builder-ready trading assistant</li>
-          </ul>
-        </article>
-      </div>
-    </section>
-
-    <section class="panel">
-      <div class="panel-header">
-        <h2>⭐ Top Opportunities</h2>
-        <button id="refreshOpportunities">Refresh</button>
-      </div>
-      <div id="topOpportunities" class="market-grid">
-        <p class="loading">Loading opportunities...</p>
-      </div>
-    </section>
-
-    <section class="panel">
-      <div class="panel-header">
-        <h2>📈 Biggest Movers</h2>
-        <button id="refreshMovers">Refresh</button>
-      </div>
-      <div id="biggestMovers" class="market-grid">
-        <p class="loading">Loading biggest movers...</p>
-      </div>
-    </section>
-
-    <section class="panel">
-      <div class="panel-header">
-        <h2>🔥 Hot Markets</h2>
-        <div class="filters">
-          <input id="minVolume" type="number" placeholder="Min Vol ($)" />
-          <input id="minPrice" type="number" step="0.01" placeholder="Min Price (0.1)" />
-          <input id="maxPrice" type="number" step="0.01" placeholder="Max Price (0.9)" />
-          <button id="applyFilters">Apply</button>
-          <button id="refreshHot">Refresh</button>
+          <article class="market-card">
+            <h3>How it works</h3>
+            <div class="alerts-list">
+              <div class="alert-item">
+                <div class="alert-message">1. Discover</div>
+                <div class="alert-time">
+                  Scan one live discovery board at a time.
+                </div>
+              </div>
+              <div class="alert-item">
+                <div class="alert-message">2. Preview</div>
+                <div class="alert-time">
+                  Send a market into the trade ticket with one click.
+                </div>
+              </div>
+              <div class="alert-item">
+                <div class="alert-message">3. Prepare</div>
+                <div class="alert-time">
+                  Move into paper execution or guarded live prep.
+                </div>
+              </div>
+            </div>
+          </article>
         </div>
-      </div>
-      <div id="hotMarkets" class="market-grid">
-        <p class="loading">Loading hot markets...</p>
-      </div>
-    </section>
+      </section>
+    </header>
 
-    <section class="panel">
-      <div class="panel-header">
-        <h2>🧾 Trade Ticket</h2>
-      </div>
+    <main>
+      <section>
+        <div class="market-grid">
+          <article class="market-card">
+            <h3>Quick Filters</h3>
+            <div class="market-meta">
+              <div class="meta-box">
+                <span class="meta-label">Trade Mode</span>
+                <select id="tradeModeSelect">
+                  <option value="PAPER">PAPER</option>
+                  <option value="LIVE">LIVE</option>
+                </select>
+              </div>
 
-      <div class="market-grid">
-        <article class="market-card">
-          <h3>Ticket Settings</h3>
-          <div class="market-meta">
-            <div class="meta-box">
-              <span class="meta-label">Trade Mode</span>
-              <select id="tradeModeSelect">
-                <option value="PAPER">PAPER</option>
-                <option value="LIVE">LIVE</option>
-              </select>
+              <div class="meta-box">
+                <span class="meta-label">Ticket Size ($)</span>
+                <input
+                  id="tradeTicketSize"
+                  type="number"
+                  min="1"
+                  step="1"
+                  placeholder="50"
+                />
+              </div>
+
+              <div class="meta-box">
+                <span class="meta-label">Min 24h Volume</span>
+                <input
+                  id="minVolume"
+                  type="number"
+                  min="0"
+                  step="1000"
+                  placeholder="Optional"
+                />
+              </div>
+
+              <div class="meta-box">
+                <span class="meta-label">Min Yes Price</span>
+                <input
+                  id="minPrice"
+                  type="number"
+                  min="0"
+                  max="1"
+                  step="0.01"
+                  placeholder="0.10"
+                />
+              </div>
+
+              <div class="meta-box">
+                <span class="meta-label">Max Yes Price</span>
+                <input
+                  id="maxPrice"
+                  type="number"
+                  min="0"
+                  max="1"
+                  step="0.01"
+                  placeholder="0.90"
+                />
+              </div>
+
+              <div class="meta-box">
+                <span class="meta-label">Apply</span>
+                <button id="applyFilters" type="button">Apply Filters</button>
+              </div>
             </div>
+          </article>
+        </div>
+      </section>
 
-            <div class="meta-box">
-              <span class="meta-label">Trade Size ($)</span>
-              <input id="tradeTicketSize" type="number" min="1" step="1" placeholder="50" />
+      <section>
+        <div id="alertsPanel" class="alerts-list">
+          <p class="loading">Loading alerts...</p>
+        </div>
+        <div class="market-footer" style="margin-top: 12px;">
+          <button id="refreshAlerts" type="button">Refresh Alerts</button>
+        </div>
+      </section>
+
+      <section>
+        <div id="topOpportunities" class="market-grid">
+          <p class="loading">Loading top opportunities...</p>
+        </div>
+        <div class="market-footer" style="margin-top: 12px;">
+          <button id="refreshOpportunities" type="button">
+            Refresh Top Opportunities
+          </button>
+        </div>
+      </section>
+
+      <section>
+        <div id="biggestMovers" class="market-grid">
+          <p class="loading">Loading biggest movers...</p>
+        </div>
+        <div class="market-footer" style="margin-top: 12px;">
+          <button id="refreshMovers" type="button">Refresh Biggest Movers</button>
+        </div>
+      </section>
+
+      <section>
+        <div id="hotMarkets" class="market-grid">
+          <p class="loading">Loading hot markets...</p>
+        </div>
+        <div class="market-footer" style="margin-top: 12px;">
+          <button id="refreshHot" type="button">Refresh Hot Markets</button>
+        </div>
+      </section>
+
+      <section>
+        <div class="market-grid">
+          <article class="market-card">
+            <h2>Trade Ticket</h2>
+            <div id="tradeTicketPanel">
+              <p class="empty">No trade ticket selected yet.</p>
             </div>
-          </div>
-        </article>
-      </div>
+          </article>
+        </div>
+      </section>
 
-      <div id="tradeTicketPanel" style="margin-top: 18px;">
-        <p class="empty">No trade ticket selected yet.</p>
-      </div>
-    </section>
+      <section>
+        <div class="market-grid">
+          <article class="market-card">
+            <h2>Execution Prep</h2>
+            <div id="tradeExecutionPanel">
+              <p class="empty">No execution prep run yet.</p>
+            </div>
+          </article>
+        </div>
+      </section>
 
-    <section class="panel">
-      <div class="panel-header">
-        <h2>🚀 Execution Prep</h2>
-      </div>
-      <div id="tradeExecutionPanel" class="alerts-list">
-        <p class="empty">No execution prep run yet.</p>
-      </div>
-    </section>
+      <section>
+        <div class="market-grid">
+          <article class="market-card">
+            <div class="market-footer" style="margin-top: 0;">
+              <h2 style="margin: 0;">Account &amp; Live Mode</h2>
+              <button id="refreshAccount" type="button">Refresh Account</button>
+            </div>
+            <div id="accountStatePanel" style="margin-top: 14px;">
+              <p class="loading">Loading account state...</p>
+            </div>
+          </article>
+        </div>
+      </section>
 
-    <section class="panel">
-      <div class="panel-header">
-        <h2>📊 Performance Dashboard</h2>
-        <button id="refreshPerformance">Refresh</button>
-      </div>
-      <div id="performanceStatsPanel">
-        <p class="loading">Loading performance stats...</p>
-      </div>
-    </section>
+      <section>
+        <div class="market-grid">
+          <article class="market-card">
+            <h2>Account Controls</h2>
+            <div id="accountControlsPanel">
+              <p class="loading">Loading wallet connection...</p>
+            </div>
+          </article>
+        </div>
+      </section>
 
-    <section class="panel">
-      <div class="panel-header">
-        <h2>💼 Paper Portfolio</h2>
-        <button id="refreshPaperPortfolio">Refresh</button>
-      </div>
-      <div id="paperPortfolioStatsPanel">
-        <p class="loading">Loading paper portfolio...</p>
-      </div>
-    </section>
+      <section>
+        <div class="market-grid">
+          <article class="market-card">
+            <div class="market-footer" style="margin-top: 0;">
+              <h2 style="margin: 0;">Paper Portfolio</h2>
+              <button id="refreshPaperPortfolio" type="button">
+                Refresh Portfolio
+              </button>
+            </div>
+            <div id="paperPortfolioStatsPanel" style="margin-top: 14px;">
+              <p class="loading">Loading paper portfolio...</p>
+            </div>
+          </article>
+        </div>
+      </section>
 
-    <section class="panel">
-      <div class="panel-header">
-        <h2>📈 Signal Tracking</h2>
-        <button id="refreshSignals">Refresh</button>
-      </div>
-      <div id="signalLogPanel" class="alerts-list">
-        <p class="loading">Loading tracked signals...</p>
-      </div>
-    </section>
+      <section>
+        <div class="market-grid">
+          <article class="market-card">
+            <h2>Portfolio Controls</h2>
+            <div id="paperPortfolioControlsPanel">
+              <p class="loading">Loading controls...</p>
+            </div>
+          </article>
+        </div>
+      </section>
 
-    <section class="panel">
-      <div class="panel-header">
-        <h2>🟢 Open Positions</h2>
-      </div>
-      <div id="openPositionsPanel" class="alerts-list">
-        <p class="loading">Loading open positions...</p>
-      </div>
-    </section>
+      <section>
+        <div class="market-grid">
+          <article class="market-card">
+            <div class="market-footer" style="margin-top: 0;">
+              <h2 style="margin: 0;">Performance Dashboard</h2>
+              <button id="refreshPerformance" type="button">
+                Refresh Performance
+              </button>
+            </div>
+            <div id="performanceStatsPanel" style="margin-top: 14px;">
+              <p class="loading">Loading performance stats...</p>
+            </div>
+          </article>
+        </div>
+      </section>
 
-    <section class="panel">
-      <div class="panel-header">
-        <h2>🔒 Closed Positions</h2>
-      </div>
-      <div id="closedPositionsPanel" class="alerts-list">
-        <p class="loading">Loading closed positions...</p>
-      </div>
-    </section>
+      <section>
+        <div class="market-grid">
+          <article class="market-card">
+            <div class="market-footer" style="margin-top: 0;">
+              <h2 style="margin: 0;">Signal Tracking</h2>
+              <button id="refreshSignals" type="button">
+                Refresh Signals
+              </button>
+            </div>
+            <div id="signalLogPanel" class="alerts-list" style="margin-top: 14px;">
+              <p class="loading">Loading tracked signals...</p>
+            </div>
+          </article>
+        </div>
+      </section>
 
-    <section class="panel">
-      <div class="panel-header">
-        <h2>🔐 Account &amp; Live Mode</h2>
-        <button id="refreshAccount">Refresh</button>
-      </div>
-      <div id="accountStatePanel">
-        <p class="loading">Loading account state...</p>
-      </div>
-    </section>
+      <section>
+        <div class="market-grid">
+          <article class="market-card">
+            <h2>Open Positions</h2>
+            <div id="openPositionsPanel" class="alerts-list">
+              <p class="loading">Loading open positions...</p>
+            </div>
+          </article>
+        </div>
+      </section>
 
-    <section class="panel dev-tools-panel">
-      <div class="panel-header">
-        <h2>⚙️ Account Controls</h2>
-      </div>
-      <div id="accountControlsPanel">
-        <p class="loading">Loading account controls...</p>
-      </div>
-    </section>
+      <section>
+        <div class="market-grid">
+          <article class="market-card">
+            <h2>Closed Positions</h2>
+            <div id="closedPositionsPanel" class="alerts-list">
+              <p class="loading">Loading closed positions...</p>
+            </div>
+          </article>
+        </div>
+      </section>
+    </main>
 
-    <section class="panel dev-tools-panel">
-      <div class="panel-header">
-        <h2>🎛 Portfolio Controls</h2>
-      </div>
-      <div id="paperPortfolioControlsPanel">
-        <p class="loading">Loading controls...</p>
-      </div>
-    </section>
-  </main>
-
-  <script src="/app.js"></script>
-</body>
+    <script src="/app.js?v=ftu-clarity-pass-2" type="module"></script>
+  </body>
 </html>
