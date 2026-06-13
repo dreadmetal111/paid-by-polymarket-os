@@ -1,0 +1,24 @@
+[Unit]
+Description=Paid by Polymarket Alert Worker
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=YOUR_UBUNTU_USERNAME
+Group=YOUR_UBUNTU_USERNAME
+WorkingDirectory=/home/YOUR_UBUNTU_USERNAME/projects/automation/pbp-alert-worker
+EnvironmentFile=/home/YOUR_UBUNTU_USERNAME/projects/automation/pbp-alert-worker/alert-worker.env
+ExecStart=/home/YOUR_UBUNTU_USERNAME/projects/automation/pbp-alert-worker/.venv/bin/python /home/YOUR_UBUNTU_USERNAME/projects/automation/pbp-alert-worker/pbp_alert_worker.py
+Restart=always
+RestartSec=10
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=false
+ReadWritePaths=/home/YOUR_UBUNTU_USERNAME/projects/automation/pbp-alert-worker
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

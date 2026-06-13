@@ -1,6 +1,7 @@
 const POLYMARKET_CLOB_HOST = "https://clob.polymarket.com";
 const POLYMARKET_CHAIN_ID = 137;
 const POLYGON_HEX_CHAIN_ID = "0x89";
+const PBP_ALERTS_WAITLIST_STORAGE_KEY = "pbpAlertsWaitlistEmails";
 
 const DISCOVER_VIEWS = {
   opportunities: {
@@ -120,6 +121,92 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
+}
+
+function isValidEmail(value) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || "").trim());
+}
+
+function getStoredAlertsWaitlistEmails() {
+  try {
+    const raw = window.localStorage?.getItem(PBP_ALERTS_WAITLIST_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed)
+      ? parsed.filter((item) => typeof item === "string" && isValidEmail(item))
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function storeAlertsWaitlistEmails(emails) {
+  try {
+    window.localStorage?.setItem(
+      PBP_ALERTS_WAITLIST_STORAGE_KEY,
+      JSON.stringify(Array.from(new Set(emails)))
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function setAlertsWaitlistStatus(type, message) {
+  const status = document.getElementById("pbpAlertsWaitlistStatus");
+  if (!status) return;
+
+  status.classList.remove("success", "error");
+  if (type) status.classList.add(type);
+  status.textContent = message;
+}
+
+function handleAlertsWaitlistSubmit(event) {
+  event.preventDefault();
+
+  const input = document.getElementById("pbpAlertsEmail");
+  const email = String(input?.value || "").trim().toLowerCase();
+
+  if (!isValidEmail(email)) {
+    setAlertsWaitlistStatus("error", "Enter a valid email to join the PBP Alerts waitlist.");
+    return;
+  }
+
+  const storedEmails = getStoredAlertsWaitlistEmails();
+  if (storedEmails.includes(email)) {
+    setAlertsWaitlistStatus("success", "You are already on the local PBP Alerts waitlist for this browser.");
+    if (input) input.value = "";
+    return;
+  }
+
+  const saved = storeAlertsWaitlistEmails([...storedEmails, email]);
+  if (!saved) {
+    setAlertsWaitlistStatus(
+      "error",
+      "This browser could not save the email locally. Try again or check browser storage settings."
+    );
+    return;
+  }
+
+  if (input) input.value = "";
+  setAlertsWaitlistStatus(
+    "success",
+    "You are on the local waitlist. Discord alerts are planned first; watchlists and premium tiers come later."
+  );
+}
+
+function bindAlertsWaitlistForm() {
+  const form = document.getElementById("pbpAlertsWaitlistForm");
+  if (!form) return;
+
+  form.addEventListener("submit", handleAlertsWaitlistSubmit);
+
+  const storedCount = getStoredAlertsWaitlistEmails().length;
+  if (storedCount > 0) {
+    setAlertsWaitlistStatus(
+      "success",
+      `Local waitlist saved in this browser: ${storedCount} email${storedCount === 1 ? "" : "s"}.`
+    );
+  }
 }
 
 function stringifyJsonForUi(value) {
@@ -2698,6 +2785,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   const refreshAccount = document.getElementById("refreshAccount");
   const applyBtn = document.getElementById("applyFilters");
 
+  bindAlertsWaitlistForm();
   ensureHomepageStrategyLayer();
   ensureTopLevelTabs();
   hideLegacyDiscoverSections();

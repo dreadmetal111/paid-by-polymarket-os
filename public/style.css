@@ -219,6 +219,87 @@ details summary {
   margin-top: 6px;
 }
 
+.pbp-alerts-section {
+  margin-top: 18px;
+}
+
+.pbp-alerts-layout {
+  grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
+}
+
+.pbp-alerts-intro-card {
+  border-color: rgba(56, 189, 248, 0.24);
+}
+
+.pbp-alerts-copy {
+  max-width: 760px;
+  color: var(--muted);
+  font-size: 0.96rem;
+  margin-top: 8px;
+}
+
+.pbp-alert-feature-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.pbp-alert-feature {
+  background: rgba(2, 8, 23, 0.58);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: var(--radius-sm);
+  padding: 12px;
+  min-height: 86px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.pbp-alert-waitlist-form {
+  margin-top: 18px;
+}
+
+.pbp-alert-waitlist-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.pbp-alert-waitlist-row button {
+  min-width: 118px;
+}
+
+.pbp-alert-waitlist-status {
+  color: var(--muted);
+  font-size: 0.86rem;
+  margin-top: 8px;
+  min-height: 1.4em;
+}
+
+.pbp-alert-waitlist-status.success {
+  color: var(--positive);
+}
+
+.pbp-alert-waitlist-status.error {
+  color: var(--negative);
+}
+
+.pbp-alerts-example-card {
+  background: linear-gradient(180deg, rgba(10, 19, 35, 0.96), rgba(7, 15, 29, 0.96));
+}
+
+.pbp-alerts-example-header {
+  align-items: flex-start;
+  margin-top: 0;
+  margin-bottom: 14px;
+}
+
+.pbp-example-alert {
+  background: rgba(2, 8, 23, 0.58);
+}
+
 .signals {
   display: flex;
   flex-wrap: wrap;
@@ -362,6 +443,11 @@ pre {
     grid-template-columns: 1fr;
   }
 
+  .pbp-alerts-layout,
+  .pbp-alert-feature-grid {
+    grid-template-columns: 1fr;
+  }
+
   .market-meta {
     grid-template-columns: 1fr 1fr;
   }
@@ -377,6 +463,10 @@ pre {
   }
 
   .market-meta {
+    grid-template-columns: 1fr;
+  }
+
+  .pbp-alert-waitlist-row {
     grid-template-columns: 1fr;
   }
 
