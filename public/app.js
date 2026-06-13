@@ -160,10 +160,12 @@ function setAlertsWaitlistStatus(type, message) {
   status.textContent = message;
 }
 
-function handleAlertsWaitlistSubmit(event) {
+async function handleAlertsWaitlistSubmit(event) {
   event.preventDefault();
 
+  const form = event.currentTarget;
   const input = document.getElementById("pbpAlertsEmail");
+  const submitButton = form?.querySelector('button[type="submit"]');
   const email = String(input?.value || "").trim().toLowerCase();
 
   if (!isValidEmail(email)) {
@@ -171,27 +173,50 @@ function handleAlertsWaitlistSubmit(event) {
     return;
   }
 
-  const storedEmails = getStoredAlertsWaitlistEmails();
-  if (storedEmails.includes(email)) {
-    setAlertsWaitlistStatus("success", "You are already on the local PBP Alerts waitlist for this browser.");
+  if (submitButton) submitButton.disabled = true;
+  setAlertsWaitlistStatus("", "Saving your waitlist spot...");
+
+  try {
+    const data = await postJson("/api/waitlist", {
+      email,
+      source: "pbp-alerts-homepage",
+    });
+
+    const storedEmails = getStoredAlertsWaitlistEmails();
+    const savedLocally = storeAlertsWaitlistEmails([...storedEmails, email]);
+    const localMemoryNote = savedLocally
+      ? ""
+      : " Server saved it, but this browser could not remember the signup locally.";
+
     if (input) input.value = "";
-    return;
-  }
 
-  const saved = storeAlertsWaitlistEmails([...storedEmails, email]);
-  if (!saved) {
-    setAlertsWaitlistStatus(
-      "error",
-      "This browser could not save the email locally. Try again or check browser storage settings."
-    );
-    return;
+    if (data.status === "existing") {
+      setAlertsWaitlistStatus(
+        "success",
+        `You are already on the PBP Alerts waitlist.${localMemoryNote}`
+      );
+    } else {
+      setAlertsWaitlistStatus(
+        "success",
+        `You are on the PBP Alerts waitlist. Discord alerts are planned first; watchlists and premium tiers come later.${localMemoryNote}`
+      );
+    }
+  } catch (err) {
+    const remembered = getStoredAlertsWaitlistEmails().includes(email);
+    if (remembered) {
+      setAlertsWaitlistStatus(
+        "success",
+        "This browser remembers a previous successful signup, but the waitlist server could not be reached right now."
+      );
+    } else {
+      setAlertsWaitlistStatus(
+        "error",
+        err.message || "Could not save your waitlist signup. Please try again."
+      );
+    }
+  } finally {
+    if (submitButton) submitButton.disabled = false;
   }
-
-  if (input) input.value = "";
-  setAlertsWaitlistStatus(
-    "success",
-    "You are on the local waitlist. Discord alerts are planned first; watchlists and premium tiers come later."
-  );
 }
 
 function bindAlertsWaitlistForm() {
@@ -204,7 +229,7 @@ function bindAlertsWaitlistForm() {
   if (storedCount > 0) {
     setAlertsWaitlistStatus(
       "success",
-      `Local waitlist saved in this browser: ${storedCount} email${storedCount === 1 ? "" : "s"}.`
+      `This browser remembers ${storedCount} previous waitlist signup${storedCount === 1 ? "" : "s"}. Submit again to confirm with the server.`
     );
   }
 }

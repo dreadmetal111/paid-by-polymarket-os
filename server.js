@@ -1,5 +1,6 @@
 import express from "express";
 import cors from "cors";
+import fs from "fs/promises";
 import path from "path";
 import { fileURLToPath } from "url";
 
@@ -9,6 +10,10 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const PUBLIC_DIR = path.resolve(__dirname, "public");
 const PORT = Number(process.env.PORT || 3000);
+const WAITLIST_DATA_FILE = path.resolve(
+  process.env.PBP_WAITLIST_DATA_FILE ||
+    path.join(__dirname, "data", "waitlist-submissions.json")
+);
 
 const GAMMA_BASE = "https://gamma-api.polymarket.com";
 
@@ -183,6 +188,7 @@ const liveDataState = {
 
 const priceMemoryByMarketId = new Map();
 const signalLogByMarketId = new Map();
+let waitlistWriteQueue = Promise.resolve();
 
 const demoState = {
   account: createInitialAccountState(),
@@ -191,6 +197,16 @@ const demoState = {
 
 app.use(cors());
 app.use(express.json({ limit: "2mb" }));
+app.use((error, req, res, next) => {
+  if (error instanceof SyntaxError && error.status === 400 && "body" in error) {
+    return res.status(400).json({
+      ok: false,
+      error: "Invalid JSON body.",
+    });
+  }
+
+  return next(error);
+});
 app.use(express.static(PUBLIC_DIR));
 
 function createInitialAccountState() {
@@ -218,6 +234,119 @@ function createInitialPaperState() {
     },
     positions: [],
   };
+}
+
+function normalizeWaitlistEmail(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function isValidWaitlistEmail(value) {
+  const email = normalizeWaitlistEmail(value);
+  return (
+    email.length <= 254 &&
+    /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+  );
+}
+
+function normalizeWaitlistSource(value) {
+  return String(value || "pbp-alerts-homepage")
+    .trim()
+    .replace(/[^\w .:/?#&=+-]/g, "")
+    .slice(0, 120) || "pbp-alerts-homepage";
+}
+
+function normalizeWaitlistData(raw) {
+  const submissions = Array.isArray(raw?.submissions) ? raw.submissions : [];
+  const normalizedSubmissions = [];
+  const seenEmails = new Set();
+
+  for (const submission of submissions) {
+    const email = normalizeWaitlistEmail(submission?.email);
+    if (!isValidWaitlistEmail(email) || seenEmails.has(email)) continue;
+
+    seenEmails.add(email);
+    normalizedSubmissions.push({
+      email,
+      source: normalizeWaitlistSource(submission?.source),
+      createdAt: String(submission?.createdAt || new Date().toISOString()),
+    });
+  }
+
+  return {
+    version: 1,
+    updatedAt: String(raw?.updatedAt || new Date().toISOString()),
+    submissions: normalizedSubmissions,
+  };
+}
+
+async function readWaitlistData() {
+  try {
+    const rawJson = await fs.readFile(WAITLIST_DATA_FILE, "utf8");
+    return normalizeWaitlistData(JSON.parse(rawJson));
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return normalizeWaitlistData({ submissions: [] });
+    }
+    throw error;
+  }
+}
+
+async function writeWaitlistData(data) {
+  const normalizedData = normalizeWaitlistData({
+    ...data,
+    updatedAt: new Date().toISOString(),
+  });
+  const directory = path.dirname(WAITLIST_DATA_FILE);
+  const tempFile = path.join(
+    directory,
+    `.waitlist-submissions.${process.pid}.${Date.now()}.tmp`
+  );
+
+  await fs.mkdir(directory, { recursive: true });
+  await fs.writeFile(
+    tempFile,
+    `${JSON.stringify(normalizedData, null, 2)}\n`,
+    "utf8"
+  );
+  await fs.rename(tempFile, WAITLIST_DATA_FILE);
+}
+
+async function addWaitlistSubmission({ email, source }) {
+  const normalizedEmail = normalizeWaitlistEmail(email);
+  const normalizedSource = normalizeWaitlistSource(source);
+
+  const task = async () => {
+    const data = await readWaitlistData();
+    const existing = data.submissions.find(
+      (submission) => submission.email === normalizedEmail
+    );
+
+    if (existing) {
+      return {
+        status: "existing",
+        submission: existing,
+        count: data.submissions.length,
+      };
+    }
+
+    const submission = {
+      email: normalizedEmail,
+      source: normalizedSource,
+      createdAt: new Date().toISOString(),
+    };
+
+    data.submissions.push(submission);
+    await writeWaitlistData(data);
+
+    return {
+      status: "created",
+      submission,
+      count: data.submissions.length,
+    };
+  };
+
+  waitlistWriteQueue = waitlistWriteQueue.then(task, task);
+  return waitlistWriteQueue;
 }
 
 function envFirst(...names) {
@@ -2181,6 +2310,42 @@ app.post("/api/trade/submit-signed", async (req, res) => {
     return res.status(500).json({
       ok: false,
       error: error.message || "Failed to submit signed order",
+    });
+  }
+});
+
+app.post("/api/waitlist", async (req, res) => {
+  try {
+    const email = normalizeWaitlistEmail(req.body?.email);
+    const source = normalizeWaitlistSource(req.body?.source);
+
+    if (!isValidWaitlistEmail(email)) {
+      return res.status(400).json({
+        ok: false,
+        error: "Enter a valid email address.",
+      });
+    }
+
+    const result = await addWaitlistSubmission({ email, source });
+
+    if (result.status === "existing") {
+      return res.json({
+        ok: true,
+        status: "existing",
+        message: "Email is already on the PBP Alerts waitlist.",
+      });
+    }
+
+    return res.status(201).json({
+      ok: true,
+      status: "created",
+      message: "You are on the PBP Alerts waitlist.",
+    });
+  } catch (error) {
+    console.error("Waitlist save failed:", error.message);
+    return res.status(500).json({
+      ok: false,
+      error: "Failed to save waitlist signup.",
     });
   }
 });

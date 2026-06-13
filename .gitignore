@@ -6,3 +6,5 @@ __pycache__/
 pbp-alert-worker/alert-worker.env
 pbp-alert-worker/*.sqlite3
 pbp-alert-worker/*.sqlite3-*
+data/waitlist-submissions.json
+data/.waitlist-submissions.*.tmp
