@@ -618,6 +618,32 @@ async function readWaitlistExportData() {
   };
 }
 
+function getLatestWaitlistSignupAt(submissions) {
+  let latestTimestamp = 0;
+
+  for (const submission of Array.isArray(submissions) ? submissions : []) {
+    const timestamp = Date.parse(submission?.createdAt);
+    if (Number.isFinite(timestamp) && timestamp > latestTimestamp) {
+      latestTimestamp = timestamp;
+    }
+  }
+
+  return latestTimestamp ? new Date(latestTimestamp).toISOString() : null;
+}
+
+async function readWaitlistStatusSummary() {
+  const data = await readWaitlistExportData();
+  const submissions = Array.isArray(data.submissions) ? data.submissions : [];
+
+  return {
+    storageMode: data.storageMode,
+    waitlist: {
+      count: submissions.length,
+      latestSignupAt: getLatestWaitlistSignupAt(submissions),
+    },
+  };
+}
+
 function getAdminSecret() {
   return envFirst("PBP_ADMIN_SECRET");
 }
@@ -2698,6 +2724,38 @@ app.get("/api/admin/waitlist", async (req, res) => {
     return res.status(500).json({
       ok: false,
       error: "Failed to load waitlist submissions.",
+    });
+  }
+});
+
+app.get("/api/admin/status", async (req, res) => {
+  if (!authorizeAdminRequest(req, res)) return;
+
+  try {
+    logWaitlistStorageMode("admin status start");
+    const summary = await readWaitlistStatusSummary();
+
+    res.set("Cache-Control", "no-store");
+    return res.json({
+      ok: true,
+      storageMode: summary.storageMode,
+      waitlist: summary.waitlist,
+      app: {
+        name: "Paid by Polymarket OS",
+        feature: "PBP Alerts",
+        status: "live",
+      },
+      checks: {
+        waitlistStorage: "ok",
+        adminAuth: "ok",
+      },
+      generatedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("Admin status failed:", error.message);
+    return res.status(500).json({
+      ok: false,
+      error: "Failed to load admin status.",
     });
   }
 });
