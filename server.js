@@ -325,6 +325,56 @@ function getSupabaseWaitlistConfig() {
   };
 }
 
+function getSupabaseHost(supabaseUrl) {
+  if (!supabaseUrl) return "";
+
+  try {
+    return new URL(supabaseUrl).host;
+  } catch {
+    return "invalid-url";
+  }
+}
+
+function getSupabaseTargetInfo(url) {
+  try {
+    const parsed = url instanceof URL ? url : new URL(String(url));
+    return {
+      host: parsed.host,
+      path: parsed.pathname,
+    };
+  } catch {
+    return {
+      host: "invalid-url",
+      path: "",
+    };
+  }
+}
+
+function buildWaitlistStorageLog(config = getSupabaseWaitlistConfig()) {
+  return {
+    storageMode: config.enabled ? "supabase" : "json",
+    supabaseEnabled: config.enabled,
+    supabaseHost: getSupabaseHost(config.supabaseUrl) || "not-configured",
+    supabaseTable: config.table || "not-configured",
+    supabaseUrlConfigured: !!config.supabaseUrl,
+    supabaseServiceRoleKeyConfigured: !!config.serviceRoleKey,
+    supabaseTableConfigured: !!config.table,
+  };
+}
+
+function logWaitlistStorageMode(context) {
+  console.log(`[waitlist] ${context}`, buildWaitlistStorageLog());
+}
+
+function getActiveWaitlistStorageProvider() {
+  const config = getSupabaseWaitlistConfig();
+
+  return {
+    storageMode: config.enabled ? "supabase" : "json",
+    config,
+  };
+}
+
 function buildSupabaseTableUrl(config) {
   const baseUrl = new URL(config.supabaseUrl);
   return new URL(
@@ -342,7 +392,25 @@ function getSupabaseHeaders(config, extraHeaders = {}) {
 }
 
 async function fetchSupabaseJson(url, options = {}) {
-  const response = await fetch(url, options);
+  const target = getSupabaseTargetInfo(url);
+  let response;
+
+  try {
+    response = await fetch(url, options);
+  } catch (error) {
+    console.error("[waitlist] Supabase fetch failed", {
+      errorName: error?.name,
+      errorMessage: error?.message,
+      causeCode: error?.cause?.code,
+      causeMessage: error?.cause?.message,
+      causeErrno: error?.cause?.errno,
+      causeSyscall: error?.cause?.syscall,
+      targetHost: target.host,
+      targetPath: target.path,
+    });
+    throw error;
+  }
+
   const text = await response.text();
   let payload = null;
 
@@ -355,6 +423,13 @@ async function fetchSupabaseJson(url, options = {}) {
   }
 
   if (!response.ok) {
+    console.error("[waitlist] Supabase non-2xx response", {
+      status: response.status,
+      responseBody: payload,
+      targetHost: target.host,
+      targetPath: target.path,
+    });
+
     const errorMessage =
       payload?.message ||
       payload?.error ||
@@ -392,8 +467,7 @@ async function findSupabaseWaitlistSubmission(config, email) {
     : null;
 }
 
-async function readSupabaseWaitlistData() {
-  const config = getSupabaseWaitlistConfig();
+async function readSupabaseWaitlistData(config = getSupabaseWaitlistConfig()) {
   const url = buildSupabaseTableUrl(config);
   url.searchParams.set("select", "email,source,created_at");
   url.searchParams.set("order", "created_at.asc");
@@ -415,8 +489,11 @@ async function readSupabaseWaitlistData() {
   };
 }
 
-async function addSupabaseWaitlistSubmission({ email, source }) {
-  const config = getSupabaseWaitlistConfig();
+async function addSupabaseWaitlistSubmission({
+  email,
+  source,
+  config = getSupabaseWaitlistConfig(),
+}) {
   const normalizedEmail = normalizeWaitlistEmail(email);
   const normalizedSource = normalizeWaitlistSource(source);
   const existing = await findSupabaseWaitlistSubmission(config, normalizedEmail);
@@ -512,19 +589,33 @@ async function addJsonWaitlistSubmission({ email, source }) {
 }
 
 async function addWaitlistSubmission({ email, source }) {
-  if (getSupabaseWaitlistConfig().enabled) {
-    return addSupabaseWaitlistSubmission({ email, source });
-  }
+  const provider = getActiveWaitlistStorageProvider();
+  const result =
+    provider.storageMode === "supabase"
+      ? await addSupabaseWaitlistSubmission({
+          email,
+          source,
+          config: provider.config,
+        })
+      : await addJsonWaitlistSubmission({ email, source });
 
-  return addJsonWaitlistSubmission({ email, source });
+  return {
+    ...result,
+    storageMode: provider.storageMode,
+  };
 }
 
 async function readWaitlistExportData() {
-  if (getSupabaseWaitlistConfig().enabled) {
-    return readSupabaseWaitlistData();
-  }
+  const provider = getActiveWaitlistStorageProvider();
+  const data =
+    provider.storageMode === "supabase"
+      ? await readSupabaseWaitlistData(provider.config)
+      : await readWaitlistData();
 
-  return readWaitlistData();
+  return {
+    ...data,
+    storageMode: provider.storageMode,
+  };
 }
 
 function getAdminSecret() {
@@ -2560,12 +2651,14 @@ app.post("/api/waitlist", async (req, res) => {
       });
     }
 
+    logWaitlistStorageMode("save start");
     const result = await addWaitlistSubmission({ email, source });
 
     if (result.status === "existing") {
       return res.json({
         ok: true,
         status: "existing",
+        storageMode: result.storageMode,
         message: "Email is already on the PBP Alerts waitlist.",
       });
     }
@@ -2573,6 +2666,7 @@ app.post("/api/waitlist", async (req, res) => {
     return res.status(201).json({
       ok: true,
       status: "created",
+      storageMode: result.storageMode,
       message: "You are on the PBP Alerts waitlist.",
     });
   } catch (error) {
@@ -2588,11 +2682,13 @@ app.get("/api/admin/waitlist", async (req, res) => {
   if (!authorizeAdminRequest(req, res)) return;
 
   try {
-    const data = await readWaitlistData();
+    logWaitlistStorageMode("admin export start");
+    const data = await readWaitlistExportData();
 
     res.set("Cache-Control", "no-store");
     return res.json({
       ok: true,
+      storageMode: data.storageMode,
       count: data.submissions.length,
       updatedAt: data.updatedAt,
       submissions: data.submissions,
