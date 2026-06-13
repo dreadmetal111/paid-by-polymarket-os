@@ -1,5 +1,6 @@
 import express from "express";
 import cors from "cors";
+import crypto from "crypto";
 import fs from "fs/promises";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -347,6 +348,62 @@ async function addWaitlistSubmission({ email, source }) {
 
   waitlistWriteQueue = waitlistWriteQueue.then(task, task);
   return waitlistWriteQueue;
+}
+
+function getAdminSecret() {
+  return envFirst("PBP_ADMIN_SECRET");
+}
+
+function getProvidedAdminSecret(req) {
+  const authorizationHeader = String(req.get("authorization") || "").trim();
+
+  if (/^bearer\s+/i.test(authorizationHeader)) {
+    return authorizationHeader.replace(/^bearer\s+/i, "").trim();
+  }
+
+  if (authorizationHeader) {
+    return authorizationHeader;
+  }
+
+  return String(
+    req.query?.secret ||
+      req.query?.adminSecret ||
+      req.query?.admin_secret ||
+      ""
+  ).trim();
+}
+
+function secretsMatch(providedSecret, expectedSecret) {
+  if (!providedSecret || !expectedSecret) return false;
+
+  const provided = Buffer.from(providedSecret);
+  const expected = Buffer.from(expectedSecret);
+
+  if (provided.length !== expected.length) return false;
+  return crypto.timingSafeEqual(provided, expected);
+}
+
+function authorizeAdminRequest(req, res) {
+  const expectedSecret = getAdminSecret();
+
+  if (!expectedSecret) {
+    res.status(503).json({
+      ok: false,
+      error: "Admin waitlist export is not configured.",
+    });
+    return false;
+  }
+
+  const providedSecret = getProvidedAdminSecret(req);
+  if (!secretsMatch(providedSecret, expectedSecret)) {
+    res.status(401).json({
+      ok: false,
+      error: "Unauthorized.",
+    });
+    return false;
+  }
+
+  return true;
 }
 
 function envFirst(...names) {
@@ -2346,6 +2403,28 @@ app.post("/api/waitlist", async (req, res) => {
     return res.status(500).json({
       ok: false,
       error: "Failed to save waitlist signup.",
+    });
+  }
+});
+
+app.get("/api/admin/waitlist", async (req, res) => {
+  if (!authorizeAdminRequest(req, res)) return;
+
+  try {
+    const data = await readWaitlistData();
+
+    res.set("Cache-Control", "no-store");
+    return res.json({
+      ok: true,
+      count: data.submissions.length,
+      updatedAt: data.updatedAt,
+      submissions: data.submissions,
+    });
+  } catch (error) {
+    console.error("Waitlist export failed:", error.message);
+    return res.status(500).json({
+      ok: false,
+      error: "Failed to load waitlist submissions.",
     });
   }
 });
