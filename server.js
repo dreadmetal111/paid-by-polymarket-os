@@ -312,7 +312,168 @@ async function writeWaitlistData(data) {
   await fs.rename(tempFile, WAITLIST_DATA_FILE);
 }
 
-async function addWaitlistSubmission({ email, source }) {
+function getSupabaseWaitlistConfig() {
+  const supabaseUrl = envFirst("SUPABASE_URL").replace(/\/+$/, "");
+  const serviceRoleKey = envFirst("SUPABASE_SERVICE_ROLE_KEY");
+  const table = envFirst("SUPABASE_WAITLIST_TABLE");
+
+  return {
+    enabled: !!(supabaseUrl && serviceRoleKey && table),
+    supabaseUrl,
+    serviceRoleKey,
+    table,
+  };
+}
+
+function buildSupabaseTableUrl(config) {
+  const baseUrl = new URL(config.supabaseUrl);
+  return new URL(
+    `/rest/v1/${encodeURIComponent(config.table)}`,
+    `${baseUrl.origin}/`
+  );
+}
+
+function getSupabaseHeaders(config, extraHeaders = {}) {
+  return {
+    apikey: config.serviceRoleKey,
+    Authorization: `Bearer ${config.serviceRoleKey}`,
+    ...extraHeaders,
+  };
+}
+
+async function fetchSupabaseJson(url, options = {}) {
+  const response = await fetch(url, options);
+  const text = await response.text();
+  let payload = null;
+
+  if (text) {
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      payload = text;
+    }
+  }
+
+  if (!response.ok) {
+    const errorMessage =
+      payload?.message ||
+      payload?.error ||
+      (typeof payload === "string" ? payload : "") ||
+      `HTTP ${response.status}`;
+    const error = new Error(`Supabase waitlist request failed: ${errorMessage}`);
+    error.status = response.status;
+    error.payload = payload;
+    throw error;
+  }
+
+  return payload;
+}
+
+function mapSupabaseWaitlistRow(row) {
+  return {
+    email: normalizeWaitlistEmail(row?.email),
+    source: normalizeWaitlistSource(row?.source),
+    createdAt: String(row?.created_at || row?.createdAt || new Date().toISOString()),
+  };
+}
+
+async function findSupabaseWaitlistSubmission(config, email) {
+  const url = buildSupabaseTableUrl(config);
+  url.searchParams.set("select", "email,source,created_at");
+  url.searchParams.set("email", `eq.${normalizeWaitlistEmail(email)}`);
+  url.searchParams.set("limit", "1");
+
+  const rows = await fetchSupabaseJson(url, {
+    headers: getSupabaseHeaders(config),
+  });
+
+  return Array.isArray(rows) && rows[0]
+    ? mapSupabaseWaitlistRow(rows[0])
+    : null;
+}
+
+async function readSupabaseWaitlistData() {
+  const config = getSupabaseWaitlistConfig();
+  const url = buildSupabaseTableUrl(config);
+  url.searchParams.set("select", "email,source,created_at");
+  url.searchParams.set("order", "created_at.asc");
+
+  const rows = await fetchSupabaseJson(url, {
+    headers: getSupabaseHeaders(config),
+  });
+
+  const submissions = (Array.isArray(rows) ? rows : [])
+    .map(mapSupabaseWaitlistRow)
+    .filter((submission) => isValidWaitlistEmail(submission.email));
+
+  const latestSubmission = submissions[submissions.length - 1];
+
+  return {
+    version: 1,
+    updatedAt: latestSubmission?.createdAt || new Date().toISOString(),
+    submissions,
+  };
+}
+
+async function addSupabaseWaitlistSubmission({ email, source }) {
+  const config = getSupabaseWaitlistConfig();
+  const normalizedEmail = normalizeWaitlistEmail(email);
+  const normalizedSource = normalizeWaitlistSource(source);
+  const existing = await findSupabaseWaitlistSubmission(config, normalizedEmail);
+
+  if (existing) {
+    return {
+      status: "existing",
+      submission: existing,
+      count: null,
+    };
+  }
+
+  const url = buildSupabaseTableUrl(config);
+
+  try {
+    const rows = await fetchSupabaseJson(url, {
+      method: "POST",
+      headers: getSupabaseHeaders(config, {
+        "Content-Type": "application/json",
+        Prefer: "return=representation",
+      }),
+      body: JSON.stringify({
+        email: normalizedEmail,
+        source: normalizedSource,
+      }),
+    });
+
+    const inserted = Array.isArray(rows) && rows[0]
+      ? mapSupabaseWaitlistRow(rows[0])
+      : {
+          email: normalizedEmail,
+          source: normalizedSource,
+          createdAt: new Date().toISOString(),
+        };
+
+    return {
+      status: "created",
+      submission: inserted,
+      count: null,
+    };
+  } catch (error) {
+    if (error.status === 409) {
+      const duplicate = await findSupabaseWaitlistSubmission(config, normalizedEmail);
+      if (duplicate) {
+        return {
+          status: "existing",
+          submission: duplicate,
+          count: null,
+        };
+      }
+    }
+
+    throw error;
+  }
+}
+
+async function addJsonWaitlistSubmission({ email, source }) {
   const normalizedEmail = normalizeWaitlistEmail(email);
   const normalizedSource = normalizeWaitlistSource(source);
 
@@ -348,6 +509,22 @@ async function addWaitlistSubmission({ email, source }) {
 
   waitlistWriteQueue = waitlistWriteQueue.then(task, task);
   return waitlistWriteQueue;
+}
+
+async function addWaitlistSubmission({ email, source }) {
+  if (getSupabaseWaitlistConfig().enabled) {
+    return addSupabaseWaitlistSubmission({ email, source });
+  }
+
+  return addJsonWaitlistSubmission({ email, source });
+}
+
+async function readWaitlistExportData() {
+  if (getSupabaseWaitlistConfig().enabled) {
+    return readSupabaseWaitlistData();
+  }
+
+  return readWaitlistData();
 }
 
 function getAdminSecret() {
