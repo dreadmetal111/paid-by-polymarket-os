@@ -15,6 +15,8 @@ const WAITLIST_DATA_FILE = path.resolve(
   process.env.PBP_WAITLIST_DATA_FILE ||
     path.join(__dirname, "data", "waitlist-submissions.json")
 );
+const ALERT_SIGNALS_TABLE = "alert_signals";
+const PUBLIC_ALERT_SIGNAL_LIMIT = 5;
 
 const GAMMA_BASE = "https://gamma-api.polymarket.com";
 
@@ -256,6 +258,90 @@ function normalizeWaitlistSource(value) {
     .slice(0, 120) || "pbp-alerts-homepage";
 }
 
+function redactSensitivePublicText(value) {
+  return String(value || "")
+    .replace(
+      /\b(?:PBP_ADMIN_SECRET|PBP_ALERT_INGEST_SECRET|SUPABASE_SERVICE_ROLE_KEY|DISCORD_WEBHOOK_URL|WEBHOOK_URL)\s*[:=]\s*["']?[^"'\s]+["']?/gi,
+      "[redacted-secret]"
+    )
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [redacted]")
+    .replace(
+      /\beyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\b/g,
+      "[redacted-token]"
+    )
+    .replace(/https?:\/\/\S+/gi, "[redacted-url]")
+    .replace(
+      /\b(?:[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})\b/gi,
+      "[redacted-email]"
+    )
+    .replace(
+      /\b(?:10|127)\.(?:\d{1,3}\.){2}\d{1,3}\b|\b192\.168\.\d{1,3}\.\d{1,3}\b|\b172\.(?:1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}\b|\b169\.254\.\d{1,3}\.\d{1,3}\b/g,
+      "[redacted-ip]"
+    )
+    .replace(/\blocalhost(?::\d{2,5})?\b/gi, "[redacted-host]");
+}
+
+function sanitizePublicAlertText(value, maxLength) {
+  const text = redactSensitivePublicText(value)
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return text.length > maxLength ? text.slice(0, maxLength).trim() : text;
+}
+
+function sanitizeOptionalPublicAlertText(value, maxLength) {
+  const text = sanitizePublicAlertText(value, maxLength);
+  return text || null;
+}
+
+function normalizeAlertType(value) {
+  return sanitizePublicAlertText(value, 80)
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 80);
+}
+
+function normalizeAlertSeverity(value) {
+  const severity = sanitizePublicAlertText(value, 40)
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 40);
+
+  return severity || null;
+}
+
+function normalizeAlertSource(value) {
+  return sanitizePublicAlertText(value, 120)
+    .replace(/[^\w .:/?#&=+-]/g, "")
+    .trim()
+    .slice(0, 120) || null;
+}
+
+function normalizeAlertSignalInput(body) {
+  return {
+    alertType: normalizeAlertType(body?.alertType ?? body?.alert_type),
+    marketQuestion: sanitizePublicAlertText(
+      body?.marketQuestion ?? body?.market_question,
+      280
+    ),
+    reason: sanitizeOptionalPublicAlertText(body?.reason, 400),
+    severity: normalizeAlertSeverity(body?.severity),
+    source: normalizeAlertSource(body?.source),
+  };
+}
+
+function toPublicAlertSignal(signal) {
+  return {
+    alertType: signal.alertType,
+    marketQuestion: signal.marketQuestion,
+    reason: signal.reason,
+    severity: signal.severity,
+    createdAt: signal.createdAt,
+  };
+}
+
 function normalizeWaitlistData(raw) {
   const submissions = Array.isArray(raw?.submissions) ? raw.submissions : [];
   const normalizedSubmissions = [];
@@ -325,6 +411,18 @@ function getSupabaseWaitlistConfig() {
   };
 }
 
+function getSupabaseAlertSignalConfig() {
+  const supabaseUrl = envFirst("SUPABASE_URL").replace(/\/+$/, "");
+  const serviceRoleKey = envFirst("SUPABASE_SERVICE_ROLE_KEY");
+
+  return {
+    enabled: !!(supabaseUrl && serviceRoleKey),
+    supabaseUrl,
+    serviceRoleKey,
+    table: ALERT_SIGNALS_TABLE,
+  };
+}
+
 function getSupabaseHost(supabaseUrl) {
   if (!supabaseUrl) return "";
 
@@ -366,11 +464,35 @@ function logWaitlistStorageMode(context) {
   console.log(`[waitlist] ${context}`, buildWaitlistStorageLog());
 }
 
+function buildAlertSignalStorageLog(config = getSupabaseAlertSignalConfig()) {
+  return {
+    storageMode: config.enabled ? "supabase" : "not_configured",
+    supabaseEnabled: config.enabled,
+    supabaseHost: getSupabaseHost(config.supabaseUrl) || "not-configured",
+    supabaseTable: config.table,
+    supabaseUrlConfigured: !!config.supabaseUrl,
+    supabaseServiceRoleKeyConfigured: !!config.serviceRoleKey,
+  };
+}
+
+function logAlertSignalStorageMode(context) {
+  console.log(`[alert-signals] ${context}`, buildAlertSignalStorageLog());
+}
+
 function getActiveWaitlistStorageProvider() {
   const config = getSupabaseWaitlistConfig();
 
   return {
     storageMode: config.enabled ? "supabase" : "json",
+    config,
+  };
+}
+
+function getActiveAlertSignalStorageProvider() {
+  const config = getSupabaseAlertSignalConfig();
+
+  return {
+    storageMode: config.enabled ? "supabase" : "not_configured",
     config,
   };
 }
@@ -392,13 +514,18 @@ function getSupabaseHeaders(config, extraHeaders = {}) {
 }
 
 async function fetchSupabaseJson(url, options = {}) {
+  const {
+    logLabel = "waitlist",
+    errorLabel = "waitlist",
+    ...fetchOptions
+  } = options;
   const target = getSupabaseTargetInfo(url);
   let response;
 
   try {
-    response = await fetch(url, options);
+    response = await fetch(url, fetchOptions);
   } catch (error) {
-    console.error("[waitlist] Supabase fetch failed", {
+    console.error(`[${logLabel}] Supabase fetch failed`, {
       errorName: error?.name,
       errorMessage: error?.message,
       causeCode: error?.cause?.code,
@@ -423,7 +550,7 @@ async function fetchSupabaseJson(url, options = {}) {
   }
 
   if (!response.ok) {
-    console.error("[waitlist] Supabase non-2xx response", {
+    console.error(`[${logLabel}] Supabase non-2xx response`, {
       status: response.status,
       responseBody: payload,
       targetHost: target.host,
@@ -435,7 +562,7 @@ async function fetchSupabaseJson(url, options = {}) {
       payload?.error ||
       (typeof payload === "string" ? payload : "") ||
       `HTTP ${response.status}`;
-    const error = new Error(`Supabase waitlist request failed: ${errorMessage}`);
+    const error = new Error(`Supabase ${errorLabel} request failed: ${errorMessage}`);
     error.status = response.status;
     error.payload = payload;
     throw error;
@@ -644,6 +771,156 @@ async function readWaitlistStatusSummary() {
   };
 }
 
+function mapSupabaseAlertSignalRow(row) {
+  return {
+    alertType: normalizeAlertType(row?.alert_type ?? row?.alertType),
+    marketQuestion: sanitizePublicAlertText(
+      row?.market_question ?? row?.marketQuestion,
+      280
+    ),
+    reason: sanitizeOptionalPublicAlertText(row?.reason, 400),
+    severity: normalizeAlertSeverity(row?.severity),
+    source: normalizeAlertSource(row?.source),
+    createdAt: String(row?.created_at || row?.createdAt || new Date().toISOString()),
+  };
+}
+
+async function addSupabaseAlertSignal({
+  alertSignal,
+  config = getSupabaseAlertSignalConfig(),
+}) {
+  const url = buildSupabaseTableUrl(config);
+
+  const rows = await fetchSupabaseJson(url, {
+    method: "POST",
+    headers: getSupabaseHeaders(config, {
+      "Content-Type": "application/json",
+      Prefer: "return=representation",
+    }),
+    body: JSON.stringify({
+      alert_type: alertSignal.alertType,
+      market_question: alertSignal.marketQuestion,
+      reason: alertSignal.reason,
+      severity: alertSignal.severity,
+      source: alertSignal.source,
+    }),
+    logLabel: "alert-signals",
+    errorLabel: "alert signals",
+  });
+
+  return Array.isArray(rows) && rows[0]
+    ? mapSupabaseAlertSignalRow(rows[0])
+    : {
+        ...alertSignal,
+        createdAt: new Date().toISOString(),
+      };
+}
+
+async function addAlertSignal(alertSignal) {
+  const provider = getActiveAlertSignalStorageProvider();
+
+  if (provider.storageMode !== "supabase") {
+    const error = new Error("Alert signal storage is not configured.");
+    error.status = 503;
+    throw error;
+  }
+
+  const inserted = await addSupabaseAlertSignal({
+    alertSignal,
+    config: provider.config,
+  });
+
+  return {
+    storageMode: provider.storageMode,
+    alertSignal: inserted,
+  };
+}
+
+async function readRecentSupabaseAlertSignals({
+  limit = PUBLIC_ALERT_SIGNAL_LIMIT,
+  config = getSupabaseAlertSignalConfig(),
+} = {}) {
+  const url = buildSupabaseTableUrl(config);
+  url.searchParams.set(
+    "select",
+    "alert_type,market_question,reason,severity,source,created_at"
+  );
+  url.searchParams.set("order", "created_at.desc");
+  url.searchParams.set("limit", String(limit));
+
+  const rows = await fetchSupabaseJson(url, {
+    headers: getSupabaseHeaders(config),
+    logLabel: "alert-signals",
+    errorLabel: "alert signals",
+  });
+
+  return (Array.isArray(rows) ? rows : [])
+    .map(mapSupabaseAlertSignalRow)
+    .filter((alertSignal) => alertSignal.alertType && alertSignal.marketQuestion);
+}
+
+async function readRecentAlertSignals(limit = PUBLIC_ALERT_SIGNAL_LIMIT) {
+  const provider = getActiveAlertSignalStorageProvider();
+
+  if (provider.storageMode !== "supabase") {
+    return [];
+  }
+
+  const signals = await readRecentSupabaseAlertSignals({
+    limit,
+    config: provider.config,
+  });
+
+  return signals.map(toPublicAlertSignal);
+}
+
+function getLatestAlertSignalAt(signals) {
+  let latestTimestamp = 0;
+
+  for (const signal of Array.isArray(signals) ? signals : []) {
+    const timestamp = Date.parse(signal?.createdAt);
+    if (Number.isFinite(timestamp) && timestamp > latestTimestamp) {
+      latestTimestamp = timestamp;
+    }
+  }
+
+  return latestTimestamp ? new Date(latestTimestamp).toISOString() : null;
+}
+
+async function readAlertSignalStatusSummary() {
+  const provider = getActiveAlertSignalStorageProvider();
+
+  if (provider.storageMode !== "supabase") {
+    return {
+      alertSignals: {
+        count: 0,
+        latestAlertAt: null,
+      },
+      alertStorage: "not_configured",
+    };
+  }
+
+  const url = buildSupabaseTableUrl(provider.config);
+  url.searchParams.set("select", "created_at");
+  url.searchParams.set("order", "created_at.desc");
+
+  const rows = await fetchSupabaseJson(url, {
+    headers: getSupabaseHeaders(provider.config),
+    logLabel: "alert-signals",
+    errorLabel: "alert signals",
+  });
+
+  const signals = (Array.isArray(rows) ? rows : []).map(mapSupabaseAlertSignalRow);
+
+  return {
+    alertSignals: {
+      count: signals.length,
+      latestAlertAt: getLatestAlertSignalAt(signals),
+    },
+    alertStorage: "ok",
+  };
+}
+
 function getAdminSecret() {
   return envFirst("PBP_ADMIN_SECRET");
 }
@@ -689,6 +966,43 @@ function authorizeAdminRequest(req, res) {
   }
 
   const providedSecret = getProvidedAdminSecret(req);
+  if (!secretsMatch(providedSecret, expectedSecret)) {
+    res.status(401).json({
+      ok: false,
+      error: "Unauthorized.",
+    });
+    return false;
+  }
+
+  return true;
+}
+
+function getAlertIngestSecret() {
+  return envFirst("PBP_ALERT_INGEST_SECRET");
+}
+
+function getProvidedBearerToken(req) {
+  const authorizationHeader = String(req.get("authorization") || "").trim();
+
+  if (!/^bearer\s+/i.test(authorizationHeader)) {
+    return "";
+  }
+
+  return authorizationHeader.replace(/^bearer\s+/i, "").trim();
+}
+
+function authorizeAlertIngestRequest(req, res) {
+  const expectedSecret = getAlertIngestSecret();
+
+  if (!expectedSecret) {
+    res.status(503).json({
+      ok: false,
+      error: "Alert ingestion is not configured.",
+    });
+    return false;
+  }
+
+  const providedSecret = getProvidedBearerToken(req);
   if (!secretsMatch(providedSecret, expectedSecret)) {
     res.status(401).json({
       ok: false,
@@ -2665,6 +2979,66 @@ app.post("/api/trade/submit-signed", async (req, res) => {
   }
 });
 
+app.post("/api/internal/alerts", async (req, res) => {
+  if (!authorizeAlertIngestRequest(req, res)) return;
+
+  try {
+    const alertSignal = normalizeAlertSignalInput(req.body);
+
+    if (!alertSignal.alertType) {
+      return res.status(400).json({
+        ok: false,
+        error: "alertType is required.",
+      });
+    }
+
+    if (!alertSignal.marketQuestion) {
+      return res.status(400).json({
+        ok: false,
+        error: "marketQuestion is required.",
+      });
+    }
+
+    logAlertSignalStorageMode("ingest start");
+    const result = await addAlertSignal(alertSignal);
+
+    return res.status(201).json({
+      ok: true,
+      status: "created",
+      storageMode: result.storageMode,
+      alert: toPublicAlertSignal(result.alertSignal),
+      message: "Alert signal stored.",
+    });
+  } catch (error) {
+    console.error("[alert-signals] Ingest failed:", error.message);
+    return res.status(error.status || 500).json({
+      ok: false,
+      error: error.status === 503
+        ? "Alert signal storage is not configured."
+        : "Failed to store alert signal.",
+    });
+  }
+});
+
+app.get("/api/alerts/recent", async (req, res) => {
+  try {
+    const alerts = await readRecentAlertSignals(PUBLIC_ALERT_SIGNAL_LIMIT);
+
+    res.set("Cache-Control", "no-store");
+    return res.json({
+      ok: true,
+      alerts,
+      generatedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("[alert-signals] Recent read failed:", error.message);
+    return res.status(500).json({
+      ok: false,
+      error: "Failed to load recent alert signals.",
+    });
+  }
+});
+
 app.post("/api/waitlist", async (req, res) => {
   try {
     const email = normalizeWaitlistEmail(req.body?.email);
@@ -2733,13 +3107,18 @@ app.get("/api/admin/status", async (req, res) => {
 
   try {
     logWaitlistStorageMode("admin status start");
-    const summary = await readWaitlistStatusSummary();
+    logAlertSignalStorageMode("admin status start");
+    const [waitlistSummary, alertSignalSummary] = await Promise.all([
+      readWaitlistStatusSummary(),
+      readAlertSignalStatusSummary(),
+    ]);
 
     res.set("Cache-Control", "no-store");
     return res.json({
       ok: true,
-      storageMode: summary.storageMode,
-      waitlist: summary.waitlist,
+      storageMode: waitlistSummary.storageMode,
+      waitlist: waitlistSummary.waitlist,
+      alertSignals: alertSignalSummary.alertSignals,
       app: {
         name: "Paid by Polymarket OS",
         feature: "PBP Alerts",
@@ -2747,6 +3126,7 @@ app.get("/api/admin/status", async (req, res) => {
       },
       checks: {
         waitlistStorage: "ok",
+        alertStorage: alertSignalSummary.alertStorage,
         adminAuth: "ok",
       },
       generatedAt: new Date().toISOString(),
