@@ -26,6 +26,9 @@ const LIVE_REFRESH_INTERVAL_MS = 120_000;
 const FETCH_TIMEOUT_MS = 15_000;
 const PRICE_MEMORY_WINDOW_MS = 24 * 60 * 60 * 1000;
 const PRICE_MEMORY_MIN_SAMPLE_GAP_MS = 60_000;
+const MARKET_END_GRACE_MS = 15 * 60 * 1000;
+const MARKET_FRESH_MS = 60 * 60 * 1000;
+const MARKET_STALE_MS = 72 * 60 * 60 * 1000;
 
 const TRUSTED_TOP_LEVEL_CATEGORIES = new Set([
   "News",
@@ -1570,6 +1573,28 @@ function parseIsoTimestamp(value) {
   return Number.isFinite(ts) ? ts : null;
 }
 
+function isExplicitTrue(value) {
+  if (value === true || value === 1) return true;
+  if (typeof value === "string") {
+    return ["true", "1", "yes"].includes(value.trim().toLowerCase());
+  }
+  return false;
+}
+
+function isExplicitFalse(value) {
+  if (value === false || value === 0) return true;
+  if (typeof value === "string") {
+    return ["false", "0", "no"].includes(value.trim().toLowerCase());
+  }
+  return false;
+}
+
+function readBooleanFlag(value, fallback = false) {
+  if (isExplicitTrue(value)) return true;
+  if (isExplicitFalse(value)) return false;
+  return fallback;
+}
+
 function newestIso(...values) {
   let bestTs = null;
   let bestValue = "";
@@ -1583,6 +1608,80 @@ function newestIso(...values) {
   }
 
   return bestValue;
+}
+
+function normalizeMarketQuestion(raw) {
+  return String(
+    raw?.question ||
+      raw?.title ||
+      raw?.groupItemTitle ||
+      raw?.events?.[0]?.title ||
+      ""
+  )
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function hasUsableMarketQuestion(value) {
+  const question = String(value || "").replace(/\s+/g, " ").trim();
+  if (!question) return false;
+  return !/^(untitled|untitled market|unknown|n\/a|na|null|undefined)$/i.test(
+    question
+  );
+}
+
+function getMarketStatusText(raw) {
+  return String(
+    raw?.status ||
+      raw?.marketStatus ||
+      raw?.resolutionStatus ||
+      raw?.events?.[0]?.status ||
+      raw?.events?.[0]?.resolutionStatus ||
+      ""
+  )
+    .trim()
+    .toLowerCase();
+}
+
+function hasResolvedStatus(raw) {
+  const status = getMarketStatusText(raw);
+  return /^(resolved|settled|final|finalized|cancelled|canceled)$/i.test(status);
+}
+
+function hasClosedStatus(raw) {
+  const status = getMarketStatusText(raw);
+  return /^(closed|ended|expired|inactive|disabled)$/i.test(status);
+}
+
+function getMarketEndDate(raw) {
+  return newestIso(
+    raw?.endDate,
+    raw?.endDateIso,
+    raw?.end_date,
+    raw?.closeTime,
+    raw?.closedTime,
+    raw?.events?.map((event) => event?.endDate),
+    raw?.events?.map((event) => event?.endDateIso),
+    raw?.events?.map((event) => event?.end_date),
+    raw?.events?.map((event) => event?.closeTime),
+    raw?.events?.map((event) => event?.closedTime)
+  );
+}
+
+function hasClearlyEndedByTime(raw) {
+  const endTs = parseIsoTimestamp(getMarketEndDate(raw));
+  return endTs !== null && Date.now() - endTs > MARKET_END_GRACE_MS;
+}
+
+function getMarketDataFreshness(lastUpdated) {
+  const updatedTs = parseIsoTimestamp(lastUpdated);
+  if (updatedTs === null) return "unknown";
+
+  const ageMs = Date.now() - updatedTs;
+  if (ageMs < 0) return "unknown";
+  if (ageMs <= MARKET_FRESH_MS) return "fresh";
+  if (ageMs > MARKET_STALE_MS) return "stale";
+  return "unknown";
 }
 
 function normalizeOneDayPriceChange(value) {
@@ -1741,6 +1840,7 @@ function normalizeMarket(raw) {
   const outcomes = parseStringArray(raw?.outcomes);
   const outcomePrices = parseNumberArray(raw?.outcomePrices);
   const tokenIds = parseStringArray(raw?.clobTokenIds);
+  const question = normalizeMarketQuestion(raw);
 
   const prices = inferYesNoPrices(raw, outcomes, outcomePrices);
 
@@ -1781,14 +1881,39 @@ function normalizeMarket(raw) {
     raw?.createdAt
   );
 
+  const active =
+    isExplicitFalse(raw?.active) || isExplicitFalse(raw?.events?.[0]?.active)
+      ? false
+      : true;
+  const closed =
+    isExplicitTrue(raw?.closed) ||
+    isExplicitTrue(raw?.events?.[0]?.closed) ||
+    hasClosedStatus(raw);
+  const archived =
+    isExplicitTrue(raw?.archived) || isExplicitTrue(raw?.events?.[0]?.archived);
+  const resolved =
+    isExplicitTrue(raw?.resolved) ||
+    isExplicitTrue(raw?.isResolved) ||
+    isExplicitTrue(raw?.events?.[0]?.resolved) ||
+    hasResolvedStatus(raw);
+  const ended =
+    isExplicitTrue(raw?.ended) ||
+    isExplicitTrue(raw?.isEnded) ||
+    isExplicitTrue(raw?.events?.[0]?.ended) ||
+    hasClearlyEndedByTime(raw);
+
   const normalized = {
     id: String(raw?.id || raw?.conditionId || raw?.slug || ""),
-    question: String(raw?.question || raw?.events?.[0]?.title || "Untitled market"),
+    question,
     slug: String(raw?.slug || raw?.id || ""),
     url: buildMarketUrl(raw),
     category,
-    active: !!raw?.active,
-    closed: !!raw?.closed,
+    active,
+    closed,
+    archived,
+    resolved,
+    ended,
+    acceptingOrders: readBooleanFlag(raw?.acceptingOrders, true),
     liquidity: roundTo(liquidity, 2) || 0,
     volume: roundTo(volume, 2) || 0,
     volume24hr: roundTo(volume24hr, 2) || 0,
@@ -1798,6 +1923,8 @@ function normalizeMarket(raw) {
     noPriceLive: prices.noPrice,
     oneDayPriceChange,
     lastUpdated,
+    dataSource: "gamma",
+    dataFreshness: getMarketDataFreshness(lastUpdated),
     outcomes,
     outcomePrices,
     tokenIds,
@@ -1829,6 +1956,18 @@ function normalizeMarket(raw) {
     ...normalized,
     ...signalBits,
   };
+}
+
+function isLiveMarketCandidate(market) {
+  if (!market || !market.id || !hasUsableMarketQuestion(market.question)) {
+    return false;
+  }
+  if (market.active === false) return false;
+  if (market.acceptingOrders === false) return false;
+  if (market.closed || market.archived || market.resolved || market.ended) {
+    return false;
+  }
+  return true;
 }
 
 function updatePriceMemory(markets) {
@@ -2411,18 +2550,32 @@ async function refreshLiveMarkets(force = false) {
 
   const rawMarkets = await fetchGammaMarkets();
   const normalized = rawMarkets
-    .map(normalizeMarket)
-    .filter((market) => market.id && market.question)
-    .sort((a, b) => (b.volume24hr || 0) - (a.volume24hr || 0));
+    .map((raw) => {
+      try {
+        return normalizeMarket(raw);
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean);
+  const filtered = normalized.filter(isLiveMarketCandidate);
+  const sorted = filtered.sort((a, b) => (b.volume24hr || 0) - (a.volume24hr || 0));
 
-  liveDataState.markets = normalized;
+  liveDataState.markets = sorted;
   liveDataState.lastFetchedAt = Date.now();
 
-  updatePriceMemory(normalized);
-  refreshSignalLog(normalized);
+  console.info("Live market refresh counts", {
+    fetchedCount: rawMarkets.length,
+    normalizedCount: normalized.length,
+    filteredCount: normalized.length - filtered.length,
+    returnedCount: sorted.length,
+  });
+
+  updatePriceMemory(sorted);
+  refreshSignalLog(sorted);
   revalueOpenPositions();
 
-  return normalized;
+  return sorted;
 }
 
 function getMarketById(marketId) {
@@ -2436,8 +2589,10 @@ app.get("/api/liveMarkets", async (req, res) => {
     const markets = await refreshLiveMarkets();
     res.json({
       ok: true,
-      markets,
+      count: markets.length,
       lastRefreshedAt: new Date(liveDataState.lastFetchedAt).toISOString(),
+      source: "gamma",
+      markets,
     });
   } catch (error) {
     res
@@ -2449,10 +2604,13 @@ app.get("/api/liveMarkets", async (req, res) => {
 app.get("/api/biggestMovers", async (req, res) => {
   try {
     const markets = await refreshLiveMarkets();
+    const movers = buildBiggestMovers(markets);
     res.json({
       ok: true,
-      markets: buildBiggestMovers(markets),
+      count: movers.length,
       lastRefreshedAt: new Date(liveDataState.lastFetchedAt).toISOString(),
+      source: "gamma",
+      markets: movers,
     });
   } catch (error) {
     res

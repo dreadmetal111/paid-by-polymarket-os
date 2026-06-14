@@ -489,8 +489,8 @@ function updateHomepageLastRefreshedLabel() {
   const label = document.getElementById("homepageLastRefreshed");
   if (!label) return;
   label.textContent = lastHomepageDiscoveryRefreshAt
-    ? `Last refreshed: ${formatTimestamp(lastHomepageDiscoveryRefreshAt)}`
-    : "Last refreshed: —";
+    ? `Data refreshed: ${formatTimestamp(lastHomepageDiscoveryRefreshAt)}`
+    : "Data refreshed: —";
 }
 
 function renderHomepageCategoryChipRail() {
@@ -990,14 +990,18 @@ async function loadHomepageDiscoveryData() {
   try {
     const res = await fetch("/api/liveMarkets");
     const data = await res.json();
+    const markets = Array.isArray(data) ? data : data.markets;
+    const responseOk = Array.isArray(data) ? res.ok : data.ok;
 
-    if (!data.ok || !Array.isArray(data.markets)) {
+    if (!responseOk || !Array.isArray(markets)) {
       throw new Error("Invalid live markets response");
     }
 
-    liveMarketsCache = data.markets;
-    hotMarketsCache = data.markets;
-    lastHomepageDiscoveryRefreshAt = new Date().toISOString();
+    liveMarketsCache = markets;
+    hotMarketsCache = markets;
+    lastHomepageDiscoveryRefreshAt = Array.isArray(data)
+      ? new Date().toISOString()
+      : data.lastRefreshedAt || new Date().toISOString();
 
     renderHomepageCategoryChipRail();
 
@@ -2944,12 +2948,17 @@ async function loadBiggestMovers() {
   try {
     const res = await fetch("/api/biggestMovers");
     const data = await res.json();
+    const markets = Array.isArray(data) ? data : data.markets;
+    const responseOk = Array.isArray(data) ? res.ok : data.ok;
 
-    if (!data.ok || !Array.isArray(data.markets)) {
+    if (!responseOk || !Array.isArray(markets)) {
       throw new Error("Invalid biggest movers response");
     }
 
-    biggestMoversCache = data.markets;
+    biggestMoversCache = markets;
+    if (!Array.isArray(data) && data.lastRefreshedAt) {
+      lastHomepageDiscoveryRefreshAt = data.lastRefreshedAt;
+    }
     renderDiscoverPrimaryView();
   } catch (err) {
     console.error("Biggest movers load error:", err);
