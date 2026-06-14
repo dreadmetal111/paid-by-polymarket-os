@@ -4,11 +4,7 @@ Simple daily and weekly operating checklist for Paid by Polymarket OS and PBP Al
 
 ## 1. Daily Admin Check
 
-- Check the protected admin status endpoint:
-
-```bash
-GET /api/admin/status
-```
+- Check the protected admin status endpoint: `GET /api/admin/status`
 
 - Confirm:
   - `storageMode` is `supabase`
