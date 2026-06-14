@@ -240,6 +240,46 @@ details summary {
   margin-top: 6px;
 }
 
+.pbp-why-section {
+  margin-top: 18px;
+}
+
+.pbp-section-heading {
+  max-width: 760px;
+  margin-bottom: 14px;
+}
+
+.pbp-section-heading h2 {
+  margin-bottom: 0;
+}
+
+.pbp-why-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.pbp-why-card {
+  min-height: 190px;
+  display: flex;
+  flex-direction: column;
+}
+
+.pbp-why-card h3 {
+  margin-top: 12px;
+}
+
+.pbp-why-number {
+  width: fit-content;
+  border: 1px solid rgba(56, 189, 248, 0.24);
+  border-radius: 999px;
+  background: rgba(56, 189, 248, 0.1);
+  color: #bae6fd;
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  padding: 6px 9px;
+}
+
 .pbp-alerts-section {
   margin-top: 18px;
 }
@@ -568,6 +608,7 @@ pre {
   }
 
   .pbp-alerts-layout,
+  .pbp-why-grid,
   .pbp-alert-feature-grid {
     grid-template-columns: 1fr;
   }
@@ -588,6 +629,18 @@ pre {
 
   .pbp-alerts-section {
     margin-top: 14px;
+  }
+
+  .pbp-why-section {
+    margin-top: 14px;
+  }
+
+  .pbp-section-heading {
+    margin-bottom: 12px;
+  }
+
+  .pbp-why-card {
+    min-height: auto;
   }
 
   .pbp-alerts-intro-card,
