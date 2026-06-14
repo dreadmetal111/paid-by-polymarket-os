@@ -28,6 +28,9 @@ try {
     $OutboundClickCount = $null
     $LatestClickAt = $null
     $OutboundClickStorageCheck = $null
+    $FeedbackCount = $null
+    $LatestFeedbackAt = $null
+    $FeedbackStorageCheck = $null
 
     if ($null -ne $Response.alertSignals) {
         $AlertSignalCount = $Response.alertSignals.count
@@ -39,9 +42,15 @@ try {
         $LatestClickAt = $Response.outboundClicks.latestClickAt
     }
 
+    if ($null -ne $Response.feedback) {
+        $FeedbackCount = $Response.feedback.count
+        $LatestFeedbackAt = $Response.feedback.latestFeedbackAt
+    }
+
     if ($null -ne $Response.checks) {
         $AlertStorageCheck = $Response.checks.alertStorage
         $OutboundClickStorageCheck = $Response.checks.outboundClickStorage
+        $FeedbackStorageCheck = $Response.checks.feedbackStorage
     }
 
     $SafeSummary = [ordered]@{
@@ -59,10 +68,15 @@ try {
             count = $OutboundClickCount
             latestClickAt = $LatestClickAt
         }
+        feedback = [ordered]@{
+            count = $FeedbackCount
+            latestFeedbackAt = $LatestFeedbackAt
+        }
         checks = [ordered]@{
             waitlistStorage = $Response.checks.waitlistStorage
             alertStorage = $AlertStorageCheck
             outboundClickStorage = $OutboundClickStorageCheck
+            feedbackStorage = $FeedbackStorageCheck
         }
         generatedAt = $Response.generatedAt
     }

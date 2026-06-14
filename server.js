@@ -4057,10 +4057,18 @@ app.get("/api/admin/status", async (req, res) => {
       readOutboundClickStatusSummary(),
       readBetaFeedbackStatusSummary(),
     ]);
+    const checks = {
+      waitlistStorage: "ok",
+      alertStorage: alertSignalSummary.alertStorage,
+      outboundClickStorage: outboundClickSummary.outboundClickStorage,
+      feedbackStorage: feedbackSummary.feedbackStorage,
+      adminAuth: "ok",
+    };
+    const statusOk = Object.values(checks).every((value) => value === "ok");
 
     res.set("Cache-Control", "no-store");
     return res.json({
-      ok: true,
+      ok: statusOk,
       storageMode: waitlistSummary.storageMode,
       waitlist: waitlistSummary.waitlist,
       alertSignals: alertSignalSummary.alertSignals,
@@ -4071,13 +4079,7 @@ app.get("/api/admin/status", async (req, res) => {
         feature: "PBP Alerts",
         status: "live",
       },
-      checks: {
-        waitlistStorage: "ok",
-        alertStorage: alertSignalSummary.alertStorage,
-        outboundClickStorage: outboundClickSummary.outboundClickStorage,
-        feedbackStorage: feedbackSummary.feedbackStorage,
-        adminAuth: "ok",
-      },
+      checks,
       generatedAt: new Date().toISOString(),
     });
   } catch (error) {
