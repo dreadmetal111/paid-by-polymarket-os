@@ -306,6 +306,13 @@ details summary {
   margin-bottom: 14px;
 }
 
+.pbp-alert-status-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
 .pbp-example-alert {
   background: rgba(2, 8, 23, 0.58);
 }
@@ -401,6 +408,18 @@ details summary {
   background: rgba(34, 197, 94, 0.13);
   border-color: rgba(34, 197, 94, 0.28);
   color: #bbf7d0;
+}
+
+.signal.soft {
+  background: rgba(148, 163, 184, 0.1);
+  border-color: rgba(148, 163, 184, 0.18);
+  color: #cbd5e1;
+}
+
+.signal.muted {
+  background: rgba(2, 8, 23, 0.46);
+  border-color: rgba(148, 163, 184, 0.12);
+  color: var(--muted);
 }
 
 .positive {
@@ -601,6 +620,10 @@ pre {
 
   .pbp-alerts-example-header .signal {
     align-self: flex-start;
+  }
+
+  .pbp-alert-status-row {
+    justify-content: flex-start;
   }
 
   .pbp-example-alert {

@@ -11,7 +11,7 @@
       name="description"
       content="Paid by Polymarket OS is a live market-discovery and execution-prep product for scanning prediction markets faster."
     />
-    <link rel="stylesheet" href="/style.css?v=pbp-alerts-live-1" />
+    <link rel="stylesheet" href="/style.css?v=pbp-alerts-status-1" />
   </head>
   <body>
     <header id="hero">
@@ -107,7 +107,10 @@
                 <p class="market-small">Public preview</p>
                 <h3>Latest Alert Signals</h3>
               </div>
-              <span id="pbpLatestAlertSignalsBadge" class="signal">Static examples</span>
+              <div class="pbp-alert-status-row" aria-live="polite">
+                <span id="pbpLatestAlertSignalsBadge" class="signal soft">Example alerts shown</span>
+                <span class="signal muted">Updates every 60s</span>
+              </div>
             </div>
 
             <div id="pbpLatestAlertSignalsList" class="alerts-list">
@@ -377,6 +380,6 @@
       </section>
     </main>
 
-    <script src="/app.js?v=pbp-alerts-live-1" type="module"></script>
+    <script src="/app.js?v=pbp-alerts-status-1" type="module"></script>
   </body>
 </html>

@@ -263,8 +263,9 @@ function restoreLatestAlertSignalsFallback() {
     list.innerHTML = latestAlertSignalsFallbackHtml;
   }
   if (badge) {
-    badge.textContent = "Static examples";
+    badge.textContent = "Example alerts shown";
     badge.classList.remove("live");
+    badge.classList.add("soft");
   }
 }
 
@@ -368,8 +369,9 @@ async function loadLatestAlertSignals() {
 
     list.innerHTML = alerts.map(renderLatestAlertSignalCard).join("");
     if (badge) {
-      badge.textContent = "Live feed";
+      badge.textContent = "Live alerts active";
       badge.classList.add("live");
+      badge.classList.remove("soft");
     }
   } catch {
     console.warn("Latest alert signals unavailable; showing static examples.");
