@@ -3,6 +3,19 @@ const POLYMARKET_CHAIN_ID = 137;
 const POLYGON_HEX_CHAIN_ID = "0x89";
 const PBP_ALERTS_WAITLIST_STORAGE_KEY = "pbpAlertsWaitlistEmails";
 const PBP_LATEST_ALERT_SIGNALS_LIMIT = 3;
+// Advanced demo sections stay available for internal testing with ?debug=1 during public beta.
+const PBP_PUBLIC_BETA_DEBUG_MODE = new URLSearchParams(window.location.search).get("debug") === "1";
+const PBP_PUBLIC_BETA_INTERNAL_SECTION_IDS = [
+  "tradeExecutionPanel",
+  "accountStatePanel",
+  "accountControlsPanel",
+  "paperPortfolioStatsPanel",
+  "paperPortfolioControlsPanel",
+  "performanceStatsPanel",
+  "signalLogPanel",
+  "openPositionsPanel",
+  "closedPositionsPanel",
+];
 
 const PBP_ALERT_TYPE_LABELS = {
   new_high_volume: "New high-activity market",
@@ -934,6 +947,25 @@ function hideLegacyDiscoverSections() {
   });
 }
 
+function getPublicBetaInternalSections() {
+  return uniqueSections(
+    PBP_PUBLIC_BETA_INTERNAL_SECTION_IDS.map((id) => getClosestSectionByElementId(id))
+  );
+}
+
+function applyPublicBetaInternalVisibility() {
+  document.body.classList.toggle("pbp-debug-mode", PBP_PUBLIC_BETA_DEBUG_MODE);
+
+  getPublicBetaInternalSections().forEach((section) => {
+    section.classList.toggle("pbp-tab-section-hidden", !PBP_PUBLIC_BETA_DEBUG_MODE);
+  });
+
+  const tabsSection = document.getElementById("pbpTopLevelTabsSection");
+  if (tabsSection && !PBP_PUBLIC_BETA_DEBUG_MODE) {
+    tabsSection.remove();
+  }
+}
+
 function getManagedTopLevelSections() {
   const discoverSections = uniqueSections([document.getElementById("homepageStrategyLayer")]);
 
@@ -977,6 +1009,12 @@ function updateTopLevelTabButtons() {
 }
 
 function applyTopLevelView() {
+  if (!PBP_PUBLIC_BETA_DEBUG_MODE) {
+    hideLegacyDiscoverSections();
+    applyPublicBetaInternalVisibility();
+    return;
+  }
+
   const groups = getManagedTopLevelSections();
   const activeSections = new Set(groups[currentTopLevelView] || []);
   const allSections = new Set([
@@ -1002,6 +1040,11 @@ function setTopLevelView(nextView) {
 
 function ensureTopLevelTabs() {
   ensureTopLevelNavStyles();
+
+  if (!PBP_PUBLIC_BETA_DEBUG_MODE) {
+    applyPublicBetaInternalVisibility();
+    return;
+  }
 
   const existing = document.getElementById("pbpTopLevelTabsSection");
   if (existing) {
@@ -3214,26 +3257,32 @@ document.addEventListener("DOMContentLoaded", async () => {
   await beginCleanPublicLoad();
 
   renderTradeTicketPanel();
-  renderTradeExecutionResult(`<p class="empty">No execution prep run yet.</p>`);
+  if (PBP_PUBLIC_BETA_DEBUG_MODE) {
+    renderTradeExecutionResult(`<p class="empty">No execution prep run yet.</p>`);
+  }
   applyTopLevelView();
 
   await loadLatestAlertSignals();
-  await loadAccountState();
   await loadAlerts();
-  await loadPerformanceStats();
-  await loadPaperPortfolio();
-  await loadSignalLog();
   await loadHomepageDiscoveryData(true);
   await loadBiggestMovers();
+  if (PBP_PUBLIC_BETA_DEBUG_MODE) {
+    await loadAccountState();
+    await loadPerformanceStats();
+    await loadPaperPortfolio();
+    await loadSignalLog();
+  }
 
   setTopLevelView("discover");
 
-  setInterval(loadAccountState, 60000);
   setInterval(loadLatestAlertSignals, 60000);
   setInterval(loadAlerts, 60000);
-  setInterval(loadPerformanceStats, 60000);
-  setInterval(loadPaperPortfolio, 60000);
-  setInterval(loadSignalLog, 60000);
   setInterval(() => loadHomepageDiscoveryData(true), 60000);
   setInterval(loadBiggestMovers, 60000);
+  if (PBP_PUBLIC_BETA_DEBUG_MODE) {
+    setInterval(loadAccountState, 60000);
+    setInterval(loadPerformanceStats, 60000);
+    setInterval(loadPaperPortfolio, 60000);
+    setInterval(loadSignalLog, 60000);
+  }
 });

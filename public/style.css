@@ -650,6 +650,14 @@ pre {
   overflow-x: auto;
 }
 
+.public-beta-internal-section {
+  display: none;
+}
+
+body.pbp-debug-mode .public-beta-internal-section {
+  display: block;
+}
+
 .pbp-tab-section-hidden {
   display: none !important;
 }
