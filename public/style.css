@@ -300,6 +300,27 @@ details summary {
   background: rgba(2, 8, 23, 0.58);
 }
 
+.pbp-example-alert-topline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.pbp-example-alert-topline .alert-time {
+  margin-top: 0;
+  white-space: nowrap;
+}
+
+.pbp-alert-type {
+  color: #bae6fd;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
 .signals {
   display: flex;
   flex-wrap: wrap;
@@ -468,6 +489,16 @@ pre {
 
   .pbp-alert-waitlist-row {
     grid-template-columns: 1fr;
+  }
+
+  .pbp-example-alert-topline {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .pbp-example-alert-topline .alert-time {
+    white-space: normal;
   }
 
   .market-footer,
