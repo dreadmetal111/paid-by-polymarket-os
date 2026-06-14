@@ -22,6 +22,19 @@ try {
         -Headers $Headers `
         -ErrorAction Stop
 
+    $AlertSignalCount = $null
+    $LatestAlertAt = $null
+    $AlertStorageCheck = $null
+
+    if ($null -ne $Response.alertSignals) {
+        $AlertSignalCount = $Response.alertSignals.count
+        $LatestAlertAt = $Response.alertSignals.latestAlertAt
+    }
+
+    if ($null -ne $Response.checks) {
+        $AlertStorageCheck = $Response.checks.alertStorage
+    }
+
     $SafeSummary = [ordered]@{
         ok = $Response.ok
         storageMode = $Response.storageMode
@@ -29,8 +42,13 @@ try {
             count = $Response.waitlist.count
             latestSignupAt = $Response.waitlist.latestSignupAt
         }
+        alertSignals = [ordered]@{
+            count = $AlertSignalCount
+            latestAlertAt = $LatestAlertAt
+        }
         checks = [ordered]@{
             waitlistStorage = $Response.checks.waitlistStorage
+            alertStorage = $AlertStorageCheck
         }
         generatedAt = $Response.generatedAt
     }
