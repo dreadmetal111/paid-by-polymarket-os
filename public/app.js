@@ -3,6 +3,8 @@ const POLYMARKET_CHAIN_ID = 137;
 const POLYGON_HEX_CHAIN_ID = "0x89";
 const PBP_ALERTS_WAITLIST_STORAGE_KEY = "pbpAlertsWaitlistEmails";
 const PBP_LATEST_ALERT_SIGNALS_LIMIT = 3;
+const DISCOVER_RESULT_LIMIT = 8;
+const DISCOVER_CANDIDATE_LIMIT = 120;
 // Advanced demo sections stay available for internal testing with ?debug=1 during public beta.
 const PBP_PUBLIC_BETA_DEBUG_MODE = new URLSearchParams(window.location.search).get("debug") === "1";
 const PBP_PUBLIC_BETA_INTERNAL_SECTION_IDS = [
@@ -865,7 +867,9 @@ function getEmergingMarkets(markets) {
     })
     .filter((market) => isDiscoveryQualityMarket(market) && (market.lastUpdated || market.volume24hr || market.liquidity));
 
-  return scored.sort((a, b) => b._emergingScore - a._emergingScore).slice(0, 32);
+  return scored
+    .sort((a, b) => b._emergingScore - a._emergingScore)
+    .slice(0, DISCOVER_CANDIDATE_LIMIT);
 }
 
 function shouldGroupCurrentDiscoverView() {
@@ -920,6 +924,10 @@ function getDiscoverItemCategoryKey(item) {
   return getPublicCategoryKey(item?.market || item);
 }
 
+function getDiscoverItemScore(item) {
+  return Number.isFinite(Number(item?.score)) ? Number(item.score) : 0;
+}
+
 function getDiscoverItemFamilyKey(item) {
   if (item?.type === "group") return item.key;
   const market = item?.market || item || {};
@@ -942,12 +950,14 @@ function rememberSelectedDiscoverItem(item, familySingleCounts) {
 }
 
 // Diversity is applied after quality/ranking, so weak markets are not forced
-// onto the page. In the All view, the first pass tries to include several
-// categories before filling remaining slots by score.
-function selectDiverseDiscoverItems(items, limit = 8) {
+// onto the page. In the All view, the first pass reserves space for multiple
+// categories/events, then fills remaining slots by score.
+function selectDiverseDiscoverItems(items, limit = DISCOVER_RESULT_LIMIT) {
   const sorted = [...(Array.isArray(items) ? items : [])].sort((a, b) => b.score - a.score);
   const selected = [];
   const familySingleCounts = new Map();
+  const maxScore = sorted.reduce((best, item) => Math.max(best, getDiscoverItemScore(item)), 0);
+  const qualityFloor = maxScore > 0 ? maxScore * 0.22 : 0;
 
   const addItem = (item) => {
     if (!item || selected.length >= limit || selected.includes(item)) return false;
@@ -961,7 +971,13 @@ function selectDiverseDiscoverItems(items, limit = 8) {
     PUBLIC_BROWSE_CATEGORIES
       .filter((category) => category.key !== "ALL")
       .forEach((category) => {
-        const candidate = sorted.find((item) => getDiscoverItemCategoryKey(item) === category.key);
+        const candidate =
+          sorted.find(
+            (item) =>
+              getDiscoverItemCategoryKey(item) === category.key &&
+              getDiscoverItemScore(item) >= qualityFloor
+          ) ||
+          sorted.find((item) => getDiscoverItemCategoryKey(item) === category.key);
         addItem(candidate);
       });
   }
@@ -1025,7 +1041,7 @@ function buildGroupedDiscoverItems(markets, viewKey = currentDiscoverView) {
     })),
   ].sort((a, b) => b.score - a.score);
 
-  return selectDiverseDiscoverItems(candidates, 8);
+  return selectDiverseDiscoverItems(candidates, DISCOVER_RESULT_LIMIT);
 }
 
 function getDiscoverMarketsForCurrentView() {
@@ -1033,22 +1049,22 @@ function getDiscoverMarketsForCurrentView() {
 
   switch (currentDiscoverView) {
     case "movers":
-      return getCategoryFilteredMarkets(biggestMoversCache).slice(0, 32);
+      return getCategoryFilteredMarkets(biggestMoversCache).slice(0, DISCOVER_CANDIDATE_LIMIT);
     case "volume":
       return [...baseMarkets]
         .sort((a, b) => (b.volume24hr || 0) - (a.volume24hr || 0))
-        .slice(0, 24);
+        .slice(0, DISCOVER_CANDIDATE_LIMIT);
     case "liquid":
       return [...baseMarkets]
         .sort((a, b) => (b.liquidity || 0) - (a.liquidity || 0))
-        .slice(0, 32);
+        .slice(0, DISCOVER_CANDIDATE_LIMIT);
     case "new":
       return getEmergingMarkets(baseMarkets);
     case "opportunities":
     default:
       return [...baseMarkets]
         .sort((a, b) => getDiscoveryRankScore(b) - getDiscoveryRankScore(a))
-        .slice(0, 24);
+        .slice(0, DISCOVER_CANDIDATE_LIMIT);
   }
 }
 

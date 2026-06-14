@@ -593,6 +593,7 @@ details summary {
 
 .market-family-card {
   border-color: rgba(56, 189, 248, 0.26);
+  grid-column: 1 / -1;
 }
 
 .market-family-header {
@@ -615,9 +616,9 @@ details summary {
 
 .grouped-market-child {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(280px, 1fr) minmax(170px, auto) minmax(230px, auto);
   gap: 12px;
-  align-items: center;
+  align-items: start;
   border: 1px solid rgba(148, 163, 184, 0.12);
   border-radius: var(--radius-sm);
   background: rgba(2, 8, 23, 0.48);
@@ -630,7 +631,8 @@ details summary {
 
 .grouped-market-child-main .alert-message,
 .grouped-market-child-main .alert-time {
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
+  word-break: normal;
 }
 
 .grouped-market-child-meta {
@@ -657,13 +659,16 @@ details summary {
   flex-wrap: wrap;
   gap: 6px;
   justify-content: flex-end;
+  min-width: 0;
 }
 
 .grouped-market-child-actions .market-link,
 .grouped-market-child-actions button {
+  flex: 0 0 auto;
   min-height: 34px;
   padding: 7px 9px;
   white-space: nowrap;
+  width: auto;
 }
 
 .grouped-market-more {
@@ -884,6 +889,15 @@ body.pbp-debug-mode .public-beta-internal-section {
 
   .market-meta {
     grid-template-columns: 1fr 1fr;
+  }
+
+  .grouped-market-child {
+    grid-template-columns: 1fr;
+  }
+
+  .grouped-market-child-meta,
+  .grouped-market-child-actions {
+    justify-content: flex-start;
   }
 }
 
