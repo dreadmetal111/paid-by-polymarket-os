@@ -13,8 +13,10 @@ The product is focused on market discovery, alerting, and clean routing into Pol
 - Freshness metadata on live market data.
 - `View on Polymarket` as the primary market-card CTA.
 - PBP Alerts Beta waitlist.
+- Private public beta feedback form.
 - Live sanitized alert signals.
 - Privacy-safe outbound click tracking.
+- Advanced/internal demo features hidden from the normal public beta homepage.
 - Protected admin status checker.
 
 ## 3. Builder-Readiness Thesis
@@ -32,8 +34,11 @@ It is becoming a discovery and routing layer that helps users find active market
 - Waitlist count shows early user demand.
 - `alertSignals.count` shows the alert and intelligence layer is operating.
 - `outboundClicks.count` shows evidence that users are opening Polymarket markets from Paid by Polymarket.
+- `feedback.count` shows qualitative beta feedback and helps identify user confusion before reapplying.
 
 Do not include real emails or private user data in proof summaries. Use aggregate counts from admin status whenever possible.
+
+Beta feedback helps prioritize improvements before Builder reapplication by showing where users find the product useful, confusing, or incomplete.
 
 ## 5. Safe Admin Command
 
@@ -48,6 +53,7 @@ This safe admin check shows:
 - Waitlist count.
 - Alert signal count.
 - Outbound click count.
+- Feedback count.
 - Storage checks.
 
 It does not print waitlist emails or submissions.
@@ -68,9 +74,11 @@ It does not print waitlist emails or submissions.
 - Frontend market HTML escaping.
 - Backend market filtering and freshness metadata.
 - Discovery-first homepage.
+- Advanced/internal demo features hidden from the normal public beta experience.
 - Live alert bridge.
 - Alert quality thresholds.
 - Privacy-safe outbound click tracking.
+- Private beta feedback collection.
 
 These improvements make the product safer, clearer, and more credible as a public discovery layer.
 

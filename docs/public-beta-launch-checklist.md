@@ -15,6 +15,7 @@ Paid by Polymarket is ready for a small public beta or soft launch. It is not re
 - Discovery-first homepage.
 - Why Paid by Polymarket section.
 - PBP Alerts Beta waitlist.
+- Public beta feedback form.
 - Live market discovery cards.
 - Filtered and fresh market data.
 - Latest Alert Signals.
@@ -24,7 +25,14 @@ Paid by Polymarket is ready for a small public beta or soft launch. It is not re
 - Supabase-backed waitlist storage.
 - Supabase-backed alert signal storage.
 - Supabase-backed outbound click event storage.
+- Supabase-backed beta feedback storage, with local JSON fallback.
+- Advanced/internal demo sections hidden from the normal public beta homepage.
+- Internal/demo sections available with `?debug=1`.
 - Protected admin status checker.
+
+Internal debug URL:
+
+[https://paid-by-polymarket-os.onrender.com/?debug=1](https://paid-by-polymarket-os.onrender.com/?debug=1)
 
 ## 4. Final Public-Site QA Results
 
@@ -36,6 +44,9 @@ Paid by Polymarket is ready for a small public beta or soft launch. It is not re
 - View on Polymarket click tracking: PASSED.
 - Preview Trade secondary action: PASSED.
 - Waitlist submit: PASSED.
+- Beta feedback submit: PASSED.
+- Advanced/internal demo sections hidden on normal public URL: PASSED.
+- Advanced/internal demo sections available with `?debug=1`: PASSED.
 - Mobile layout: PASSED.
 - Admin checker after interactions: PASSED.
 
@@ -44,16 +55,19 @@ Paid by Polymarket is ready for a small public beta or soft launch. It is not re
 - `waitlist.count`: 2+
 - `outboundClicks.count`: 3+
 - `alertSignals.count`: 18+
+- `feedback.count`: tracked via beta feedback storage.
 - `storageMode`: supabase
 - `waitlistStorage`: ok
 - `alertStorage`: ok
 - `outboundClickStorage`: ok
+- `feedbackStorage`: ok when feedback status is included in admin status.
 
 What these mean:
 
 - Waitlist count = early demand.
 - Outbound clicks = users opening Polymarket markets from PBP.
 - Alert signals = live intelligence layer is active.
+- Feedback count = qualitative beta feedback and user confusion signal.
 
 Do not include real emails or private data in public updates, screenshots, logs, or launch posts.
 
@@ -63,8 +77,11 @@ Do not include real emails or private data in public updates, screenshots, logs,
 - Market cards load.
 - Alert signals display safely.
 - Waitlist works.
+- Feedback collection works.
 - Outbound click tracking works.
 - Admin checker returns ok.
+- Advanced/internal demo sections are hidden from the normal public URL.
+- Advanced/internal demo sections are available with `?debug=1` for internal testing.
 - No secrets appear publicly.
 - No official Polymarket approval claim appears.
 - No guaranteed profit or trading advice language appears.
@@ -77,6 +94,7 @@ Do not include real emails or private data in public updates, screenshots, logs,
 - Waitlist storage fails.
 - Alert storage fails.
 - Outbound click storage fails.
+- Feedback storage fails and beta feedback is considered launch-critical.
 - Public page exposes private info.
 - Public page claims official approval or guaranteed profits.
 - `View on Polymarket` CTA breaks.

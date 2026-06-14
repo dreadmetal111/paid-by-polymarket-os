@@ -4,6 +4,8 @@ Purpose:
 
 Collect simple private feedback from trusted public beta users without adding accounts, payments, or a public feedback wall.
 
+Feedback is private. There is no public feedback listing or public feedback export.
+
 ## What The Form Collects
 
 - Optional `rating` from 1 to 5.
@@ -18,16 +20,17 @@ Collect simple private feedback from trusted public beta users without adding ac
 - User agents.
 - Cookies.
 - Wallet addresses.
+- Private tracking fields.
 - Admin secrets.
 - Supabase service role keys.
 - Discord webhook URLs.
 - Acer/private infrastructure details.
 
-Feedback is not displayed publicly.
+Feedback is not displayed publicly, and the public site does not expose feedback messages or submitter emails.
 
 ## Supabase SQL
 
-Run this in the Supabase SQL Editor:
+The Supabase table is `public.beta_feedback`. Run this in the Supabase SQL Editor:
 
 ```sql
 create table if not exists public.beta_feedback (
@@ -54,6 +57,8 @@ data/beta-feedback.json
 This file is ignored by Git.
 
 ## PowerShell Test Command
+
+The test POST route is `/api/feedback`.
 
 ```powershell
 $body = @{
