@@ -85,6 +85,32 @@ def env_float(name: str, default: float) -> float:
         return default
 
 
+def env_int_any(names: tuple[str, ...], default: int) -> int:
+    for name in names:
+        value = env_str(name, "")
+        if not value:
+            continue
+        try:
+            return int(value)
+        except ValueError:
+            logging.warning("Invalid integer for %s; using %s", name, default)
+            return default
+    return default
+
+
+def env_float_any(names: tuple[str, ...], default: float) -> float:
+    for name in names:
+        value = env_str(name, "")
+        if not value:
+            continue
+        try:
+            return float(value)
+        except ValueError:
+            logging.warning("Invalid number for %s; using %s", name, default)
+            return default
+    return default
+
+
 def env_bool(name: str, default: bool) -> bool:
     value = env_str(name, "")
     if not value:
@@ -113,10 +139,13 @@ class Settings:
     discord_username: str
     discord_avatar_url: str
     max_discord_alerts_per_cycle: int
+    max_public_alerts_per_cycle: int
     render_alert_ingest_url: str
     alert_ingest_secret: str
     alert_cooldown_minutes: int
     alert_on_first_run: bool
+    alert_min_volume: float
+    alert_min_liquidity: float
     min_new_market_volume_24h: float
     probability_move_points: float
     volume_spike_multiplier: float
@@ -139,12 +168,21 @@ def build_settings() -> Settings:
         discord_username=env_str("PBP_DISCORD_USERNAME", "PBP Alerts"),
         discord_avatar_url=env_str("PBP_DISCORD_AVATAR_URL", ""),
         max_discord_alerts_per_cycle=max(1, env_int("PBP_MAX_DISCORD_ALERTS_PER_CYCLE", 10)),
+        max_public_alerts_per_cycle=max(1, env_int("PBP_ALERT_MAX_PUBLIC_ALERTS_PER_CYCLE", 5)),
         render_alert_ingest_url=env_str("PBP_RENDER_ALERT_INGEST_URL", ""),
         alert_ingest_secret=env_str("PBP_ALERT_INGEST_SECRET", ""),
-        alert_cooldown_minutes=max(1, env_int("PBP_ALERT_COOLDOWN_MINUTES", 60)),
+        alert_cooldown_minutes=max(
+            1,
+            env_int_any(("PBP_ALERT_MARKET_COOLDOWN_MINUTES", "PBP_ALERT_COOLDOWN_MINUTES"), 60),
+        ),
         alert_on_first_run=env_bool("PBP_ALERT_ON_FIRST_RUN", False),
+        alert_min_volume=max(0.0, env_float("PBP_ALERT_MIN_VOLUME", 50000.0)),
+        alert_min_liquidity=max(0.0, env_float("PBP_ALERT_MIN_LIQUIDITY", 10000.0)),
         min_new_market_volume_24h=max(0.0, env_float("PBP_MIN_NEW_MARKET_VOLUME_24H", 100000.0)),
-        probability_move_points=max(0.1, env_float("PBP_PROBABILITY_MOVE_POINTS", 5.0)),
+        probability_move_points=max(
+            0.1,
+            env_float_any(("PBP_ALERT_MIN_PROB_MOVE_PCT", "PBP_PROBABILITY_MOVE_POINTS"), 5.0),
+        ),
         volume_spike_multiplier=max(1.0, env_float("PBP_VOLUME_SPIKE_MULTIPLIER", 2.0)),
         volume_spike_min_change=max(0.0, env_float("PBP_VOLUME_SPIKE_MIN_CHANGE", 25000.0)),
         liquidity_spike_multiplier=max(1.0, env_float("PBP_LIQUIDITY_SPIKE_MULTIPLIER", 1.5)),
@@ -398,6 +436,9 @@ def init_db(settings: Settings) -> None:
                 severity TEXT NOT NULL,
                 title TEXT NOT NULL,
                 message TEXT NOT NULL,
+                quality_score REAL,
+                quality_label TEXT NOT NULL DEFAULT 'medium',
+                suppressed_reason TEXT,
                 details_json TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 sent_to_discord INTEGER NOT NULL DEFAULT 0,
@@ -416,6 +457,7 @@ def init_db(settings: Settings) -> None:
             """
         )
         ensure_alert_render_columns(conn)
+        ensure_alert_quality_columns(conn)
         conn.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_alerts_render_pending
@@ -444,6 +486,12 @@ def ensure_alert_render_columns(conn: sqlite3.Connection) -> None:
     ensure_sqlite_column(conn, "alerts", "sent_to_render", "INTEGER NOT NULL DEFAULT 0")
     ensure_sqlite_column(conn, "alerts", "render_sent_at", "TEXT")
     ensure_sqlite_column(conn, "alerts", "render_status", "TEXT")
+
+
+def ensure_alert_quality_columns(conn: sqlite3.Connection) -> None:
+    ensure_sqlite_column(conn, "alerts", "quality_score", "REAL")
+    ensure_sqlite_column(conn, "alerts", "quality_label", "TEXT NOT NULL DEFAULT 'medium'")
+    ensure_sqlite_column(conn, "alerts", "suppressed_reason", "TEXT")
 
 
 def fetch_live_markets(settings: Settings) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -607,6 +655,102 @@ def severity_for_probability_move(abs_delta: float) -> str:
     return "low"
 
 
+def quality_from_score(score: float) -> tuple[float, str]:
+    safe_score = round(clamp(score, 0.0, 100.0), 1)
+    if safe_score >= 80:
+        return safe_score, "high"
+    if safe_score >= 50:
+        return safe_score, "medium"
+    return safe_score, "low"
+
+
+def active_market_volume(market: sqlite3.Row) -> float:
+    return float(market["volume24hr"] or market["volume"] or 0)
+
+
+def quality_for_new_high_volume(
+    settings: Settings,
+    active_volume: float,
+    current_liquidity: float,
+) -> tuple[float, str]:
+    score = 35.0
+    if active_volume >= settings.min_new_market_volume_24h:
+        score += 25.0
+    if active_volume >= 500_000:
+        score += 25.0
+    elif active_volume >= 250_000:
+        score += 12.0
+    if current_liquidity >= settings.alert_min_liquidity:
+        score += 15.0
+    return quality_from_score(score)
+
+
+def probability_movement_passes_quality_gate(
+    settings: Settings,
+    abs_delta: float,
+    current_volume: float,
+    current_liquidity: float,
+) -> bool:
+    threshold = max(settings.probability_move_points / 100, 0.001)
+    has_volume = current_volume >= settings.alert_min_volume
+    has_liquidity = current_liquidity >= settings.alert_min_liquidity
+    clearly_sharp_move = abs_delta >= max(threshold * 2, 0.12)
+    return (has_volume and has_liquidity) or (clearly_sharp_move and (has_volume or has_liquidity))
+
+
+def quality_for_probability_movement(
+    settings: Settings,
+    abs_delta: float,
+    current_volume: float,
+    current_liquidity: float,
+) -> tuple[float, str]:
+    threshold = max(settings.probability_move_points / 100, 0.001)
+    score = 15.0 + min(30.0, (abs_delta / threshold) * 12.0)
+    if current_volume >= settings.alert_min_volume:
+        score += 25.0
+    elif current_volume >= settings.alert_min_volume * 0.5:
+        score += 10.0
+    if current_liquidity >= settings.alert_min_liquidity:
+        score += 20.0
+    elif current_liquidity >= settings.alert_min_liquidity * 0.5:
+        score += 8.0
+    return quality_from_score(score)
+
+
+def quality_for_volume_liquidity_spike(
+    settings: Settings,
+    volume_spike: bool,
+    liquidity_spike: bool,
+    current_volume: float,
+    previous_volume: float,
+    current_liquidity: float,
+    previous_liquidity: float,
+) -> tuple[float, str]:
+    score = 35.0
+    volume_change = max(0.0, current_volume - previous_volume)
+    liquidity_change = max(0.0, current_liquidity - previous_liquidity)
+
+    if volume_spike:
+        score += 25.0
+        if current_volume >= settings.alert_min_volume:
+            score += 10.0
+        if volume_change >= settings.volume_spike_min_change * 2:
+            score += 10.0
+
+    if liquidity_spike:
+        score += 20.0
+        if current_liquidity >= settings.alert_min_liquidity:
+            score += 10.0
+        if liquidity_change >= settings.liquidity_spike_min_change * 2:
+            score += 5.0
+
+    return quality_from_score(score)
+
+
+def quality_is_dispatchable(label: Any) -> bool:
+    return clean_string(label, "medium").lower() in {"medium", "high"}
+
+
 def spike_detected(current: float, previous: float, multiplier: float, min_change: float) -> bool:
     if current <= 0:
         return False
@@ -627,14 +771,25 @@ def insert_alert(
     title: str,
     message: str,
     details: dict[str, Any],
+    quality_score: float | None = None,
+    quality_label: str = "medium",
+    suppressed_reason: str = "",
 ) -> dict[str, Any] | None:
+    safe_quality_label = clean_string(quality_label, "medium").lower()
+    if not quality_is_dispatchable(safe_quality_label) and safe_quality_label != "low":
+        safe_quality_label = "medium"
+    details = dict(details)
+    details.setdefault("quality_score", quality_score)
+    details.setdefault("quality_label", safe_quality_label)
+
     cursor = conn.execute(
         """
         INSERT OR IGNORE INTO alerts (
             alert_key, alert_type, market_id, question, url,
-            severity, title, message, details_json, created_at
+            severity, title, message, quality_score, quality_label,
+            suppressed_reason, details_json, created_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             alert_key,
@@ -645,6 +800,9 @@ def insert_alert(
             severity,
             title,
             message,
+            quality_score,
+            safe_quality_label,
+            suppressed_reason,
             json_dumps(details),
             utc_now(),
         ),
@@ -663,21 +821,28 @@ def create_new_high_volume_alert(
     settings: Settings,
     market: sqlite3.Row,
 ) -> dict[str, Any] | None:
-    active_volume = float(market["volume24hr"] or market["volume"] or 0)
+    active_volume = active_market_volume(market)
     if active_volume < settings.min_new_market_volume_24h:
+        return None
+
+    current_liquidity = float(market["liquidity"] or 0)
+    quality_score, quality_label = quality_for_new_high_volume(settings, active_volume, current_liquidity)
+    if not quality_is_dispatchable(quality_label):
+        logging.info("Suppressed low-quality new high-volume market alert.")
         return None
 
     title = "New high-volume market"
     message = (
-        f"{market['question']} appeared with {money(active_volume)} in volume. "
-        f"YES is {probability(market['yes_price'])}; liquidity is {money(market['liquidity'])}."
+        f"{market['question']} is a newly detected high-activity market with {money(active_volume)} "
+        f"in volume and {money(current_liquidity)} in liquidity. YES is {probability(market['yes_price'])}."
     )
     details = {
         "current_volume": active_volume,
         "current_volume24hr": market["volume24hr"],
-        "current_liquidity": market["liquidity"],
+        "current_liquidity": current_liquidity,
         "current_yes_price": market["yes_price"],
         "threshold_volume24hr": settings.min_new_market_volume_24h,
+        "threshold_liquidity": settings.alert_min_liquidity,
     }
     return insert_alert(
         conn,
@@ -688,6 +853,8 @@ def create_new_high_volume_alert(
         title=title,
         message=message,
         details=details,
+        quality_score=quality_score,
+        quality_label=quality_label,
     )
 
 
@@ -710,11 +877,36 @@ def create_probability_movement_alert(
     if recent_alert_exists(conn, "probability_movement", market["market_id"], settings.alert_cooldown_minutes):
         return None
 
+    current_volume = active_market_volume(market)
+    current_liquidity = float(market["liquidity"] or 0)
+    if not probability_movement_passes_quality_gate(
+        settings,
+        abs(delta),
+        current_volume,
+        current_liquidity,
+    ):
+        logging.info("Suppressed low-quality probability movement alert.")
+        return None
+
+    quality_score, quality_label = quality_for_probability_movement(
+        settings,
+        abs(delta),
+        current_volume,
+        current_liquidity,
+    )
+    if not quality_is_dispatchable(quality_label):
+        logging.info("Suppressed low-quality probability movement alert.")
+        return None
+
     direction = "up" if delta > 0 else "down"
+    if current_volume >= settings.alert_min_volume and current_liquidity >= settings.alert_min_liquidity:
+        activity_context = "volume and liquidity were above the alert thresholds"
+    else:
+        activity_context = "market activity was strong enough for the alert threshold"
     title = f"Probability moved {points(delta)}"
     message = (
         f"{market['question']} moved {direction} from {probability(previous_price)} "
-        f"to {probability(current_price)}."
+        f"to {probability(current_price)} while {activity_context}."
     )
     details = {
         "previous_snapshot_id": previous["snapshot_id"],
@@ -723,8 +915,11 @@ def create_probability_movement_alert(
         "current_yes_price": current_price,
         "delta": round(delta, 4),
         "threshold_points": settings.probability_move_points,
+        "current_volume": current_volume,
         "current_volume24hr": market["volume24hr"],
-        "current_liquidity": market["liquidity"],
+        "current_liquidity": current_liquidity,
+        "threshold_volume": settings.alert_min_volume,
+        "threshold_liquidity": settings.alert_min_liquidity,
     }
     return insert_alert(
         conn,
@@ -735,6 +930,8 @@ def create_probability_movement_alert(
         title=title,
         message=message,
         details=details,
+        quality_score=quality_score,
+        quality_label=quality_label,
     )
 
 
@@ -767,14 +964,27 @@ def create_volume_liquidity_spike_alert(
     if recent_alert_exists(conn, "volume_liquidity_spike", market["market_id"], settings.alert_cooldown_minutes):
         return None
 
+    quality_score, quality_label = quality_for_volume_liquidity_spike(
+        settings,
+        volume_spike,
+        liquidity_spike,
+        current_volume,
+        previous_volume,
+        current_liquidity,
+        previous_liquidity,
+    )
+    if not quality_is_dispatchable(quality_label):
+        logging.info("Suppressed low-quality volume/liquidity spike alert.")
+        return None
+
     labels = []
     if volume_spike:
-        labels.append(f"volume {money(previous_volume)} -> {money(current_volume)}")
+        labels.append(f"volume rose from {money(previous_volume)} to {money(current_volume)}")
     if liquidity_spike:
-        labels.append(f"liquidity {money(previous_liquidity)} -> {money(current_liquidity)}")
+        labels.append(f"liquidity rose from {money(previous_liquidity)} to {money(current_liquidity)}")
 
     title = "Volume/liquidity spike"
-    message = f"{market['question']} has a spike: {', '.join(labels)}."
+    message = f"{market['question']} is seeing faster activity: {'; '.join(labels)}."
     details = {
         "previous_snapshot_id": previous["snapshot_id"],
         "current_snapshot_id": snapshot_id,
@@ -787,6 +997,8 @@ def create_volume_liquidity_spike_alert(
         "liquidity_change": round(current_liquidity - previous_liquidity, 2),
         "liquidity_spike": liquidity_spike,
         "current_yes_price": market["yes_price"],
+        "threshold_volume": settings.alert_min_volume,
+        "threshold_liquidity": settings.alert_min_liquidity,
     }
     severity = "high" if current_volume >= 500_000 or current_liquidity >= 500_000 else "medium"
     return insert_alert(
@@ -798,6 +1010,8 @@ def create_volume_liquidity_spike_alert(
         title=title,
         message=message,
         details=details,
+        quality_score=quality_score,
+        quality_label=quality_label,
     )
 
 
@@ -930,6 +1144,9 @@ def build_discord_payload(settings: Settings, alert: dict[str, Any]) -> dict[str
         {"name": "Type", "value": alert["alert_type"].replace("_", " "), "inline": True},
         {"name": "Severity", "value": alert["severity"], "inline": True},
     ]
+    quality_label = clean_string(alert.get("quality_label"))
+    if quality_label:
+        fields.append({"name": "Quality", "value": quality_label, "inline": True})
 
     current_yes = details.get("current_yes_price")
     if current_yes is not None:
@@ -1005,6 +1222,7 @@ def dispatch_pending_alerts(conn: sqlite3.Connection, settings: Settings) -> int
         SELECT *
         FROM alerts
         WHERE sent_to_discord = 0
+          AND COALESCE(quality_label, 'medium') IN ('medium', 'high')
         ORDER BY created_at ASC
         LIMIT ?
         """,
@@ -1050,10 +1268,11 @@ def dispatch_pending_render_alerts(conn: sqlite3.Connection, settings: Settings)
         FROM alerts
         WHERE sent_to_render = 0
           AND COALESCE(render_status, '') = ''
+          AND COALESCE(quality_label, 'medium') IN ('medium', 'high')
         ORDER BY created_at ASC
         LIMIT ?
         """,
-        (settings.max_discord_alerts_per_cycle,),
+        (settings.max_public_alerts_per_cycle,),
     ).fetchall()
 
     sent_count = 0
