@@ -639,6 +639,59 @@ def points(value: float) -> str:
     return f"{value * 100:+.1f} pts"
 
 
+def point_count(value: float) -> str:
+    return f"{abs(value) * 100:.1f}-point"
+
+
+def join_reason_parts(parts: list[str]) -> str:
+    safe_parts = [part for part in parts if part]
+    if not safe_parts:
+        return ""
+    if len(safe_parts) == 1:
+        return safe_parts[0]
+    return "; ".join(safe_parts)
+
+
+def build_new_high_volume_reason(active_volume: float, current_liquidity: float) -> str:
+    return (
+        f"This market crossed the high-volume threshold with {money(active_volume)} "
+        f"in volume and {money(current_liquidity)} in liquidity."
+    )
+
+
+def build_probability_movement_reason(
+    previous_price: float,
+    current_price: float,
+    delta: float,
+    activity_context: str,
+) -> str:
+    return (
+        f"Probability moved from {probability(previous_price)} to {probability(current_price)}, "
+        f"a {point_count(delta)} shift since the last snapshot while {activity_context}."
+    )
+
+
+def build_volume_liquidity_spike_reason(
+    volume_spike: bool,
+    liquidity_spike: bool,
+    previous_volume: float,
+    current_volume: float,
+    previous_liquidity: float,
+    current_liquidity: float,
+) -> str:
+    parts = []
+    if volume_spike:
+        parts.append(
+            f"Volume jumped from {money(previous_volume)} to {money(current_volume)}"
+        )
+    if liquidity_spike:
+        parts.append(
+            f"liquidity rose from {money(previous_liquidity)} to {money(current_liquidity)}"
+        )
+
+    return f"{join_reason_parts(parts)}, signaling a sharp increase in market activity."
+
+
 def severity_for_volume(volume24hr: float) -> str:
     if volume24hr >= 500_000:
         return "high"
@@ -832,10 +885,7 @@ def create_new_high_volume_alert(
         return None
 
     title = "New high-volume market"
-    message = (
-        f"{market['question']} is a newly detected high-activity market with {money(active_volume)} "
-        f"in volume and {money(current_liquidity)} in liquidity. YES is {probability(market['yes_price'])}."
-    )
+    message = build_new_high_volume_reason(active_volume, current_liquidity)
     details = {
         "current_volume": active_volume,
         "current_volume24hr": market["volume24hr"],
@@ -898,15 +948,16 @@ def create_probability_movement_alert(
         logging.info("Suppressed low-quality probability movement alert.")
         return None
 
-    direction = "up" if delta > 0 else "down"
     if current_volume >= settings.alert_min_volume and current_liquidity >= settings.alert_min_liquidity:
-        activity_context = "volume and liquidity were above the alert thresholds"
+        activity_context = "volume and liquidity stayed above the alert thresholds"
     else:
         activity_context = "market activity was strong enough for the alert threshold"
     title = f"Probability moved {points(delta)}"
-    message = (
-        f"{market['question']} moved {direction} from {probability(previous_price)} "
-        f"to {probability(current_price)} while {activity_context}."
+    message = build_probability_movement_reason(
+        previous_price,
+        current_price,
+        delta,
+        activity_context,
     )
     details = {
         "previous_snapshot_id": previous["snapshot_id"],
@@ -977,14 +1028,15 @@ def create_volume_liquidity_spike_alert(
         logging.info("Suppressed low-quality volume/liquidity spike alert.")
         return None
 
-    labels = []
-    if volume_spike:
-        labels.append(f"volume rose from {money(previous_volume)} to {money(current_volume)}")
-    if liquidity_spike:
-        labels.append(f"liquidity rose from {money(previous_liquidity)} to {money(current_liquidity)}")
-
     title = "Volume/liquidity spike"
-    message = f"{market['question']} is seeing faster activity: {'; '.join(labels)}."
+    message = build_volume_liquidity_spike_reason(
+        volume_spike,
+        liquidity_spike,
+        previous_volume,
+        current_volume,
+        previous_liquidity,
+        current_liquidity,
+    )
     details = {
         "previous_snapshot_id": previous["snapshot_id"],
         "current_snapshot_id": snapshot_id,
