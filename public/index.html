@@ -11,7 +11,7 @@
       name="description"
       content="Paid by Polymarket OS helps users scan active Polymarket markets, spot movement faster, and open the markets that matter."
     />
-    <link rel="stylesheet" href="/style.css?v=pbp-feedback-1" />
+    <link rel="stylesheet" href="/style.css?v=pbp-beta-nav-1" />
   </head>
   <body>
     <header id="hero">
@@ -49,6 +49,25 @@
               </div>
             </div>
           </article>
+        </div>
+      </section>
+
+      <section class="pbp-overview-section" aria-labelledby="pbpOverviewTitle">
+        <div class="market-card pbp-overview-card">
+          <div class="pbp-overview-copy">
+            <p class="market-small">Public beta guide</p>
+            <h2 id="pbpOverviewTitle">What you can do here</h2>
+            <p class="alert-time">
+              Browse active markets, watch live alert signals, join the alerts beta, and send quick feedback while the product is still small.
+            </p>
+          </div>
+
+          <nav class="pbp-quick-nav" aria-label="Public beta quick links">
+            <a href="#homepageStrategyLayer">Markets</a>
+            <a href="#pbpAlertsComingSoon">Alerts</a>
+            <a href="#pbpAlertsEmail">Waitlist</a>
+            <a href="#pbpFeedbackTitle">Feedback</a>
+          </nav>
         </div>
       </section>
 
@@ -184,6 +203,14 @@
             <p class="pbp-feedback-copy">
               Tell us what was useful, confusing, or missing.
             </p>
+            <div class="pbp-feedback-prompts" aria-label="Example beta feedback questions">
+              <span>What was useful?</span>
+              <span>What was confusing?</span>
+              <span>Did any card make you want to open Polymarket?</span>
+              <span>Were alert signals useful or noisy?</span>
+              <span>What category did you want to browse?</span>
+              <span>What should be simplified?</span>
+            </div>
 
             <form id="pbpBetaFeedbackForm" class="pbp-feedback-form">
               <div class="pbp-feedback-grid">
@@ -218,7 +245,7 @@
                 name="message"
                 rows="4"
                 maxlength="2000"
-                placeholder="What helped you find markets? What felt unclear or missing?"
+                placeholder="Example: The category filters helped, but I wanted clearer sports grouping."
                 required
               ></textarea>
 
@@ -470,6 +497,6 @@
       </section>
     </main>
 
-    <script src="/app.js?v=pbp-feedback-1" type="module"></script>
+    <script src="/app.js?v=pbp-beta-nav-1" type="module"></script>
   </body>
 </html>

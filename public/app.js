@@ -56,6 +56,16 @@ const DISCOVER_VIEWS = {
   },
 };
 
+const PUBLIC_BROWSE_CATEGORIES = [
+  { key: "ALL", label: "All" },
+  { key: "SPORTS", label: "Sports" },
+  { key: "POLITICS", label: "Politics" },
+  { key: "CRYPTO", label: "Crypto" },
+  { key: "ECONOMY", label: "Economy" },
+  { key: "CULTURE_NEWS", label: "Culture/News" },
+  { key: "OTHER", label: "Other" },
+];
+
 let hotMarketsCache = [];
 let liveMarketsCache = [];
 let biggestMoversCache = [];
@@ -565,20 +575,81 @@ function getCategoryDisplayLabel(value) {
   return trimmed || "Uncategorized";
 }
 
+function getPublicCategoryKey(market) {
+  const category = normalizeCategoryValue(market?.displayCategory || market?.category);
+  const text = [
+    market?.category,
+    market?.displayCategory,
+    market?.eventGroup,
+    market?.eventTitle,
+    market?.marketTopic,
+    market?.question,
+    market?.slug,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  if (category.includes("SPORT") || /\b(nba|wnba|nfl|mlb|nhl|fifa|uefa|ufc|mma|soccer|football|baseball|basketball|hockey|tennis|golf|world cup)\b/.test(text)) {
+    return "SPORTS";
+  }
+  if (category.includes("POLITIC") || category.includes("WORLD") || /\b(election|president|senate|house|governor|congress|mayor|trump|biden|vote|referendum)\b/.test(text)) {
+    return "POLITICS";
+  }
+  if (category.includes("CRYPTO") || /\b(bitcoin|btc|ethereum|eth|solana|crypto|blockchain|web3|defi|stablecoin)\b/.test(text)) {
+    return "CRYPTO";
+  }
+  if (category.includes("BUSINESS") || category.includes("ECON") || category.includes("FINANCE") || /\b(fed|rates?|rate cut|inflation|cpi|gdp|recession|tariff|earnings|stocks?|treasury)\b/.test(text)) {
+    return "ECONOMY";
+  }
+  if (category.includes("CULTURE") || category.includes("NEWS") || /\b(movie|film|tv|album|music|celebrity|oscars?|grammys?|headline|news)\b/.test(text)) {
+    return "CULTURE_NEWS";
+  }
+  return "OTHER";
+}
+
+function getPublicCategoryLabel(marketOrKey) {
+  const key =
+    typeof marketOrKey === "string"
+      ? marketOrKey
+      : getPublicCategoryKey(marketOrKey);
+  return PUBLIC_BROWSE_CATEGORIES.find((category) => category.key === key)?.label || "Other";
+}
+
+function getMarketEventGroup(market) {
+  const explicit = String(market?.eventGroup || market?.marketTopic || "").trim();
+  if (explicit) return explicit;
+
+  const text = [
+    market?.eventTitle,
+    market?.eventSlug,
+    market?.slug,
+    market?.question,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  if (/\b(2026 fifa world cup|fifa world cup|world cup)\b/.test(text)) return "2026 FIFA World Cup";
+  if (/\b(nba|basketball)\b/.test(text)) return "NBA";
+  if (/\b(election|presidential|president|senate|house|governor|mayor|congress|vote|referendum)\b/.test(text)) return "Election";
+  if (/\b(bitcoin|btc|ethereum|eth|solana|crypto|blockchain|web3|defi)\b/.test(text)) return "Crypto";
+  if (/\b(fed|fomc|rate cut|rate cuts|interest rate|interest rates|cpi|inflation)\b/.test(text)) return "Fed / Rates";
+
+  return "";
+}
+
 function getCategoryOptionLabel(value) {
   if (value === "ALL") return "All";
-  const match = getAvailableHomepageCategories(liveMarketsCache).find(
-    ([key]) => key === value
-  );
-  return match ? match[1] : "All";
+  return getPublicCategoryLabel(value);
 }
 
 function getAvailableHomepageCategories(markets) {
   const categoryMap = new Map();
 
   (Array.isArray(markets) ? markets : []).forEach((market) => {
-    const key = normalizeCategoryValue(market?.category);
-    const label = getCategoryDisplayLabel(market?.category);
+    const key = getPublicCategoryKey(market);
+    const label = getPublicCategoryLabel(key);
     if (!categoryMap.has(key)) {
       categoryMap.set(key, label);
     }
@@ -591,30 +662,27 @@ function getCategoryCounts(markets) {
   const counts = new Map();
 
   (Array.isArray(markets) ? markets : []).forEach((market) => {
-    const key = normalizeCategoryValue(market?.category);
-    const label = getCategoryDisplayLabel(market?.category);
+    const key = getPublicCategoryKey(market);
+    const label = getPublicCategoryLabel(key);
     const existing = counts.get(key) || { label, count: 0 };
     existing.count += 1;
     counts.set(key, existing);
   });
 
-  return Array.from(counts.entries())
-    .map(([value, info]) => ({
-      value,
-      label: info.label,
-      count: info.count,
-    }))
-    .sort((a, b) => {
-      if (b.count !== a.count) return b.count - a.count;
-      return a.label.localeCompare(b.label);
-    });
+  return PUBLIC_BROWSE_CATEGORIES
+    .filter((category) => category.key !== "ALL")
+    .map((category) => ({
+      value: category.key,
+      label: category.label,
+      count: counts.get(category.key)?.count || 0,
+    }));
 }
 
 function getCategoryFilteredMarkets(markets) {
   const base = Array.isArray(markets) ? markets : [];
   if (activeHomepageCategory === "ALL") return base;
   return base.filter(
-    (market) => normalizeCategoryValue(market?.category) === activeHomepageCategory
+    (market) => getPublicCategoryKey(market) === activeHomepageCategory
   );
 }
 
@@ -691,9 +759,10 @@ function renderHomepageCategoryChipRail() {
       (market) => isDiscoveryQualityMarket(market)
     )
   );
+  const allCount = categories.reduce((sum, category) => sum + category.count, 0);
 
   const buttons = [
-    `<button class="control-chip ${activeHomepageCategory === "ALL" ? "active" : ""}" data-category-value="ALL" type="button">All</button>`,
+    `<button class="control-chip ${activeHomepageCategory === "ALL" ? "active" : ""}" data-category-value="ALL" type="button">All <span>${safeText(allCount)}</span></button>`,
     ...categories.map(
       (category) => `
         <button
@@ -701,7 +770,7 @@ function renderHomepageCategoryChipRail() {
           data-category-value="${escapeHtml(category.value)}"
           type="button"
         >
-          ${escapeHtml(category.label)}
+          ${escapeHtml(category.label)} <span>${safeText(category.count)}</span>
         </button>
       `
     ),
@@ -2511,13 +2580,20 @@ function renderLivePreparation(preparation) {
 
 function renderHotCard(market, sourceSection = currentDiscoverView) {
   const trackingSource = normalizeOutboundSourceSection(sourceSection);
+  const publicCategory = getPublicCategoryLabel(market);
+  const eventGroup = getMarketEventGroup(market);
 
   return `
     <article class="market-card">
+      <div class="market-context-row">
+        <span>${safeText(publicCategory)}</span>
+        ${eventGroup ? `<span>${safeText(eventGroup)}</span>` : ""}
+      </div>
       <h3>${safeText(market.question)}</h3>
 
       <div class="signals">
         ${[
+          eventGroup,
           getMarketSignalLabel(market),
           (market.hotScore || 0) > 800000 ? "Momentum" : "",
           (market.liquidity || 0) > 200000 ? "Liquid" : "",
@@ -2533,7 +2609,8 @@ function renderHotCard(market, sourceSection = currentDiscoverView) {
         <div class="meta-box"><span class="meta-label">24h Volume</span><span class="meta-value">${safeText(formatMoney(market.volume24hr))}</span></div>
         <div class="meta-box"><span class="meta-label">Liquidity</span><span class="meta-value">${safeText(formatMoney(market.liquidity))}</span></div>
         <div class="meta-box"><span class="meta-label">Activity</span><span class="meta-value">${safeText(getMarketOpportunityScore(market) ?? "—")}/100</span></div>
-        <div class="meta-box"><span class="meta-label">Category</span><span class="meta-value">${safeText(getCategoryDisplayLabel(market.category))}</span></div>
+        <div class="meta-box"><span class="meta-label">Category</span><span class="meta-value">${safeText(publicCategory)}</span></div>
+        ${eventGroup ? `<div class="meta-box"><span class="meta-label">Event / group</span><span class="meta-value">${safeText(eventGroup)}</span></div>` : ""}
         <div class="meta-box"><span class="meta-label">Freshness</span><span class="meta-value">${safeText(getMarketFreshnessLabel(market))}</span></div>
         <div class="meta-box"><span class="meta-label">Why it matters</span><span class="meta-value">${safeText(getMarketDisplayReason(market))}</span></div>
       </div>
@@ -2566,9 +2643,15 @@ function renderHotCard(market, sourceSection = currentDiscoverView) {
 function renderMoverCard(market, sourceSection = "movers") {
   const changeClass = market.percentChange >= 0 ? "positive" : "negative";
   const trackingSource = normalizeOutboundSourceSection(sourceSection);
+  const publicCategory = getPublicCategoryLabel(market);
+  const eventGroup = getMarketEventGroup(market);
 
   return `
     <article class="market-card">
+      <div class="market-context-row">
+        <span>${safeText(publicCategory)}</span>
+        ${eventGroup ? `<span>${safeText(eventGroup)}</span>` : ""}
+      </div>
       <h3>${safeText(market.question)}</h3>
 
       <div class="market-meta">
@@ -2576,7 +2659,8 @@ function renderMoverCard(market, sourceSection = "movers") {
         <div class="meta-box"><span class="meta-label">Recent Price</span><span class="meta-value">${safeText(formatProbability(market.pastPrice))}</span></div>
         <div class="meta-box"><span class="meta-label">Price Change</span><span class="meta-value ${changeClass}">${safeText(formatChangeAsProbability(market.priceChange))}</span></div>
         <div class="meta-box"><span class="meta-label">Percent Change</span><span class="meta-value ${changeClass}">${safeText(formatPercentChange(market.percentChange))}</span></div>
-        <div class="meta-box"><span class="meta-label">Category</span><span class="meta-value">${safeText(getCategoryDisplayLabel(market.category))}</span></div>
+        <div class="meta-box"><span class="meta-label">Category</span><span class="meta-value">${safeText(publicCategory)}</span></div>
+        ${eventGroup ? `<div class="meta-box"><span class="meta-label">Event / group</span><span class="meta-value">${safeText(eventGroup)}</span></div>` : ""}
         <div class="meta-box"><span class="meta-label">Why it matters</span><span class="meta-value">${safeText(getMarketDisplayReason(market))}</span></div>
       </div>
 
