@@ -2258,6 +2258,24 @@ function deriveMarketFamily(raw, category, question) {
     };
   }
 
+  if (/\b(nhl|stanley cup|hockey)\b/.test(text) && category === "Sports") {
+    return {
+      eventGroup: "NHL / Stanley Cup",
+      marketFamilyKey: "sports:nhl-stanley-cup",
+      marketTopic: "Hockey futures",
+      outcomeLabel: buildShortQuestion(question),
+    };
+  }
+
+  if (/\b(nfl|super bowl|football)\b/.test(text) && category === "Sports") {
+    return {
+      eventGroup: "NFL",
+      marketFamilyKey: "sports:nfl",
+      marketTopic: "Football markets",
+      outcomeLabel: buildShortQuestion(question),
+    };
+  }
+
   if (/\b(nba|basketball)\b/.test(text) && category === "Sports") {
     return {
       eventGroup: "NBA",
@@ -2267,7 +2285,16 @@ function deriveMarketFamily(raw, category, question) {
     };
   }
 
-  if (category === "Politics" && /\b(midterm|midterms|election|elections|presidential|president|senate|house|congress|party|republican|democrat|vote)\b/.test(text)) {
+  if (category === "Politics" && /\b(president|prime minister|minister|government|parliament|leadership|out as|resign|resigns|removed)\b/.test(text) && !/\b(election|elections|midterm|midterms|vote)\b/.test(text)) {
+    return {
+      eventGroup: "Government leadership",
+      marketFamilyKey: "politics:government-leadership",
+      marketTopic: "Political leadership markets",
+      outcomeLabel: buildShortQuestion(question),
+    };
+  }
+
+  if (category === "Politics" && /\b(midterm|midterms|election|elections|presidential|senate|house|congress|party|republican|democrat|vote)\b/.test(text)) {
     return {
       eventGroup: /\bmidterm|midterms\b/.test(text) ? "Election / Midterms" : "Election",
       marketFamilyKey: /\bmidterm|midterms\b/.test(text) ? "politics:election-midterms" : "politics:election",
@@ -2290,6 +2317,15 @@ function deriveMarketFamily(raw, category, question) {
       eventGroup: "Fed / Rates",
       marketFamilyKey: "economy:fed-rates",
       marketTopic: "Rates and inflation markets",
+      outcomeLabel: buildShortQuestion(question),
+    };
+  }
+
+  if ((category === "Culture" || category === "News" || category === "World") && /\b(movie|film|tv|album|music|celebrity|oscars?|grammys?|emmys?|headline|news|world|international)\b/.test(text)) {
+    return {
+      eventGroup: "Culture/News",
+      marketFamilyKey: "culture-news:markets",
+      marketTopic: "Culture and news markets",
       outcomeLabel: buildShortQuestion(question),
     };
   }

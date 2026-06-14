@@ -633,10 +633,14 @@ function getMarketEventGroup(market) {
     .toLowerCase();
 
   if (/\b(2026 fifa world cup|fifa world cup|world cup)\b/.test(text)) return "2026 FIFA World Cup";
+  if (/\b(nhl|stanley cup|hockey)\b/.test(text)) return "NHL / Stanley Cup";
+  if (/\b(nfl|super bowl|football)\b/.test(text)) return "NFL";
   if (/\b(nba|basketball)\b/.test(text)) return "NBA";
+  if (/\b(prime minister|minister|government|parliament|leadership|out as|resign|removed)\b/.test(text) && !/\b(election|elections|midterm|midterms|vote)\b/.test(text)) return "Government leadership";
   if (/\b(election|presidential|president|senate|house|governor|mayor|congress|vote|referendum)\b/.test(text)) return "Election";
   if (/\b(bitcoin|btc|ethereum|eth|solana|crypto|blockchain|web3|defi)\b/.test(text)) return "Crypto";
   if (/\b(fed|fomc|rate cut|rate cuts|interest rate|interest rates|cpi|inflation)\b/.test(text)) return "Fed / Rates";
+  if (/\b(movie|film|tv|album|music|celebrity|oscars?|grammys?|emmys?|headline|news)\b/.test(text)) return "Culture/News";
 
   return "";
 }
@@ -861,16 +865,20 @@ function getEmergingMarkets(markets) {
     })
     .filter((market) => isDiscoveryQualityMarket(market) && (market.lastUpdated || market.volume24hr || market.liquidity));
 
-  return scored.sort((a, b) => b._emergingScore - a._emergingScore).slice(0, 8);
+  return scored.sort((a, b) => b._emergingScore - a._emergingScore).slice(0, 32);
 }
 
 function shouldGroupCurrentDiscoverView() {
-  return currentDiscoverView === "opportunities" || currentDiscoverView === "volume";
+  return ["opportunities", "volume", "liquid", "new", "movers"].includes(currentDiscoverView);
 }
 
 function getMarketSortScoreForView(market, viewKey = currentDiscoverView) {
+  if (viewKey === "movers") {
+    return Math.abs(market?.priceChange || market?.oneDayPriceChange || 0) * 1000;
+  }
   if (viewKey === "volume") return market?.volume24hr || 0;
   if (viewKey === "liquid") return market?.liquidity || 0;
+  if (viewKey === "new") return market?._emergingScore || getDiscoveryRankScore(market);
   return getDiscoveryRankScore(market);
 }
 
@@ -878,19 +886,89 @@ function getMarketFamilyReason(groupName) {
   if (groupName === "2026 FIFA World Cup") {
     return "Team winner markets grouped together for easier scanning.";
   }
+  if (groupName === "NHL / Stanley Cup") {
+    return "Related hockey futures grouped together for easier scanning.";
+  }
+  if (groupName === "NFL") {
+    return "Related football markets grouped together for easier scanning.";
+  }
   if (groupName === "Election / Midterms" || groupName === "Election") {
-    return "Related election markets grouped together so similar questions are easier to compare.";
+    return "Related election markets grouped together for easier scanning.";
+  }
+  if (groupName === "Government leadership") {
+    return "Related political leadership markets grouped together for easier scanning.";
   }
   if (groupName === "Fed / Rates") {
-    return "Rates and inflation markets grouped together for a cleaner macro scan.";
+    return "Related rates and inflation markets grouped together for easier scanning.";
   }
   if (groupName === "Crypto") {
-    return "Related crypto markets grouped together for a quicker scan.";
+    return "Related crypto markets grouped together for easier scanning.";
   }
   if (groupName === "NBA") {
-    return "Related NBA markets grouped together for easier scanning.";
+    return "Related basketball markets grouped together for easier scanning.";
+  }
+  if (groupName === "Culture/News") {
+    return "Related culture and news markets grouped together for easier scanning.";
   }
   return "Related markets grouped together for easier scanning.";
+}
+
+function getDiscoverItemCategoryKey(item) {
+  if (item?.type === "group") {
+    return PUBLIC_BROWSE_CATEGORIES.find((category) => category.label === item.category)?.key || "OTHER";
+  }
+  return getPublicCategoryKey(item?.market || item);
+}
+
+function getDiscoverItemFamilyKey(item) {
+  if (item?.type === "group") return item.key;
+  const market = item?.market || item || {};
+  return getMarketFamilyKey(market) || `single:${market.id || market.slug || market.question || "unknown"}`;
+}
+
+function canSelectDiscoverItem(item, selected, familySingleCounts) {
+  if (item?.type === "group") {
+    return !selected.some((selectedItem) => selectedItem?.type === "group" && selectedItem.key === item.key);
+  }
+
+  const familyKey = getDiscoverItemFamilyKey(item);
+  return (familySingleCounts.get(familyKey) || 0) < 2;
+}
+
+function rememberSelectedDiscoverItem(item, familySingleCounts) {
+  if (item?.type === "group") return;
+  const familyKey = getDiscoverItemFamilyKey(item);
+  familySingleCounts.set(familyKey, (familySingleCounts.get(familyKey) || 0) + 1);
+}
+
+// Diversity is applied after quality/ranking, so weak markets are not forced
+// onto the page. In the All view, the first pass tries to include several
+// categories before filling remaining slots by score.
+function selectDiverseDiscoverItems(items, limit = 8) {
+  const sorted = [...(Array.isArray(items) ? items : [])].sort((a, b) => b.score - a.score);
+  const selected = [];
+  const familySingleCounts = new Map();
+
+  const addItem = (item) => {
+    if (!item || selected.length >= limit || selected.includes(item)) return false;
+    if (!canSelectDiscoverItem(item, selected, familySingleCounts)) return false;
+    selected.push(item);
+    rememberSelectedDiscoverItem(item, familySingleCounts);
+    return true;
+  };
+
+  if (activeHomepageCategory === "ALL") {
+    PUBLIC_BROWSE_CATEGORIES
+      .filter((category) => category.key !== "ALL")
+      .forEach((category) => {
+        const candidate = sorted.find((item) => getDiscoverItemCategoryKey(item) === category.key);
+        addItem(candidate);
+      });
+  }
+
+  sorted.forEach(addItem);
+
+  return selected.slice(0, limit);
 }
 
 // Grouping is intentionally conservative: only obvious repeated market
@@ -927,7 +1005,8 @@ function buildGroupedDiscoverItems(markets, viewKey = currentDiscoverView) {
   const groups = [];
 
   familyMap.forEach((group) => {
-    if (group.children.length < 2) {
+    const minGroupSize = viewKey === "movers" ? 3 : 2;
+    if (group.children.length < minGroupSize) {
       singles.push(...group.children);
       return;
     }
@@ -937,16 +1016,16 @@ function buildGroupedDiscoverItems(markets, viewKey = currentDiscoverView) {
     groups.push(group);
   });
 
-  return [
+  const candidates = [
     ...groups,
     ...singles.map((market) => ({
       type: "market",
       market,
       score: getMarketSortScoreForView(market, viewKey),
     })),
-  ]
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 8);
+  ].sort((a, b) => b.score - a.score);
+
+  return selectDiverseDiscoverItems(candidates, 8);
 }
 
 function getDiscoverMarketsForCurrentView() {
@@ -954,7 +1033,7 @@ function getDiscoverMarketsForCurrentView() {
 
   switch (currentDiscoverView) {
     case "movers":
-      return getCategoryFilteredMarkets(biggestMoversCache).slice(0, 8);
+      return getCategoryFilteredMarkets(biggestMoversCache).slice(0, 32);
     case "volume":
       return [...baseMarkets]
         .sort((a, b) => (b.volume24hr || 0) - (a.volume24hr || 0))
@@ -962,7 +1041,7 @@ function getDiscoverMarketsForCurrentView() {
     case "liquid":
       return [...baseMarkets]
         .sort((a, b) => (b.liquidity || 0) - (a.liquidity || 0))
-        .slice(0, 8);
+        .slice(0, 32);
     case "new":
       return getEmergingMarkets(baseMarkets);
     case "opportunities":
