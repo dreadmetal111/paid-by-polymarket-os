@@ -131,6 +131,25 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
+function safeText(value, fallback = "") {
+  const text = value === null || value === undefined || value === "" ? fallback : value;
+  return escapeHtml(text);
+}
+
+function safeAttr(value, fallback = "") {
+  return safeText(value, fallback);
+}
+
+function safeUrl(value) {
+  try {
+    const url = new URL(String(value || ""), window.location.origin);
+    if (url.protocol === "https:" || url.protocol === "http:") {
+      return escapeHtml(url.href);
+    }
+  } catch {}
+  return "#";
+}
+
 function isValidEmail(value) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || "").trim());
 }
@@ -1459,8 +1478,8 @@ async function signPreparedOrderClientSide() {
 function renderAlertItem(alert) {
   return `
     <div class="alert-item">
-      <div class="alert-message">${alert.message}</div>
-      <div class="alert-time">${formatTimestamp(alert.timestamp)}</div>
+      <div class="alert-message">${safeText(alert.message)}</div>
+      <div class="alert-time">${safeText(formatTimestamp(alert.timestamp))}</div>
     </div>
   `;
 }
@@ -1475,14 +1494,14 @@ function renderSignalLogItem(signal) {
 
   return `
     <div class="alert-item">
-      <div class="alert-message">${signal.actionSignal}: ${signal.question}</div>
-      <div class="alert-time">Logged: ${formatTimestamp(signal.createdAt)}</div>
-      <div class="alert-time">Why it stood out: ${signal.actionReason}</div>
-      <div class="alert-time">Confidence: ${signal.confidenceScore}/100</div>
-      <div class="alert-time">Entry: ${formatProbability(signal.entryYesPrice)}</div>
-      <div class="alert-time">Current: ${formatProbability(signal.currentYesPrice)}</div>
-      <div class="alert-time ${perfClass}">Performance: ${formatPoints(perf)}</div>
-      <div class="alert-time ${statusClass}">Status: ${statusLabel}</div>
+      <div class="alert-message">${safeText(signal.actionSignal)}: ${safeText(signal.question)}</div>
+      <div class="alert-time">Logged: ${safeText(formatTimestamp(signal.createdAt))}</div>
+      <div class="alert-time">Why it stood out: ${safeText(signal.actionReason)}</div>
+      <div class="alert-time">Confidence: ${safeText(signal.confidenceScore)}/100</div>
+      <div class="alert-time">Entry: ${safeText(formatProbability(signal.entryYesPrice))}</div>
+      <div class="alert-time">Current: ${safeText(formatProbability(signal.currentYesPrice))}</div>
+      <div class="alert-time ${perfClass}">Performance: ${safeText(formatPoints(perf))}</div>
+      <div class="alert-time ${statusClass}">Status: ${safeText(statusLabel)}</div>
     </div>
   `;
 }
@@ -1498,14 +1517,14 @@ function renderPerformanceStats(stats) {
     .map(
       ([signalType, data]) => `
       <article class="market-card">
-        <h3>${signalType}</h3>
+        <h3>${safeText(signalType)}</h3>
         <div class="market-meta">
-          <div class="meta-box"><span class="meta-label">Total</span><span class="meta-value">${data.total}</span></div>
-          <div class="meta-box"><span class="meta-label">Active</span><span class="meta-value">${data.active}</span></div>
-          <div class="meta-box"><span class="meta-label">Wins</span><span class="meta-value">${data.wins}</span></div>
-          <div class="meta-box"><span class="meta-label">Losses</span><span class="meta-value">${data.losses}</span></div>
-          <div class="meta-box"><span class="meta-label">Win Rate</span><span class="meta-value">${((data.winRate || 0) * 100).toFixed(1)}%</span></div>
-          <div class="meta-box"><span class="meta-label">Avg Perf</span><span class="meta-value">${formatPoints(data.avgPerformance || 0)}</span></div>
+          <div class="meta-box"><span class="meta-label">Total</span><span class="meta-value">${safeText(data.total ?? 0)}</span></div>
+          <div class="meta-box"><span class="meta-label">Active</span><span class="meta-value">${safeText(data.active ?? 0)}</span></div>
+          <div class="meta-box"><span class="meta-label">Wins</span><span class="meta-value">${safeText(data.wins ?? 0)}</span></div>
+          <div class="meta-box"><span class="meta-label">Losses</span><span class="meta-value">${safeText(data.losses ?? 0)}</span></div>
+          <div class="meta-box"><span class="meta-label">Win Rate</span><span class="meta-value">${safeText(((data.winRate || 0) * 100).toFixed(1))}%</span></div>
+          <div class="meta-box"><span class="meta-label">Avg Perf</span><span class="meta-value">${safeText(formatPoints(data.avgPerformance || 0))}</span></div>
         </div>
       </article>
     `
@@ -1517,21 +1536,21 @@ function renderPerformanceStats(stats) {
       <article class="market-card">
         <h3>Performance Summary</h3>
         <div class="market-meta">
-          <div class="meta-box"><span class="meta-label">Total Signals</span><span class="meta-value">${stats.totalSignals ?? 0}</span></div>
-          <div class="meta-box"><span class="meta-label">Active</span><span class="meta-value">${stats.activeSignals ?? 0}</span></div>
-          <div class="meta-box"><span class="meta-label">Wins</span><span class="meta-value">${stats.wins ?? 0}</span></div>
-          <div class="meta-box"><span class="meta-label">Losses</span><span class="meta-value">${stats.losses ?? 0}</span></div>
+          <div class="meta-box"><span class="meta-label">Total Signals</span><span class="meta-value">${safeText(stats.totalSignals ?? 0)}</span></div>
+          <div class="meta-box"><span class="meta-label">Active</span><span class="meta-value">${safeText(stats.activeSignals ?? 0)}</span></div>
+          <div class="meta-box"><span class="meta-label">Wins</span><span class="meta-value">${safeText(stats.wins ?? 0)}</span></div>
+          <div class="meta-box"><span class="meta-label">Losses</span><span class="meta-value">${safeText(stats.losses ?? 0)}</span></div>
         </div>
       </article>
 
       <article class="market-card">
         <h3>Edge Summary</h3>
         <div class="market-meta">
-          <div class="meta-box"><span class="meta-label">Win Rate</span><span class="meta-value">${winRatePct}%</span></div>
-          <div class="meta-box"><span class="meta-label">Avg Performance</span><span class="meta-value">${avgPerfLabel}</span></div>
-          <div class="meta-box"><span class="meta-label">Avg Win</span><span class="meta-value">${avgWinLabel}</span></div>
-          <div class="meta-box"><span class="meta-label">Avg Loss</span><span class="meta-value">${avgLossLabel}</span></div>
-          <div class="meta-box"><span class="meta-label">Expectancy</span><span class="meta-value">${expectancyLabel}</span></div>
+          <div class="meta-box"><span class="meta-label">Win Rate</span><span class="meta-value">${safeText(winRatePct)}%</span></div>
+          <div class="meta-box"><span class="meta-label">Avg Performance</span><span class="meta-value">${safeText(avgPerfLabel)}</span></div>
+          <div class="meta-box"><span class="meta-label">Avg Win</span><span class="meta-value">${safeText(avgWinLabel)}</span></div>
+          <div class="meta-box"><span class="meta-label">Avg Loss</span><span class="meta-value">${safeText(avgLossLabel)}</span></div>
+          <div class="meta-box"><span class="meta-label">Expectancy</span><span class="meta-value">${safeText(expectancyLabel)}</span></div>
         </div>
       </article>
     </div>
@@ -1543,7 +1562,7 @@ function renderPerformanceStats(stats) {
 }
 
 function renderAccountPanel(account) {
-  const blockers = (account.blockers || []).map((b) => `<div class="alert-time">• ${b}</div>`).join("");
+  const blockers = (account.blockers || []).map((b) => `<div class="alert-time">• ${safeText(b)}</div>`).join("");
   const liveToggleDisabled = !account.canEnableLiveMode ? "disabled" : "";
   const liveChecked = account.liveModeEnabled ? "checked" : "";
 
@@ -1553,11 +1572,11 @@ function renderAccountPanel(account) {
         <h3>Account Status</h3>
         <div class="market-meta">
           <div class="meta-box"><span class="meta-label">Connected</span><span class="meta-value">${account.isConnected ? "YES" : "NO"}</span></div>
-          <div class="meta-box"><span class="meta-label">Wallet Type</span><span class="meta-value">${account.walletType || "NONE"}</span></div>
-          <div class="meta-box"><span class="meta-label">Wallet</span><span class="meta-value">${account.walletAddress || "—"}</span></div>
-          <div class="meta-box"><span class="meta-label">Proxy Wallet</span><span class="meta-value">${account.proxyWalletAddress || "—"}</span></div>
-          <div class="meta-box"><span class="meta-label">Signature Type</span><span class="meta-value">${account.signatureType ?? 0}</span></div>
-          <div class="meta-box"><span class="meta-label">Funder</span><span class="meta-value">${account.funderAddress || "—"}</span></div>
+          <div class="meta-box"><span class="meta-label">Wallet Type</span><span class="meta-value">${safeText(account.walletType, "NONE")}</span></div>
+          <div class="meta-box"><span class="meta-label">Wallet</span><span class="meta-value">${safeText(account.walletAddress, "—")}</span></div>
+          <div class="meta-box"><span class="meta-label">Proxy Wallet</span><span class="meta-value">${safeText(account.proxyWalletAddress, "—")}</span></div>
+          <div class="meta-box"><span class="meta-label">Signature Type</span><span class="meta-value">${safeText(account.signatureType ?? 0)}</span></div>
+          <div class="meta-box"><span class="meta-label">Funder</span><span class="meta-value">${safeText(account.funderAddress, "—")}</span></div>
         </div>
       </article>
 
@@ -1570,7 +1589,7 @@ function renderAccountPanel(account) {
           <div class="meta-box"><span class="meta-label">Relayer</span><span class="meta-value">${account.relayerReady ? "READY" : "NOT READY"}</span></div>
           <div class="meta-box"><span class="meta-label">Signed Handoff</span><span class="meta-value">${account.signedOrderHandoffEnabled ? "READY" : "NOT READY"}</span></div>
           <div class="meta-box"><span class="meta-label">Real Live Submit</span><span class="meta-value">${account.realLiveSubmitEnabled ? "ON" : "SAFE FALLBACK"}</span></div>
-          <div class="meta-box"><span class="meta-label">Max Live Submit</span><span class="meta-value">${formatMoney(account.maxRealSubmitDollars || 0)}</span></div>
+          <div class="meta-box"><span class="meta-label">Max Live Submit</span><span class="meta-value">${safeText(formatMoney(account.maxRealSubmitDollars || 0))}</span></div>
         </div>
         <div class="alert-item" style="margin-top: 10px;">
           <div class="alert-message">Live Mode</div>
@@ -1685,10 +1704,10 @@ function renderConnectedWalletShell(account = {}) {
       <article class="market-card">
         <h3>Wallet Connected</h3>
         <div class="market-meta">
-          <div class="meta-box"><span class="meta-label">Wallet</span><span class="meta-value">${shortAddress(account.walletAddress)}</span></div>
-          <div class="meta-box"><span class="meta-label">Wallet Type</span><span class="meta-value">${account.walletType || "EOA"}</span></div>
-          <div class="meta-box"><span class="meta-label">Proxy Wallet</span><span class="meta-value">${account.proxyWalletAddress ? shortAddress(account.proxyWalletAddress) : "—"}</span></div>
-          <div class="meta-box"><span class="meta-label">Funder</span><span class="meta-value">${account.funderAddress ? shortAddress(account.funderAddress) : "—"}</span></div>
+          <div class="meta-box"><span class="meta-label">Wallet</span><span class="meta-value">${safeText(shortAddress(account.walletAddress))}</span></div>
+          <div class="meta-box"><span class="meta-label">Wallet Type</span><span class="meta-value">${safeText(account.walletType, "EOA")}</span></div>
+          <div class="meta-box"><span class="meta-label">Proxy Wallet</span><span class="meta-value">${account.proxyWalletAddress ? safeText(shortAddress(account.proxyWalletAddress)) : "—"}</span></div>
+          <div class="meta-box"><span class="meta-label">Funder</span><span class="meta-value">${account.funderAddress ? safeText(shortAddress(account.funderAddress)) : "—"}</span></div>
         </div>
 
         <div class="alert-item" style="margin-top: 14px;">
@@ -1704,13 +1723,13 @@ function renderConnectedWalletShell(account = {}) {
       <article class="market-card">
         <h3>Builder Server Status</h3>
         <div class="market-meta">
-          <div class="meta-box"><span class="meta-label">Config Source</span><span class="meta-value">${account.builderConfigSource || "SERVER_ENV"}</span></div>
+          <div class="meta-box"><span class="meta-label">Config Source</span><span class="meta-value">${safeText(account.builderConfigSource, "SERVER_ENV")}</span></div>
           <div class="meta-box"><span class="meta-label">Builder API</span><span class="meta-value">${account.builderApiConfigured ? "READY" : "NOT READY"}</span></div>
           <div class="meta-box"><span class="meta-label">Relayer</span><span class="meta-value">${account.relayerReady ? "READY" : "NOT READY"}</span></div>
           <div class="meta-box"><span class="meta-label">Live Routing</span><span class="meta-value">${account.liveRoutingEnabled ? "ON" : "OFF"}</span></div>
           <div class="meta-box"><span class="meta-label">Signed Handoff</span><span class="meta-value">${account.signedOrderHandoffEnabled ? "READY" : "NOT READY"}</span></div>
           <div class="meta-box"><span class="meta-label">Real Submit</span><span class="meta-value">${account.realLiveSubmitEnabled ? "ON" : "SAFE FALLBACK"}</span></div>
-          <div class="meta-box"><span class="meta-label">Max Submit</span><span class="meta-value">${formatMoney(account.maxRealSubmitDollars || 0)}</span></div>
+          <div class="meta-box"><span class="meta-label">Max Submit</span><span class="meta-value">${safeText(formatMoney(account.maxRealSubmitDollars || 0))}</span></div>
         </div>
         <div class="alert-item">
           <div class="alert-message">Builder readiness is read-only.</div>
@@ -1736,30 +1755,30 @@ function renderPaperPortfolioStats(stats) {
       <article class="market-card">
         <h3>Bankroll</h3>
         <div class="market-meta">
-          <div class="meta-box"><span class="meta-label">Starting</span><span class="meta-value">${formatMoney(bankroll.startingBankroll || 0)}</span></div>
-          <div class="meta-box"><span class="meta-label">Cash</span><span class="meta-value">${formatMoney(bankroll.cash || 0)}</span></div>
-          <div class="meta-box"><span class="meta-label">Equity</span><span class="meta-value">${formatMoney(bankroll.equity || 0)}</span></div>
-          <div class="meta-box"><span class="meta-label">Default Size</span><span class="meta-value">${formatMoney(bankroll.defaultPositionSize || 0)}</span></div>
+          <div class="meta-box"><span class="meta-label">Starting</span><span class="meta-value">${safeText(formatMoney(bankroll.startingBankroll || 0))}</span></div>
+          <div class="meta-box"><span class="meta-label">Cash</span><span class="meta-value">${safeText(formatMoney(bankroll.cash || 0))}</span></div>
+          <div class="meta-box"><span class="meta-label">Equity</span><span class="meta-value">${safeText(formatMoney(bankroll.equity || 0))}</span></div>
+          <div class="meta-box"><span class="meta-label">Default Size</span><span class="meta-value">${safeText(formatMoney(bankroll.defaultPositionSize || 0))}</span></div>
         </div>
       </article>
 
       <article class="market-card">
         <h3>Paper Trading Summary</h3>
         <div class="market-meta">
-          <div class="meta-box"><span class="meta-label">Total Positions</span><span class="meta-value">${stats.totalPositions ?? 0}</span></div>
-          <div class="meta-box"><span class="meta-label">Open</span><span class="meta-value">${stats.openPositions ?? 0}</span></div>
-          <div class="meta-box"><span class="meta-label">Closed</span><span class="meta-value">${stats.closedPositions ?? 0}</span></div>
-          <div class="meta-box"><span class="meta-label">Closed Win Rate</span><span class="meta-value">${closedWinRate}%</span></div>
+          <div class="meta-box"><span class="meta-label">Total Positions</span><span class="meta-value">${safeText(stats.totalPositions ?? 0)}</span></div>
+          <div class="meta-box"><span class="meta-label">Open</span><span class="meta-value">${safeText(stats.openPositions ?? 0)}</span></div>
+          <div class="meta-box"><span class="meta-label">Closed</span><span class="meta-value">${safeText(stats.closedPositions ?? 0)}</span></div>
+          <div class="meta-box"><span class="meta-label">Closed Win Rate</span><span class="meta-value">${safeText(closedWinRate)}%</span></div>
         </div>
       </article>
 
       <article class="market-card">
         <h3>P&amp;L</h3>
         <div class="market-meta">
-          <div class="meta-box"><span class="meta-label">Avg Open P&amp;L</span><span class="meta-value">${formatPoints(stats.avgOpenPnl || 0)}</span></div>
-          <div class="meta-box"><span class="meta-label">Realized P&amp;L</span><span class="meta-value">${formatMoney(stats.realizedPnl || 0)}</span></div>
-          <div class="meta-box"><span class="meta-label">Unrealized P&amp;L</span><span class="meta-value">${formatMoney(stats.unrealizedPnlDollars || 0)}</span></div>
-          <div class="meta-box"><span class="meta-label">Closed Wins</span><span class="meta-value">${stats.closedWins ?? 0}</span></div>
+          <div class="meta-box"><span class="meta-label">Avg Open P&amp;L</span><span class="meta-value">${safeText(formatPoints(stats.avgOpenPnl || 0))}</span></div>
+          <div class="meta-box"><span class="meta-label">Realized P&amp;L</span><span class="meta-value">${safeText(formatMoney(stats.realizedPnl || 0))}</span></div>
+          <div class="meta-box"><span class="meta-label">Unrealized P&amp;L</span><span class="meta-value">${safeText(formatMoney(stats.unrealizedPnlDollars || 0))}</span></div>
+          <div class="meta-box"><span class="meta-label">Closed Wins</span><span class="meta-value">${safeText(stats.closedWins ?? 0)}</span></div>
         </div>
       </article>
     </div>
@@ -1775,24 +1794,24 @@ function renderPaperPositionItem(position) {
 
   const closeButton =
     position.status === "OPEN"
-      ? `<button class="close-position-btn" data-position-id="${position.id}">Close Position</button>`
+      ? `<button class="close-position-btn" data-position-id="${safeAttr(position.id)}">Close Position</button>`
       : "";
 
   return `
     <div class="alert-item">
-      <div class="alert-message">${position.actionSignal}: ${position.question}</div>
-      <div class="alert-time">Source: ${position.source || "AUTO"}</div>
-      <div class="alert-time">Opened: ${formatTimestamp(position.openedAt)}</div>
-      <div class="alert-time">Why it was opened: ${position.actionReason}</div>
-      <div class="alert-time">Confidence: ${position.confidenceScore}/100</div>
-      <div class="alert-time">Size: ${formatMoney(position.positionSizeDollars || 0)}</div>
-      <div class="alert-time">Entry: ${formatProbability(position.entryYesPrice)}</div>
-      <div class="alert-time">Current: ${formatProbability(position.currentYesPrice)}</div>
-      <div class="alert-time ${pnlClass}">P&amp;L Points: ${formatPoints(pnl)}</div>
-      <div class="alert-time ${pnlClass}">P&amp;L Dollars: ${formatMoney(pnlDollar)}</div>
-      <div class="alert-time ${statusClass}">Status: ${position.status}</div>
-      ${position.closeReason ? `<div class="alert-time">Close Reason: ${position.closeReason}</div>` : ""}
-      ${position.closedAt ? `<div class="alert-time">Closed: ${formatTimestamp(position.closedAt)}</div>` : ""}
+      <div class="alert-message">${safeText(position.actionSignal)}: ${safeText(position.question)}</div>
+      <div class="alert-time">Source: ${safeText(position.source, "AUTO")}</div>
+      <div class="alert-time">Opened: ${safeText(formatTimestamp(position.openedAt))}</div>
+      <div class="alert-time">Why it was opened: ${safeText(position.actionReason)}</div>
+      <div class="alert-time">Confidence: ${safeText(position.confidenceScore)}/100</div>
+      <div class="alert-time">Size: ${safeText(formatMoney(position.positionSizeDollars || 0))}</div>
+      <div class="alert-time">Entry: ${safeText(formatProbability(position.entryYesPrice))}</div>
+      <div class="alert-time">Current: ${safeText(formatProbability(position.currentYesPrice))}</div>
+      <div class="alert-time ${pnlClass}">P&amp;L Points: ${safeText(formatPoints(pnl))}</div>
+      <div class="alert-time ${pnlClass}">P&amp;L Dollars: ${safeText(formatMoney(pnlDollar))}</div>
+      <div class="alert-time ${statusClass}">Status: ${safeText(position.status)}</div>
+      ${position.closeReason ? `<div class="alert-time">Close Reason: ${safeText(position.closeReason)}</div>` : ""}
+      ${position.closedAt ? `<div class="alert-time">Closed: ${safeText(formatTimestamp(position.closedAt))}</div>` : ""}
       ${closeButton}
     </div>
   `;
@@ -1842,16 +1861,16 @@ function renderTradeTicket(quote) {
     <div class="market-card">
       <h3>Execution Ticket</h3>
       <div class="market-meta">
-        <div class="meta-box"><span class="meta-label">Question</span><span class="meta-value">${quote.question}</span></div>
-        <div class="meta-box"><span class="meta-label">Mode</span><span class="meta-value">${mode}</span></div>
-        <div class="meta-box"><span class="meta-label">Side</span><span class="meta-value">${quote.side}</span></div>
-        <div class="meta-box"><span class="meta-label">Selected Price</span><span class="meta-value">${formatProbability(quote.selectedPrice)}</span></div>
-        <div class="meta-box"><span class="meta-label">Size</span><span class="meta-value">${formatMoney(quote.sizeDollars)}</span></div>
-        <div class="meta-box"><span class="meta-label">Estimated Shares</span><span class="meta-value">${quote.estimatedShares}</span></div>
-        <div class="meta-box"><span class="meta-label">Estimated Max Loss</span><span class="meta-value">${formatMoney(quote.estimatedMaxLoss)}</span></div>
-        <div class="meta-box"><span class="meta-label">Potential Profit</span><span class="meta-value">${formatMoney(quote.estimatedProfitIfCorrect)}</span></div>
-        <div class="meta-box"><span class="meta-label">Confidence</span><span class="meta-value">${quote.confidenceScore}/100</span></div>
-        <div class="meta-box"><span class="meta-label">Why this trade</span><span class="meta-value">${quote.actionReason}</span></div>
+        <div class="meta-box"><span class="meta-label">Question</span><span class="meta-value">${safeText(quote.question)}</span></div>
+        <div class="meta-box"><span class="meta-label">Mode</span><span class="meta-value">${safeText(mode)}</span></div>
+        <div class="meta-box"><span class="meta-label">Side</span><span class="meta-value">${safeText(quote.side)}</span></div>
+        <div class="meta-box"><span class="meta-label">Selected Price</span><span class="meta-value">${safeText(formatProbability(quote.selectedPrice))}</span></div>
+        <div class="meta-box"><span class="meta-label">Size</span><span class="meta-value">${safeText(formatMoney(quote.sizeDollars))}</span></div>
+        <div class="meta-box"><span class="meta-label">Estimated Shares</span><span class="meta-value">${safeText(quote.estimatedShares)}</span></div>
+        <div class="meta-box"><span class="meta-label">Estimated Max Loss</span><span class="meta-value">${safeText(formatMoney(quote.estimatedMaxLoss))}</span></div>
+        <div class="meta-box"><span class="meta-label">Potential Profit</span><span class="meta-value">${safeText(formatMoney(quote.estimatedProfitIfCorrect))}</span></div>
+        <div class="meta-box"><span class="meta-label">Confidence</span><span class="meta-value">${safeText(quote.confidenceScore)}/100</span></div>
+        <div class="meta-box"><span class="meta-label">Why this trade</span><span class="meta-value">${safeText(quote.actionReason)}</span></div>
       </div>
 
       ${liveBlocked ? `<div class="alert-item"><div class="alert-message">Live mode is blocked.</div><div class="alert-time">Connect an account and clear readiness blockers first.</div></div>` : ""}
@@ -1875,7 +1894,7 @@ function renderSignedOrderSubmitResult(response, isError = false) {
       <article class="market-card">
         <h3>${isError ? "Signed Handoff Error" : "Real Submit Result"}</h3>
         <div class="market-meta">
-          <div class="meta-box"><span class="meta-label">Status</span><span class="meta-value">${result.status || (isError ? "ERROR" : "DONE")}</span></div>
+          <div class="meta-box"><span class="meta-label">Status</span><span class="meta-value">${safeText(result.status || (isError ? "ERROR" : "DONE"))}</span></div>
           <div class="meta-box"><span class="meta-label">Forwarded</span><span class="meta-value">${response?.forwarded ? "YES" : "NO"}</span></div>
           <div class="meta-box"><span class="meta-label">Blocked</span><span class="meta-value">${response?.blocked ? "YES" : "NO"}</span></div>
           <div class="meta-box"><span class="meta-label">Safe Fallback</span><span class="meta-value">${response?.dryRunFallback ? "YES" : "NO"}</span></div>
@@ -1884,7 +1903,7 @@ function renderSignedOrderSubmitResult(response, isError = false) {
           <div class="meta-box"><span class="meta-label">User L2 Auth</span><span class="meta-value">${summary.userL2AuthAttached ? "YES" : "NO"}</span></div>
         </div>
         <div class="alert-item">
-          <div class="alert-message">${result.message || response?.error || "No response message provided."}</div>
+          <div class="alert-message">${safeText(result.message || response?.error || "No response message provided.")}</div>
         </div>
       </article>
 
@@ -1905,7 +1924,7 @@ function renderSignedOrderSubmitResult(response, isError = false) {
               .map(
                 (reason) => `
               <div class="alert-item">
-                <div class="alert-message">${reason}</div>
+                <div class="alert-message">${safeText(reason)}</div>
               </div>
             `
               )
@@ -1973,18 +1992,18 @@ function renderLivePreparation(preparation) {
       <article class="market-card">
         <h3>Execution Prep Status</h3>
         <div class="market-meta">
-          <div class="meta-box"><span class="meta-label">Mode</span><span class="meta-value">${preparation.mode || "LIVE"}</span></div>
-          <div class="meta-box"><span class="meta-label">Status</span><span class="meta-value">${preparation.status || "—"}</span></div>
-          <div class="meta-box"><span class="meta-label">Current State</span><span class="meta-value">${stateLabel}</span></div>
+          <div class="meta-box"><span class="meta-label">Mode</span><span class="meta-value">${safeText(preparation.mode, "LIVE")}</span></div>
+          <div class="meta-box"><span class="meta-label">Status</span><span class="meta-value">${safeText(preparation.status, "—")}</span></div>
+          <div class="meta-box"><span class="meta-label">Current State</span><span class="meta-value">${safeText(stateLabel)}</span></div>
           <div class="meta-box"><span class="meta-label">Builder Ready</span><span class="meta-value">${preparation.builderReady ? "YES" : "NO"}</span></div>
-          <div class="meta-box"><span class="meta-label">Submission Mode</span><span class="meta-value">${handoff.submissionMode || "SAFE_FALLBACK_ONLY"}</span></div>
+          <div class="meta-box"><span class="meta-label">Submission Mode</span><span class="meta-value">${safeText(handoff.submissionMode, "SAFE_FALLBACK_ONLY")}</span></div>
         </div>
         <div class="alert-item">
-          <div class="alert-message">${stateMessage}</div>
-          <div class="alert-time">Question: ${ticket.question || "—"}</div>
-          <div class="alert-time">Side: ${ticket.side || "—"}</div>
-          <div class="alert-time">Size: ${formatMoney(ticket.sizeDollars || 0)}</div>
-          <div class="alert-time">Selected Price: ${formatProbability(ticket.selectedPrice)}</div>
+          <div class="alert-message">${safeText(stateMessage)}</div>
+          <div class="alert-time">Question: ${safeText(ticket.question, "—")}</div>
+          <div class="alert-time">Side: ${safeText(ticket.side, "—")}</div>
+          <div class="alert-time">Size: ${safeText(formatMoney(ticket.sizeDollars || 0))}</div>
+          <div class="alert-time">Selected Price: ${safeText(formatProbability(ticket.selectedPrice))}</div>
         </div>
       </article>
 
@@ -1993,14 +2012,14 @@ function renderLivePreparation(preparation) {
         <div class="market-meta">
           <div class="meta-box"><span class="meta-label">Server Enabled</span><span class="meta-value">${realSubmitPolicy.enabled ? "YES" : "NO"}</span></div>
           <div class="meta-box"><span class="meta-label">Safe Fallback</span><span class="meta-value">${fallbackMode ? "YES" : "NO"}</span></div>
-          <div class="meta-box"><span class="meta-label">Requested Size</span><span class="meta-value">${formatMoney(realSubmitReadiness.requestedSizeDollars || 0)}</span></div>
-          <div class="meta-box"><span class="meta-label">Max Submit Size</span><span class="meta-value">${formatMoney(realSubmitPolicy.maxSubmitDollars || 0)}</span></div>
+          <div class="meta-box"><span class="meta-label">Requested Size</span><span class="meta-value">${safeText(formatMoney(realSubmitReadiness.requestedSizeDollars || 0))}</span></div>
+          <div class="meta-box"><span class="meta-label">Max Submit Size</span><span class="meta-value">${safeText(formatMoney(realSubmitPolicy.maxSubmitDollars || 0))}</span></div>
           <div class="meta-box"><span class="meta-label">Within Max Size</span><span class="meta-value">${realSubmitReadiness.withinMaxSubmitSize ? "YES" : "NO"}</span></div>
           <div class="meta-box"><span class="meta-label">Guarded Ready</span><span class="meta-value">${guardedReady ? "YES" : "NO"}</span></div>
         </div>
         <div class="alert-item">
           <div class="alert-message">Confirmation text required before real submit</div>
-          <div class="alert-time">${realSubmitPolicy.confirmText || "—"}</div>
+          <div class="alert-time">${safeText(realSubmitPolicy.confirmText, "—")}</div>
         </div>
       </article>
     </div>
@@ -2014,7 +2033,7 @@ function renderLivePreparation(preparation) {
               .map(
                 (reason) => `
               <div class="alert-item">
-                <div class="alert-message">${reason}</div>
+                <div class="alert-message">${safeText(reason)}</div>
               </div>
             `
               )
@@ -2201,7 +2220,7 @@ function renderLivePreparation(preparation) {
 
           <div class="alert-item" style="margin-top: 12px;">
             <div class="alert-message">Type the confirmation text exactly</div>
-            <div class="alert-time">${realSubmitPolicy.confirmText || "—"}</div>
+            <div class="alert-time">${safeText(realSubmitPolicy.confirmText, "—")}</div>
             <input
               id="realSubmitConfirmInput"
               type="text"
@@ -2229,7 +2248,7 @@ function renderLivePreparation(preparation) {
                 .map(
                   (note) => `
                 <div class="alert-item">
-                  <div class="alert-message">${note}</div>
+                  <div class="alert-message">${safeText(note)}</div>
                 </div>
               `
                 )
@@ -2246,7 +2265,7 @@ function renderLivePreparation(preparation) {
                 .map(
                   (step) => `
                 <div class="alert-item">
-                  <div class="alert-message">${step}</div>
+                  <div class="alert-message">${safeText(step)}</div>
                 </div>
               `
                 )
@@ -2262,7 +2281,7 @@ function renderLivePreparation(preparation) {
 function renderHotCard(market) {
   return `
     <article class="market-card">
-      <h3>${market.question}</h3>
+      <h3>${safeText(market.question)}</h3>
 
       <div class="signals">
         ${[
@@ -2276,28 +2295,28 @@ function renderHotCard(market) {
           (market.confidenceScore || 0) >= 80 ? "🎯 High Confidence" : "",
         ]
           .filter(Boolean)
-          .map((signal) => `<span class="signal">${signal}</span>`)
+          .map((signal) => `<span class="signal">${safeText(signal)}</span>`)
           .join("")}
       </div>
 
       <div class="market-meta">
-        <div class="meta-box"><span class="meta-label">Yes Price</span><span class="meta-value">${formatProbability(market.yesPriceLive)}</span></div>
-        <div class="meta-box"><span class="meta-label">24h Volume</span><span class="meta-value">${formatMoney(market.volume24hr)}</span></div>
-        <div class="meta-box"><span class="meta-label">Liquidity</span><span class="meta-value">${formatMoney(market.liquidity)}</span></div>
-        <div class="meta-box"><span class="meta-label">Confidence</span><span class="meta-value">${market.confidenceScore ?? "—"}/100</span></div>
-        <div class="meta-box"><span class="meta-label">Category</span><span class="meta-value">${getCategoryDisplayLabel(market.category)}</span></div>
-        <div class="meta-box"><span class="meta-label">Signal</span><span class="meta-value">${market.actionSignal ?? "WATCH"}</span></div>
-        <div class="meta-box"><span class="meta-label">Why it matters</span><span class="meta-value">${market.actionReason ?? "No reason yet"}</span></div>
+        <div class="meta-box"><span class="meta-label">Yes Price</span><span class="meta-value">${safeText(formatProbability(market.yesPriceLive))}</span></div>
+        <div class="meta-box"><span class="meta-label">24h Volume</span><span class="meta-value">${safeText(formatMoney(market.volume24hr))}</span></div>
+        <div class="meta-box"><span class="meta-label">Liquidity</span><span class="meta-value">${safeText(formatMoney(market.liquidity))}</span></div>
+        <div class="meta-box"><span class="meta-label">Confidence</span><span class="meta-value">${safeText(market.confidenceScore ?? "—")}/100</span></div>
+        <div class="meta-box"><span class="meta-label">Category</span><span class="meta-value">${safeText(getCategoryDisplayLabel(market.category))}</span></div>
+        <div class="meta-box"><span class="meta-label">Signal</span><span class="meta-value">${safeText(market.actionSignal ?? "WATCH")}</span></div>
+        <div class="meta-box"><span class="meta-label">Why it matters</span><span class="meta-value">${safeText(market.actionReason ?? "No reason yet")}</span></div>
       </div>
 
       <div class="market-footer">
-        <span class="market-small">${market.slug} • Updated ${market.lastUpdated ? formatTimestamp(market.lastUpdated) : "—"}</span>
-        <a class="market-link" href="${market.url}" target="_blank" rel="noopener noreferrer">Open Market</a>
+        <span class="market-small">${safeText(market.slug)} • Updated ${safeText(market.lastUpdated ? formatTimestamp(market.lastUpdated) : "—")}</span>
+        <a class="market-link" href="${safeUrl(market.url)}" target="_blank" rel="noopener noreferrer">Open Market</a>
       </div>
 
       <div class="market-footer" style="margin-top: 12px;">
-        <button class="trade-action-btn" data-market-id="${market.id}" data-side="BUY YES">Preview BUY YES</button>
-        <button class="trade-action-btn" data-market-id="${market.id}" data-side="BUY NO">Preview BUY NO</button>
+        <button class="trade-action-btn" data-market-id="${safeAttr(market.id)}" data-side="BUY YES">Preview BUY YES</button>
+        <button class="trade-action-btn" data-market-id="${safeAttr(market.id)}" data-side="BUY NO">Preview BUY NO</button>
       </div>
     </article>
   `;
@@ -2308,24 +2327,24 @@ function renderMoverCard(market) {
 
   return `
     <article class="market-card">
-      <h3>${market.question}</h3>
+      <h3>${safeText(market.question)}</h3>
 
       <div class="market-meta">
-        <div class="meta-box"><span class="meta-label">Current Price</span><span class="meta-value">${formatProbability(market.yesPriceLive)}</span></div>
-        <div class="meta-box"><span class="meta-label">Recent Price</span><span class="meta-value">${formatProbability(market.pastPrice)}</span></div>
-        <div class="meta-box"><span class="meta-label">Price Change</span><span class="meta-value ${changeClass}">${formatChangeAsProbability(market.priceChange)}</span></div>
-        <div class="meta-box"><span class="meta-label">Percent Change</span><span class="meta-value ${changeClass}">${formatPercentChange(market.percentChange)}</span></div>
-        <div class="meta-box"><span class="meta-label">Category</span><span class="meta-value">${getCategoryDisplayLabel(market.category)}</span></div>
+        <div class="meta-box"><span class="meta-label">Current Price</span><span class="meta-value">${safeText(formatProbability(market.yesPriceLive))}</span></div>
+        <div class="meta-box"><span class="meta-label">Recent Price</span><span class="meta-value">${safeText(formatProbability(market.pastPrice))}</span></div>
+        <div class="meta-box"><span class="meta-label">Price Change</span><span class="meta-value ${changeClass}">${safeText(formatChangeAsProbability(market.priceChange))}</span></div>
+        <div class="meta-box"><span class="meta-label">Percent Change</span><span class="meta-value ${changeClass}">${safeText(formatPercentChange(market.percentChange))}</span></div>
+        <div class="meta-box"><span class="meta-label">Category</span><span class="meta-value">${safeText(getCategoryDisplayLabel(market.category))}</span></div>
       </div>
 
       <div class="market-footer">
-        <span class="market-small">24h Vol: ${formatMoney(market.volume24hr)}</span>
-        <a class="market-link" href="${market.url}" target="_blank" rel="noopener noreferrer">Open Market</a>
+        <span class="market-small">24h Vol: ${safeText(formatMoney(market.volume24hr))}</span>
+        <a class="market-link" href="${safeUrl(market.url)}" target="_blank" rel="noopener noreferrer">Open Market</a>
       </div>
 
       <div class="market-footer" style="margin-top: 12px;">
-        <button class="trade-action-btn" data-market-id="${market.id}" data-side="BUY YES">Preview BUY YES</button>
-        <button class="trade-action-btn" data-market-id="${market.id}" data-side="BUY NO">Preview BUY NO</button>
+        <button class="trade-action-btn" data-market-id="${safeAttr(market.id)}" data-side="BUY YES">Preview BUY YES</button>
+        <button class="trade-action-btn" data-market-id="${safeAttr(market.id)}" data-side="BUY NO">Preview BUY NO</button>
       </div>
     </article>
   `;
