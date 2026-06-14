@@ -11,7 +11,7 @@
       name="description"
       content="Paid by Polymarket OS helps users scan active Polymarket markets, spot movement faster, and open the markets that matter."
     />
-    <link rel="stylesheet" href="/style.css?v=pbp-why-1" />
+    <link rel="stylesheet" href="/style.css?v=pbp-feedback-1" />
   </head>
   <body>
     <header id="hero">
@@ -172,6 +172,63 @@
                 <div class="alert-time">Reason: Fresh market crossed a high-volume threshold quickly.</div>
               </div>
             </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="pbp-feedback-section" aria-labelledby="pbpFeedbackTitle">
+        <div class="market-grid pbp-feedback-layout">
+          <article class="market-card pbp-feedback-card">
+            <p class="market-small">Public beta feedback</p>
+            <h2 id="pbpFeedbackTitle">Tried the beta?</h2>
+            <p class="pbp-feedback-copy">
+              Tell us what was useful, confusing, or missing.
+            </p>
+
+            <form id="pbpBetaFeedbackForm" class="pbp-feedback-form">
+              <div class="pbp-feedback-grid">
+                <div>
+                  <label class="meta-label" for="pbpFeedbackRating">Rating</label>
+                  <select id="pbpFeedbackRating" name="rating">
+                    <option value="">Optional</option>
+                    <option value="5">5 - Very useful</option>
+                    <option value="4">4 - Useful</option>
+                    <option value="3">3 - Mixed</option>
+                    <option value="2">2 - Confusing</option>
+                    <option value="1">1 - Not useful yet</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label class="meta-label" for="pbpFeedbackEmail">Email</label>
+                  <input
+                    id="pbpFeedbackEmail"
+                    name="email"
+                    type="email"
+                    autocomplete="email"
+                    inputmode="email"
+                    placeholder="Optional"
+                  />
+                </div>
+              </div>
+
+              <label class="meta-label" for="pbpFeedbackMessage">Feedback</label>
+              <textarea
+                id="pbpFeedbackMessage"
+                name="message"
+                rows="4"
+                maxlength="2000"
+                placeholder="What helped you find markets? What felt unclear or missing?"
+                required
+              ></textarea>
+
+              <div class="pbp-feedback-actions">
+                <button type="submit">Send Feedback</button>
+                <p id="pbpBetaFeedbackStatus" class="pbp-feedback-status" aria-live="polite">
+                  Feedback is private and helps shape the beta.
+                </p>
+              </div>
+            </form>
           </article>
         </div>
       </section>
@@ -413,6 +470,6 @@
       </section>
     </main>
 
-    <script src="/app.js?v=pbp-alerts-status-1" type="module"></script>
+    <script src="/app.js?v=pbp-feedback-1" type="module"></script>
   </body>
 </html>

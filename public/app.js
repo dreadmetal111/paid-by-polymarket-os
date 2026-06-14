@@ -324,6 +324,75 @@ function bindAlertsWaitlistForm() {
   }
 }
 
+function setBetaFeedbackStatus(type, message) {
+  const status = document.getElementById("pbpBetaFeedbackStatus");
+  if (!status) return;
+
+  status.classList.remove("success", "error");
+  if (type) status.classList.add(type);
+  status.textContent = message;
+}
+
+async function handleBetaFeedbackSubmit(event) {
+  event.preventDefault();
+
+  const form = event.currentTarget;
+  const ratingInput = document.getElementById("pbpFeedbackRating");
+  const messageInput = document.getElementById("pbpFeedbackMessage");
+  const emailInput = document.getElementById("pbpFeedbackEmail");
+  const submitButton = form?.querySelector('button[type="submit"]');
+  const rating = String(ratingInput?.value || "").trim();
+  const message = String(messageInput?.value || "").trim();
+  const email = String(emailInput?.value || "").trim().toLowerCase();
+
+  if (!message) {
+    setBetaFeedbackStatus("error", "Add a short note before sending feedback.");
+    return;
+  }
+
+  if (message.length > 2000) {
+    setBetaFeedbackStatus("error", "Feedback must be 2000 characters or less.");
+    return;
+  }
+
+  if (email && !isValidEmail(email)) {
+    setBetaFeedbackStatus("error", "Enter a valid email address or leave it blank.");
+    return;
+  }
+
+  if (submitButton) submitButton.disabled = true;
+  setBetaFeedbackStatus("", "Sending feedback...");
+
+  try {
+    await postJson("/api/feedback", {
+      rating,
+      message,
+      email,
+      source: "public-beta",
+    });
+
+    if (ratingInput) ratingInput.value = "";
+    if (messageInput) messageInput.value = "";
+    if (emailInput) emailInput.value = "";
+
+    setBetaFeedbackStatus("success", "Feedback saved. Thank you for trying the beta.");
+  } catch (err) {
+    setBetaFeedbackStatus(
+      "error",
+      err.message || "Could not save feedback. Please try again."
+    );
+  } finally {
+    if (submitButton) submitButton.disabled = false;
+  }
+}
+
+function bindBetaFeedbackForm() {
+  const form = document.getElementById("pbpBetaFeedbackForm");
+  if (!form) return;
+
+  form.addEventListener("submit", handleBetaFeedbackSubmit);
+}
+
 function getLatestAlertSignalsElements() {
   return {
     list: document.getElementById("pbpLatestAlertSignalsList"),
@@ -3123,6 +3192,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   const applyBtn = document.getElementById("applyFilters");
 
   bindAlertsWaitlistForm();
+  bindBetaFeedbackForm();
   bindOutboundClickTracking();
   ensureHomepageStrategyLayer();
   ensureTopLevelTabs();

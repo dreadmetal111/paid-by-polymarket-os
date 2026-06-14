@@ -19,8 +19,13 @@ const OUTBOUND_CLICK_DATA_FILE = path.resolve(
   process.env.PBP_OUTBOUND_CLICK_DATA_FILE ||
     path.join(__dirname, "data", "outbound-click-events.json")
 );
+const BETA_FEEDBACK_DATA_FILE = path.resolve(
+  process.env.PBP_BETA_FEEDBACK_DATA_FILE ||
+    path.join(__dirname, "data", "beta-feedback.json")
+);
 const ALERT_SIGNALS_TABLE = "alert_signals";
 const OUTBOUND_CLICK_EVENTS_TABLE = "outbound_click_events";
+const BETA_FEEDBACK_TABLE = "beta_feedback";
 const PUBLIC_ALERT_SIGNAL_LIMIT = 5;
 
 const GAMMA_BASE = "https://gamma-api.polymarket.com";
@@ -201,6 +206,7 @@ const priceMemoryByMarketId = new Map();
 const signalLogByMarketId = new Map();
 let waitlistWriteQueue = Promise.resolve();
 let outboundClickWriteQueue = Promise.resolve();
+let betaFeedbackWriteQueue = Promise.resolve();
 
 const demoState = {
   account: createInitialAccountState(),
@@ -400,6 +406,43 @@ function normalizeOutboundClickInput(body) {
   };
 }
 
+function sanitizeBetaFeedbackText(value, maxLength) {
+  const text = redactSensitivePublicText(value)
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return text.length > maxLength ? text.slice(0, maxLength).trim() : text;
+}
+
+function normalizeBetaFeedbackRating(value) {
+  if (value === null || value === undefined || value === "") return null;
+
+  const rating = Number(value);
+  if (!Number.isInteger(rating) || rating < 1 || rating > 5) return null;
+  return rating;
+}
+
+function normalizeBetaFeedbackEmail(value) {
+  const email = normalizeWaitlistEmail(value).slice(0, 254);
+  return email || null;
+}
+
+function normalizeBetaFeedbackSource(value) {
+  return String(value || "public-beta")
+    .trim()
+    .replace(/[^\w .:/?#&=+-]/g, "")
+    .slice(0, 120) || "public-beta";
+}
+
+function normalizeBetaFeedbackInput(body) {
+  return {
+    rating: normalizeBetaFeedbackRating(body?.rating),
+    message: sanitizeBetaFeedbackText(body?.message, 2000),
+    email: normalizeBetaFeedbackEmail(body?.email),
+    source: normalizeBetaFeedbackSource(body?.source),
+  };
+}
+
 function toPublicAlertSignal(signal) {
   return {
     alertType: signal.alertType,
@@ -458,6 +501,33 @@ function normalizeOutboundClickData(raw) {
     version: 1,
     updatedAt: String(raw?.updatedAt || new Date().toISOString()),
     events: normalizedEvents,
+  };
+}
+
+function normalizeBetaFeedbackData(raw) {
+  const feedback = Array.isArray(raw?.feedback) ? raw.feedback : [];
+  const normalizedFeedback = [];
+
+  for (const item of feedback) {
+    const normalized = normalizeBetaFeedbackInput({
+      rating: item?.rating,
+      message: item?.message,
+      email: item?.email,
+      source: item?.source,
+    });
+
+    if (!normalized.message) continue;
+
+    normalizedFeedback.push({
+      ...normalized,
+      createdAt: String(item?.createdAt || new Date().toISOString()),
+    });
+  }
+
+  return {
+    version: 1,
+    updatedAt: String(raw?.updatedAt || new Date().toISOString()),
+    feedback: normalizedFeedback,
   };
 }
 
@@ -525,6 +595,38 @@ async function writeOutboundClickData(data) {
   await fs.rename(tempFile, OUTBOUND_CLICK_DATA_FILE);
 }
 
+async function readBetaFeedbackData() {
+  try {
+    const rawJson = await fs.readFile(BETA_FEEDBACK_DATA_FILE, "utf8");
+    return normalizeBetaFeedbackData(JSON.parse(rawJson));
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return normalizeBetaFeedbackData({ feedback: [] });
+    }
+    throw error;
+  }
+}
+
+async function writeBetaFeedbackData(data) {
+  const normalizedData = normalizeBetaFeedbackData({
+    ...data,
+    updatedAt: new Date().toISOString(),
+  });
+  const directory = path.dirname(BETA_FEEDBACK_DATA_FILE);
+  const tempFile = path.join(
+    directory,
+    `.beta-feedback.${process.pid}.${Date.now()}.tmp`
+  );
+
+  await fs.mkdir(directory, { recursive: true });
+  await fs.writeFile(
+    tempFile,
+    `${JSON.stringify(normalizedData, null, 2)}\n`,
+    "utf8"
+  );
+  await fs.rename(tempFile, BETA_FEEDBACK_DATA_FILE);
+}
+
 function getSupabaseWaitlistConfig() {
   const supabaseUrl = envFirst("SUPABASE_URL").replace(/\/+$/, "");
   const serviceRoleKey = envFirst("SUPABASE_SERVICE_ROLE_KEY");
@@ -559,6 +661,18 @@ function getSupabaseOutboundClickConfig() {
     supabaseUrl,
     serviceRoleKey,
     table: OUTBOUND_CLICK_EVENTS_TABLE,
+  };
+}
+
+function getSupabaseBetaFeedbackConfig() {
+  const supabaseUrl = envFirst("SUPABASE_URL").replace(/\/+$/, "");
+  const serviceRoleKey = envFirst("SUPABASE_SERVICE_ROLE_KEY");
+
+  return {
+    enabled: !!(supabaseUrl && serviceRoleKey),
+    supabaseUrl,
+    serviceRoleKey,
+    table: BETA_FEEDBACK_TABLE,
   };
 }
 
@@ -633,6 +747,21 @@ function logOutboundClickStorageMode(context) {
   console.log(`[outbound-clicks] ${context}`, buildOutboundClickStorageLog());
 }
 
+function buildBetaFeedbackStorageLog(config = getSupabaseBetaFeedbackConfig()) {
+  return {
+    storageMode: config.enabled ? "supabase" : "json",
+    supabaseEnabled: config.enabled,
+    supabaseHost: getSupabaseHost(config.supabaseUrl) || "not-configured",
+    supabaseTable: config.table,
+    supabaseUrlConfigured: !!config.supabaseUrl,
+    supabaseServiceRoleKeyConfigured: !!config.serviceRoleKey,
+  };
+}
+
+function logBetaFeedbackStorageMode(context) {
+  console.log(`[beta-feedback] ${context}`, buildBetaFeedbackStorageLog());
+}
+
 function getActiveWaitlistStorageProvider() {
   const config = getSupabaseWaitlistConfig();
 
@@ -653,6 +782,15 @@ function getActiveAlertSignalStorageProvider() {
 
 function getActiveOutboundClickStorageProvider() {
   const config = getSupabaseOutboundClickConfig();
+
+  return {
+    storageMode: config.enabled ? "supabase" : "json",
+    config,
+  };
+}
+
+function getActiveBetaFeedbackStorageProvider() {
+  const config = getSupabaseBetaFeedbackConfig();
 
   return {
     storageMode: config.enabled ? "supabase" : "json",
@@ -1240,6 +1378,175 @@ async function readOutboundClickStatusSummary() {
         latestClickAt: null,
       },
       outboundClickStorage: "error",
+    };
+  }
+}
+
+function mapSupabaseBetaFeedbackRow(row) {
+  return {
+    rating: normalizeBetaFeedbackRating(row?.rating),
+    message: sanitizeBetaFeedbackText(row?.message, 2000),
+    email: normalizeBetaFeedbackEmail(row?.email),
+    source: normalizeBetaFeedbackSource(row?.source),
+    createdAt: String(row?.created_at || row?.createdAt || new Date().toISOString()),
+  };
+}
+
+async function addSupabaseBetaFeedback({
+  feedback,
+  config = getSupabaseBetaFeedbackConfig(),
+}) {
+  const url = buildSupabaseTableUrl(config);
+
+  const rows = await fetchSupabaseJson(url, {
+    method: "POST",
+    headers: getSupabaseHeaders(config, {
+      "Content-Type": "application/json",
+      Prefer: "return=representation",
+    }),
+    body: JSON.stringify({
+      rating: feedback.rating,
+      message: feedback.message,
+      email: feedback.email,
+      source: feedback.source,
+    }),
+    logLabel: "beta-feedback",
+    errorLabel: "beta feedback",
+  });
+
+  return Array.isArray(rows) && rows[0]
+    ? mapSupabaseBetaFeedbackRow(rows[0])
+    : {
+        ...feedback,
+        createdAt: new Date().toISOString(),
+      };
+}
+
+async function addJsonBetaFeedback(feedback) {
+  const task = async () => {
+    const data = await readBetaFeedbackData();
+    const item = {
+      ...normalizeBetaFeedbackInput(feedback),
+      createdAt: new Date().toISOString(),
+    };
+
+    data.feedback.push(item);
+    await writeBetaFeedbackData(data);
+
+    return {
+      feedback: item,
+      count: data.feedback.length,
+    };
+  };
+
+  betaFeedbackWriteQueue = betaFeedbackWriteQueue.then(task, task);
+  return betaFeedbackWriteQueue;
+}
+
+async function addBetaFeedback(feedback) {
+  const provider = getActiveBetaFeedbackStorageProvider();
+
+  if (provider.storageMode === "supabase") {
+    try {
+      const inserted = await addSupabaseBetaFeedback({
+        feedback,
+        config: provider.config,
+      });
+
+      return {
+        feedback: inserted,
+        count: null,
+        storageMode: provider.storageMode,
+      };
+    } catch (error) {
+      console.error("[beta-feedback] Supabase save failed; falling back to JSON:", error.message);
+    }
+  }
+
+  const result = await addJsonBetaFeedback(feedback);
+  return {
+    ...result,
+    storageMode: "json",
+  };
+}
+
+function getLatestBetaFeedbackAt(feedback) {
+  let latestTimestamp = 0;
+
+  for (const item of Array.isArray(feedback) ? feedback : []) {
+    const timestamp = Date.parse(item?.createdAt);
+    if (Number.isFinite(timestamp) && timestamp > latestTimestamp) {
+      latestTimestamp = timestamp;
+    }
+  }
+
+  return latestTimestamp ? new Date(latestTimestamp).toISOString() : null;
+}
+
+async function readJsonBetaFeedbackStatusSummary() {
+  const data = await readBetaFeedbackData();
+  const feedback = Array.isArray(data.feedback) ? data.feedback : [];
+
+  return {
+    feedback: {
+      count: feedback.length,
+      latestFeedbackAt: getLatestBetaFeedbackAt(feedback),
+    },
+    feedbackStorage: "ok",
+  };
+}
+
+async function readSupabaseBetaFeedbackStatusSummary(config) {
+  const url = buildSupabaseTableUrl(config);
+  url.searchParams.set("select", "created_at");
+  url.searchParams.set("order", "created_at.desc");
+
+  const rows = await fetchSupabaseJson(url, {
+    headers: getSupabaseHeaders(config),
+    logLabel: "beta-feedback",
+    errorLabel: "beta feedback",
+  });
+
+  const feedback = (Array.isArray(rows) ? rows : []).map(mapSupabaseBetaFeedbackRow);
+
+  return {
+    feedback: {
+      count: feedback.length,
+      latestFeedbackAt: getLatestBetaFeedbackAt(feedback),
+    },
+    feedbackStorage: "ok",
+  };
+}
+
+async function readBetaFeedbackStatusSummary() {
+  const provider = getActiveBetaFeedbackStorageProvider();
+
+  try {
+    if (provider.storageMode === "supabase") {
+      return await readSupabaseBetaFeedbackStatusSummary(provider.config);
+    }
+
+    return await readJsonBetaFeedbackStatusSummary();
+  } catch (error) {
+    console.error("[beta-feedback] Status read failed:", error.message);
+    if (provider.storageMode === "supabase") {
+      try {
+        const fallbackSummary = await readJsonBetaFeedbackStatusSummary();
+        return {
+          feedback: fallbackSummary.feedback,
+          feedbackStorage: "json_fallback",
+        };
+      } catch (fallbackError) {
+        console.error("[beta-feedback] JSON fallback status read failed:", fallbackError.message);
+      }
+    }
+
+    return {
+      feedback: {
+        count: 0,
+        latestFeedbackAt: null,
+      },
+      feedbackStorage: "error",
     };
   }
 }
@@ -3610,6 +3917,69 @@ app.post("/api/events/outbound-click", async (req, res) => {
   }
 });
 
+app.post("/api/feedback", async (req, res) => {
+  try {
+    const rawMessage = String(req.body?.message || "").trim();
+    const rawEmail = String(req.body?.email || "").trim();
+    const feedback = normalizeBetaFeedbackInput(req.body);
+    const ratingProvided =
+      req.body?.rating !== null &&
+      req.body?.rating !== undefined &&
+      req.body?.rating !== "";
+
+    if (ratingProvided && feedback.rating === null) {
+      return res.status(400).json({
+        ok: false,
+        error: "Rating must be a number from 1 to 5.",
+      });
+    }
+
+    if (!rawMessage) {
+      return res.status(400).json({
+        ok: false,
+        error: "Feedback message is required.",
+      });
+    }
+
+    if (rawMessage.length > 2000) {
+      return res.status(400).json({
+        ok: false,
+        error: "Feedback message must be 2000 characters or less.",
+      });
+    }
+
+    if (rawEmail.length > 254) {
+      return res.status(400).json({
+        ok: false,
+        error: "Email must be 254 characters or less.",
+      });
+    }
+
+    if (feedback.email && !isValidWaitlistEmail(feedback.email)) {
+      return res.status(400).json({
+        ok: false,
+        error: "Enter a valid email address or leave it blank.",
+      });
+    }
+
+    logBetaFeedbackStorageMode("save start");
+    const result = await addBetaFeedback(feedback);
+
+    return res.status(201).json({
+      ok: true,
+      status: "created",
+      storageMode: result.storageMode,
+      message: "Feedback saved. Thank you for trying the beta.",
+    });
+  } catch (error) {
+    console.error("[beta-feedback] Save failed:", error.message);
+    return res.status(500).json({
+      ok: false,
+      error: "Failed to save beta feedback.",
+    });
+  }
+});
+
 app.post("/api/waitlist", async (req, res) => {
   try {
     const email = normalizeWaitlistEmail(req.body?.email);
@@ -3680,10 +4050,12 @@ app.get("/api/admin/status", async (req, res) => {
     logWaitlistStorageMode("admin status start");
     logAlertSignalStorageMode("admin status start");
     logOutboundClickStorageMode("admin status start");
-    const [waitlistSummary, alertSignalSummary, outboundClickSummary] = await Promise.all([
+    logBetaFeedbackStorageMode("admin status start");
+    const [waitlistSummary, alertSignalSummary, outboundClickSummary, feedbackSummary] = await Promise.all([
       readWaitlistStatusSummary(),
       readAlertSignalStatusSummary(),
       readOutboundClickStatusSummary(),
+      readBetaFeedbackStatusSummary(),
     ]);
 
     res.set("Cache-Control", "no-store");
@@ -3693,6 +4065,7 @@ app.get("/api/admin/status", async (req, res) => {
       waitlist: waitlistSummary.waitlist,
       alertSignals: alertSignalSummary.alertSignals,
       outboundClicks: outboundClickSummary.outboundClicks,
+      feedback: feedbackSummary.feedback,
       app: {
         name: "Paid by Polymarket OS",
         feature: "PBP Alerts",
@@ -3702,6 +4075,7 @@ app.get("/api/admin/status", async (req, res) => {
         waitlistStorage: "ok",
         alertStorage: alertSignalSummary.alertStorage,
         outboundClickStorage: outboundClickSummary.outboundClickStorage,
+        feedbackStorage: feedbackSummary.feedbackStorage,
         adminAuth: "ok",
       },
       generatedAt: new Date().toISOString(),

@@ -446,6 +446,64 @@ details summary {
   color: #bae6fd;
 }
 
+.pbp-feedback-section {
+  margin-top: 18px;
+}
+
+.pbp-feedback-layout {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.pbp-feedback-card {
+  border-color: rgba(34, 197, 94, 0.2);
+}
+
+.pbp-feedback-copy {
+  max-width: 720px;
+  color: var(--muted);
+  font-size: 0.96rem;
+  margin-top: 8px;
+}
+
+.pbp-feedback-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.pbp-feedback-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 220px) minmax(0, 1fr);
+  gap: 12px;
+}
+
+.pbp-feedback-form textarea {
+  min-height: 112px;
+  resize: vertical;
+}
+
+.pbp-feedback-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.pbp-feedback-status {
+  color: var(--muted);
+  font-size: 0.86rem;
+  min-height: 1.4em;
+}
+
+.pbp-feedback-status.success {
+  color: var(--positive);
+}
+
+.pbp-feedback-status.error {
+  color: var(--negative);
+}
+
 .signals {
   display: flex;
   flex-wrap: wrap;
@@ -629,6 +687,23 @@ pre {
 
   .pbp-alerts-section {
     margin-top: 14px;
+  }
+
+  .pbp-feedback-section {
+    margin-top: 14px;
+  }
+
+  .pbp-feedback-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .pbp-feedback-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .pbp-feedback-actions button {
+    width: 100%;
   }
 
   .pbp-why-section {
