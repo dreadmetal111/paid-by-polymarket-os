@@ -634,7 +634,7 @@ function renderDiscoverPrimaryView() {
       ? "all categories"
       : getCategoryOptionLabel(activeHomepageCategory);
 
-  summaryEl.textContent = `Showing ${Math.min(totalCount, 8)} of ${totalCount} markets from ${categoryLabel}. Click Preview BUY YES or Preview BUY NO to send a market into Trade.`;
+  summaryEl.textContent = `Showing ${Math.min(totalCount, 8)} of ${totalCount} active markets from ${categoryLabel}. Open the best matches on Polymarket, or preview a paper trade first.`;
 
   if (currentDiscoverView === "movers" && !biggestMoversCache.length) {
     resultsEl.innerHTML = `<p class="loading">Loading biggest movers...</p>`;
@@ -758,6 +758,7 @@ function getManagedTopLevelSections() {
   const discoverSections = uniqueSections([document.getElementById("homepageStrategyLayer")]);
 
   const tradeSections = uniqueSections([
+    getClosestSectionByElementId("tradeModeSelect"),
     getClosestSectionByElementId("tradeTicketPanel"),
     getClosestSectionByElementId("tradeExecutionPanel"),
     getClosestSectionByElementId("accountStatePanel"),
@@ -832,8 +833,9 @@ function ensureTopLevelTabs() {
   const firstManagedSection =
     groups.discover[0] || groups.trade[0] || groups.portfolio[0];
 
-  const preferredAnchorSection = getWorkspaceTabsAnchorSection();
-  const insertionAnchor = preferredAnchorSection || firstManagedSection;
+  const preferredAnchorSection = document.getElementById("homepageStrategyLayer");
+  const fallbackAnchorSection = getWorkspaceTabsAnchorSection();
+  const insertionAnchor = preferredAnchorSection || fallbackAnchorSection || firstManagedSection;
 
   if (!insertionAnchor?.parentElement) return;
 
@@ -841,16 +843,17 @@ function ensureTopLevelTabs() {
   tabsSection.id = "pbpTopLevelTabsSection";
   tabsSection.innerHTML = `
     <div class="market-grid">
-      <article class="market-card">
-        <h3>Workspace</h3>
+      <article class="market-card advanced-demo-card">
+        <p class="market-small">Optional</p>
+        <h3>Advanced Demo</h3>
         <div class="alert-item">
-          <div class="alert-message">Switch between discovery, trade flow, and portfolio views without scrolling through the full product stack.</div>
-          <div class="alert-time">Discover opens by default so the product still leads with market scanning.</div>
+          <div class="alert-message">The public product starts with market discovery and Polymarket links.</div>
+          <div class="alert-time">Use these tabs when you want to preview paper trades, portfolio tracking, or the Builder workflow demo.</div>
         </div>
         <div class="pbp-top-tabs" role="tablist" aria-label="Top-level product views">
-          <button id="pbpTabDiscoverBtn" class="pbp-top-tab-btn" role="tab" type="button">Discover</button>
-          <button id="pbpTabTradeBtn" class="pbp-top-tab-btn" role="tab" type="button">Trade</button>
-          <button id="pbpTabPortfolioBtn" class="pbp-top-tab-btn" role="tab" type="button">Portfolio</button>
+          <button id="pbpTabDiscoverBtn" class="pbp-top-tab-btn" role="tab" type="button">Market Discovery</button>
+          <button id="pbpTabTradeBtn" class="pbp-top-tab-btn" role="tab" type="button">Builder Demo</button>
+          <button id="pbpTabPortfolioBtn" class="pbp-top-tab-btn" role="tab" type="button">Paper Portfolio</button>
         </div>
       </article>
     </div>
@@ -881,9 +884,9 @@ function ensureHomepageStrategyLayer() {
     return;
   }
 
-  const tabsSection = document.getElementById("pbpTopLevelTabsSection");
   const fallbackAnchor = getWorkspaceTabsAnchorSection();
-  const insertionAnchor = tabsSection || fallbackAnchor;
+  const tabsSection = document.getElementById("pbpTopLevelTabsSection");
+  const insertionAnchor = fallbackAnchor || tabsSection;
 
   if (!insertionAnchor) return;
 
@@ -892,22 +895,23 @@ function ensureHomepageStrategyLayer() {
   strategySection.innerHTML = `
     <div class="market-grid">
       <article class="market-card discover-front-door-card">
-        <h3>Start Here</h3>
+        <p class="market-small">Live discovery</p>
+        <h3>Scan active Polymarket markets</h3>
         <div class="alerts-list">
           <div class="alert-item">
-            <div class="alert-message">Paid by Polymarket is a faster front door for scanning live prediction markets.</div>
+            <div class="alert-message">Scan active Polymarket markets, spot movement faster, and open the markets that matter.</div>
           </div>
           <div class="alert-item">
-            <div class="alert-message">Pick a category, switch a view, and scan one board at a time.</div>
+            <div class="alert-message">Use categories and views to narrow the live feed into a focused board.</div>
           </div>
           <div class="alert-item">
-            <div class="alert-message">Click Preview BUY YES or Preview BUY NO on any market worth a closer look.</div>
+            <div class="alert-message">View promising markets on Polymarket first; preview a paper trade only when you want more context.</div>
           </div>
         </div>
       </article>
 
       <article class="market-card discover-control-card">
-        <h3>Discover Markets</h3>
+        <h3>Market Discovery</h3>
         <div class="discover-control-stack">
           <div>
             <div class="rail-label">Categories</div>
@@ -946,8 +950,8 @@ function ensureHomepageStrategyLayer() {
 
     <div class="market-grid discover-notes-shell" style="margin-top: 18px;">
       <article class="market-card">
-        <h3>Live Feed Notes</h3>
-        <div class="alert-time">Small live notes from the current market feed. The main scanning surface stays above.</div>
+        <h3>Market Signals</h3>
+        <div class="alert-time">Short notes from the current market feed. The main action is still opening high-signal markets on Polymarket.</div>
         <div id="extraDiscoveryAlerts" class="alerts-list" style="margin-top: 14px;"></div>
       </article>
     </div>
@@ -1858,12 +1862,12 @@ function renderTradeTicket(quote) {
   const liveBlocked = mode === "LIVE" && !(accountStateCache?.canEnableLiveMode);
 
   const liveActionButton = liveBlocked
-    ? `<button id="prepareLiveTradeBtn" disabled>Live Requirements Not Met</button>`
-    : `<button id="prepareLiveTradeBtn">${mode === "LIVE" ? "Prepare Signed Handoff" : "Preview Live Trade"}</button>`;
+    ? `<button id="prepareLiveTradeBtn" disabled>Advanced Requirements Not Met</button>`
+    : `<button id="prepareLiveTradeBtn">${mode === "LIVE" ? "Prepare Advanced Demo" : "Preview Trade"}</button>`;
 
   return `
     <div class="market-card">
-      <h3>Execution Ticket</h3>
+      <h3>Trade Preview</h3>
       <div class="market-meta">
         <div class="meta-box"><span class="meta-label">Question</span><span class="meta-value">${safeText(quote.question)}</span></div>
         <div class="meta-box"><span class="meta-label">Mode</span><span class="meta-value">${safeText(mode)}</span></div>
@@ -2290,13 +2294,13 @@ function renderHotCard(market) {
       <div class="signals">
         ${[
           market.actionSignal === "BUY YES"
-            ? "🟢 BUY YES"
+            ? "BUY YES"
             : market.actionSignal === "BUY NO"
-              ? "🔴 BUY NO"
-              : "👀 WATCH",
-          (market.hotScore || 0) > 800000 ? "🔥 Momentum" : "",
-          (market.liquidity || 0) > 200000 ? "💧 Liquid" : "",
-          (market.confidenceScore || 0) >= 80 ? "🎯 High Confidence" : "",
+              ? "BUY NO"
+              : "WATCH",
+          (market.hotScore || 0) > 800000 ? "Momentum" : "",
+          (market.liquidity || 0) > 200000 ? "Liquid" : "",
+          (market.confidenceScore || 0) >= 80 ? "High activity" : "",
         ]
           .filter(Boolean)
           .map((signal) => `<span class="signal">${safeText(signal)}</span>`)
@@ -2307,20 +2311,20 @@ function renderHotCard(market) {
         <div class="meta-box"><span class="meta-label">Yes Price</span><span class="meta-value">${safeText(formatProbability(market.yesPriceLive))}</span></div>
         <div class="meta-box"><span class="meta-label">24h Volume</span><span class="meta-value">${safeText(formatMoney(market.volume24hr))}</span></div>
         <div class="meta-box"><span class="meta-label">Liquidity</span><span class="meta-value">${safeText(formatMoney(market.liquidity))}</span></div>
-        <div class="meta-box"><span class="meta-label">Confidence</span><span class="meta-value">${safeText(market.confidenceScore ?? "—")}/100</span></div>
+        <div class="meta-box"><span class="meta-label">Activity Score</span><span class="meta-value">${safeText(market.confidenceScore ?? "—")}/100</span></div>
         <div class="meta-box"><span class="meta-label">Category</span><span class="meta-value">${safeText(getCategoryDisplayLabel(market.category))}</span></div>
-        <div class="meta-box"><span class="meta-label">Signal</span><span class="meta-value">${safeText(market.actionSignal ?? "WATCH")}</span></div>
+        <div class="meta-box"><span class="meta-label">Market Read</span><span class="meta-value">${safeText(market.actionSignal ?? "WATCH")}</span></div>
         <div class="meta-box"><span class="meta-label">Why it matters</span><span class="meta-value">${safeText(market.actionReason ?? "No reason yet")}</span></div>
       </div>
 
       <div class="market-footer">
         <span class="market-small">${safeText(market.slug)} • Updated ${safeText(market.lastUpdated ? formatTimestamp(market.lastUpdated) : "—")}</span>
-        <a class="market-link" href="${safeUrl(market.url)}" target="_blank" rel="noopener noreferrer">Open Market</a>
+        <a class="market-link market-link-primary" href="${safeUrl(market.url)}" target="_blank" rel="noopener noreferrer">View on Polymarket</a>
       </div>
 
       <div class="market-footer" style="margin-top: 12px;">
-        <button class="trade-action-btn" data-market-id="${safeAttr(market.id)}" data-side="BUY YES">Preview BUY YES</button>
-        <button class="trade-action-btn" data-market-id="${safeAttr(market.id)}" data-side="BUY NO">Preview BUY NO</button>
+        <button class="trade-action-btn secondary-trade-btn" data-market-id="${safeAttr(market.id)}" data-side="BUY YES">Preview YES</button>
+        <button class="trade-action-btn secondary-trade-btn" data-market-id="${safeAttr(market.id)}" data-side="BUY NO">Preview NO</button>
       </div>
     </article>
   `;
@@ -2343,12 +2347,12 @@ function renderMoverCard(market) {
 
       <div class="market-footer">
         <span class="market-small">24h Vol: ${safeText(formatMoney(market.volume24hr))}</span>
-        <a class="market-link" href="${safeUrl(market.url)}" target="_blank" rel="noopener noreferrer">Open Market</a>
+        <a class="market-link market-link-primary" href="${safeUrl(market.url)}" target="_blank" rel="noopener noreferrer">View on Polymarket</a>
       </div>
 
       <div class="market-footer" style="margin-top: 12px;">
-        <button class="trade-action-btn" data-market-id="${safeAttr(market.id)}" data-side="BUY YES">Preview BUY YES</button>
-        <button class="trade-action-btn" data-market-id="${safeAttr(market.id)}" data-side="BUY NO">Preview BUY NO</button>
+        <button class="trade-action-btn secondary-trade-btn" data-market-id="${safeAttr(market.id)}" data-side="BUY YES">Preview YES</button>
+        <button class="trade-action-btn secondary-trade-btn" data-market-id="${safeAttr(market.id)}" data-side="BUY NO">Preview NO</button>
       </div>
     </article>
   `;

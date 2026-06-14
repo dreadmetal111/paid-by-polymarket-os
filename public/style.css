@@ -195,6 +195,27 @@ details summary {
   font-weight: 600;
 }
 
+.market-link-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  border: 1px solid rgba(56, 189, 248, 0.42);
+  border-radius: 12px;
+  background: var(--accent-soft);
+  color: #e0f2fe;
+  padding: 9px 13px;
+}
+
+.secondary-trade-btn {
+  background: rgba(2, 8, 23, 0.72);
+  color: var(--muted);
+}
+
+.advanced-demo-card {
+  background: linear-gradient(180deg, rgba(10, 19, 35, 0.92), rgba(7, 15, 29, 0.92));
+}
+
 .alerts-list {
   display: flex;
   flex-direction: column;

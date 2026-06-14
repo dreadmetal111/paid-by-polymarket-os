@@ -9,7 +9,7 @@
     <title>Paid by Polymarket OS</title>
     <meta
       name="description"
-      content="Paid by Polymarket OS is a live market-discovery and execution-prep product for scanning prediction markets faster."
+      content="Paid by Polymarket OS helps users scan active Polymarket markets, spot movement faster, and open the markets that matter."
     />
     <link rel="stylesheet" href="/style.css?v=pbp-alerts-status-1" />
   </head>
@@ -21,8 +21,8 @@
             <p class="market-small">Paid by Polymarket OS</p>
             <h1>Scan live prediction markets faster.</h1>
             <p class="alert-time" style="max-width: 760px; margin-top: 10px;">
-              A builder-demo product for finding high-signal markets, previewing
-              trade ideas, and moving from discovery to execution prep in one place.
+              Discover active Polymarket markets, monitor live alert signals,
+              and open the markets that matter without digging through the full feed.
             </p>
           </article>
 
@@ -38,13 +38,13 @@
               <div class="alert-item">
                 <div class="alert-message">2. Preview</div>
                 <div class="alert-time">
-                  Send a market into the trade ticket with one click.
+                  Review price, volume, liquidity, and the reason it stands out.
                 </div>
               </div>
               <div class="alert-item">
-                <div class="alert-message">3. Prepare</div>
+                <div class="alert-message">3. Open</div>
                 <div class="alert-time">
-                  Move into paper execution or guarded live prep.
+                  View the market on Polymarket, or preview a paper trade first.
                 </div>
               </div>
             </div>
@@ -55,8 +55,8 @@
       <section id="pbpAlertsComingSoon" class="pbp-alerts-section" aria-labelledby="pbpAlertsTitle">
         <div class="market-grid pbp-alerts-layout">
           <article class="market-card pbp-alerts-intro-card">
-            <p class="market-small">Coming next</p>
-            <h2 id="pbpAlertsTitle">PBP Alerts</h2>
+            <p class="market-small">Beta</p>
+            <h2 id="pbpAlertsTitle">PBP Alerts Beta</h2>
             <p class="pbp-alerts-copy">
               Get notified when prediction markets start moving, heating up, or attracting new liquidity.
               Discord alerts are coming first, with watchlists and premium tiers planned later.
@@ -148,10 +148,10 @@
       <section>
         <div class="market-grid">
           <article class="market-card">
-            <h3>Quick Filters</h3>
+            <h3>Scan Preferences</h3>
             <div class="market-meta">
               <div class="meta-box">
-                <span class="meta-label">Trade Mode</span>
+                <span class="meta-label">Preview Mode</span>
                 <select id="tradeModeSelect">
                   <option value="PAPER">PAPER</option>
                   <option value="LIVE">LIVE</option>
@@ -254,7 +254,7 @@
       <section>
         <div class="market-grid">
           <article class="market-card">
-            <h2>Trade Ticket</h2>
+            <h2>Trade Preview</h2>
             <div id="tradeTicketPanel">
               <p class="empty">No trade ticket selected yet.</p>
             </div>
@@ -265,7 +265,7 @@
       <section>
         <div class="market-grid">
           <article class="market-card">
-            <h2>Execution Prep</h2>
+            <h2>Advanced Demo Prep</h2>
             <div id="tradeExecutionPanel">
               <p class="empty">No execution prep run yet.</p>
             </div>
@@ -277,7 +277,7 @@
         <div class="market-grid">
           <article class="market-card">
             <div class="market-footer" style="margin-top: 0;">
-              <h2 style="margin: 0;">Account &amp; Live Mode</h2>
+              <h2 style="margin: 0;">Builder Demo Status</h2>
               <button id="refreshAccount" type="button">Refresh Account</button>
             </div>
             <div id="accountStatePanel" style="margin-top: 14px;">
@@ -290,7 +290,7 @@
       <section>
         <div class="market-grid">
           <article class="market-card">
-            <h2>Account Controls</h2>
+            <h2>Wallet Demo Controls</h2>
             <div id="accountControlsPanel">
               <p class="loading">Loading wallet connection...</p>
             </div>
@@ -329,7 +329,7 @@
         <div class="market-grid">
           <article class="market-card">
             <div class="market-footer" style="margin-top: 0;">
-              <h2 style="margin: 0;">Performance Dashboard</h2>
+              <h2 style="margin: 0;">Paper Performance</h2>
               <button id="refreshPerformance" type="button">
                 Refresh Performance
               </button>
@@ -345,7 +345,7 @@
         <div class="market-grid">
           <article class="market-card">
             <div class="market-footer" style="margin-top: 0;">
-              <h2 style="margin: 0;">Signal Tracking</h2>
+              <h2 style="margin: 0;">Signal History</h2>
               <button id="refreshSignals" type="button">
                 Refresh Signals
               </button>
