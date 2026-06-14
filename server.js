@@ -70,6 +70,30 @@ const GENERIC_CATEGORY_VALUES = new Set([
 
 const DIRECT_SOURCE_CATEGORY_RULES = [
   {
+    category: "Politics",
+    patterns: [
+      /\bpolitic(?:s|al)?\b/,
+      /\belections?\b/,
+      /\belection\s*202[0-9]\b/,
+      /\bmidterms?\b/,
+      /\bgovernment\b/,
+      /\bpolicy\b/,
+      /\bcampaign\b/,
+      /\bparty\b/,
+      /\brepublicans?\b/,
+      /\bdemocrats?\b/,
+      /\bcongress\b/,
+      /\bsenate\b/,
+      /\bhouse\b/,
+      /\bpresident(?:ial)?\b/,
+      /\bprime minister\b/,
+      /\bminister\b/,
+      /\bgovernor\b/,
+      /\bmayor\b/,
+      /\bparliament\b/,
+    ],
+  },
+  {
     category: "Sports",
     patterns: [
       /\bsports?\b/,
@@ -91,25 +115,6 @@ const DIRECT_SOURCE_CATEGORY_RULES = [
       /\brugby\b/,
       /\bformula[\s-]?1\b/,
       /\bf1\b/,
-    ],
-  },
-  {
-    category: "Politics",
-    patterns: [
-      /\bpolitic(?:s|al)?\b/,
-      /\belections?\b/,
-      /\belection\s*202[0-9]\b/,
-      /\bgovernment\b/,
-      /\bpolicy\b/,
-      /\bcampaign\b/,
-      /\bcongress\b/,
-      /\bsenate\b/,
-      /\bhouse\b/,
-      /\bpresident(?:ial)?\b/,
-      /\bprime minister\b/,
-      /\bgovernor\b/,
-      /\bmayor\b/,
-      /\bparliament\b/,
     ],
   },
   {
@@ -2072,8 +2077,8 @@ function scoreCategoryHeuristics(text) {
   const scores = {
     Politics: scoreRegexMatches(text, [
       /\b(election|elections|primary|president|presidential|senate|house|governor|mayor|congress|parliament)\b/,
-      /\b(trump|biden|democrat|democrats|republican|republicans|labour|conservative|campaign)\b/,
-      /\b(vote|voting|ballot|polls?|administration|cabinet|referendum)\b/,
+      /\b(trump|biden|democrat|democrats|republican|republicans|party|parties|labour|conservative|campaign)\b/,
+      /\b(vote|voting|ballot|polls?|administration|cabinet|referendum|government|minister|prime minister|midterm|midterms)\b/,
     ]),
     Sports: scoreRegexMatches(text, [
       /\b(nba|wnba|nfl|mlb|nhl|ufc|mma|fifa|uefa|atp|wta|pga|ncaa|olympics?|formula 1|grand prix)\b/,
@@ -2119,18 +2124,30 @@ function hasExplicitCryptoAssetMention(text) {
   );
 }
 
+function hasPoliticalCategoryOverride(text) {
+  return /\b(election|elections|midterm|midterms|president|presidential|senate|house|party|republican|democrat|congress|government|minister|prime minister|parliament|governor|mayor|vote|referendum)\b/.test(
+    text
+  );
+}
+
 function applySourceCategorySafetyOverride(sourceCategory, raw) {
   if (!sourceCategory) return "";
 
   const text = buildCategoryText(raw);
   const scores = scoreCategoryHeuristics(text);
+  const strongPolitics = scores.Politics >= 2 || hasPoliticalCategoryOverride(text);
+
+  if (strongPolitics) return "Politics";
 
   if (sourceCategory === "Crypto") {
     if (scores.Sports >= 2) return "Sports";
-    if (scores.Politics >= 2) return "Politics";
     if (scores.Culture >= 2) return "Culture";
     if (scores.World >= 2 && scores.Crypto <= 1) return "World";
     if (scores.Business >= 2 && scores.Crypto <= 1) return "Business";
+  }
+
+  if (sourceCategory === "Sports" && scores.Politics >= 1) {
+    return "Politics";
   }
 
   return sourceCategory;
@@ -2153,7 +2170,7 @@ function deriveCategory(raw) {
   const scores = scoreCategoryHeuristics(text);
 
   const strongSports = scores.Sports >= 2;
-  const strongPolitics = scores.Politics >= 2;
+  const strongPolitics = scores.Politics >= 2 || hasPoliticalCategoryOverride(text);
   const strongBusiness = scores.Business >= 2;
   const strongWorld = scores.World >= 2;
   const strongCulture = scores.Culture >= 2;
@@ -2166,8 +2183,8 @@ function deriveCategory(raw) {
     scores.Crypto >= scores.Business + 1 &&
     scores.Crypto >= scores.World + 1;
 
-  if (strongSports) return "Sports";
   if (strongPolitics) return "Politics";
+  if (strongSports) return "Sports";
 
   if (
     strongWorld &&
@@ -2192,6 +2209,97 @@ function deriveCategory(raw) {
   }
 
   return "News";
+}
+
+function getPublicDisplayCategory(category) {
+  if (category === "Business") return "Economy";
+  if (category === "World" || category === "News") return "Culture/News";
+  return category || "Other";
+}
+
+function getMarketFamilyText(raw, question = "") {
+  return [
+    question,
+    raw?.groupItemTitle,
+    raw?.slug,
+    raw?.events?.[0]?.title,
+    raw?.events?.[0]?.slug,
+    raw?.events?.[0]?.subtitle,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+}
+
+function extractWorldCupOutcomeLabel(question) {
+  const match = String(question || "").match(/^Will\s+(.+?)\s+win\s+the\s+2026\s+FIFA\s+World\s+Cup\??$/i);
+  return match?.[1]?.trim() || "";
+}
+
+function buildShortQuestion(question) {
+  return String(question || "")
+    .replace(/^Will\s+/i, "")
+    .replace(/\?$/, "")
+    .trim();
+}
+
+// Public grouping metadata is intentionally conservative and easy to tune.
+// It helps the homepage group obvious repeated market families without hiding
+// the full question or creating Polymarket-style event pages.
+function deriveMarketFamily(raw, category, question) {
+  const text = getMarketFamilyText(raw, question);
+
+  if (/\b(2026 fifa world cup|fifa world cup|world cup)\b/.test(text)) {
+    return {
+      eventGroup: "2026 FIFA World Cup",
+      marketFamilyKey: "sports:2026-fifa-world-cup",
+      marketTopic: "Team winner markets",
+      outcomeLabel: extractWorldCupOutcomeLabel(question) || buildShortQuestion(question),
+    };
+  }
+
+  if (/\b(nba|basketball)\b/.test(text) && category === "Sports") {
+    return {
+      eventGroup: "NBA",
+      marketFamilyKey: "sports:nba",
+      marketTopic: "NBA markets",
+      outcomeLabel: buildShortQuestion(question),
+    };
+  }
+
+  if (category === "Politics" && /\b(midterm|midterms|election|elections|presidential|president|senate|house|congress|party|republican|democrat|vote)\b/.test(text)) {
+    return {
+      eventGroup: /\bmidterm|midterms\b/.test(text) ? "Election / Midterms" : "Election",
+      marketFamilyKey: /\bmidterm|midterms\b/.test(text) ? "politics:election-midterms" : "politics:election",
+      marketTopic: "Election markets",
+      outcomeLabel: buildShortQuestion(question),
+    };
+  }
+
+  if (category === "Crypto" || /\b(bitcoin|btc|ethereum|eth|solana|crypto|blockchain|web3|defi)\b/.test(text)) {
+    return {
+      eventGroup: "Crypto",
+      marketFamilyKey: "crypto:markets",
+      marketTopic: "Crypto markets",
+      outcomeLabel: buildShortQuestion(question),
+    };
+  }
+
+  if (/\b(fed|fomc|rate cut|rate cuts|interest rate|interest rates|cpi|inflation)\b/.test(text)) {
+    return {
+      eventGroup: "Fed / Rates",
+      marketFamilyKey: "economy:fed-rates",
+      marketTopic: "Rates and inflation markets",
+      outcomeLabel: buildShortQuestion(question),
+    };
+  }
+
+  return {
+    eventGroup: "",
+    marketFamilyKey: "",
+    marketTopic: "",
+    outcomeLabel: buildShortQuestion(question),
+  };
 }
 
 function parseIsoTimestamp(value) {
@@ -2537,6 +2645,8 @@ function normalizeMarket(raw) {
   );
 
   const category = deriveCategory(raw);
+  const displayCategory = getPublicDisplayCategory(category);
+  const family = deriveMarketFamily(raw, category, question);
   const oneDayPriceChange = normalizeOneDayPriceChange(raw?.oneDayPriceChange);
 
   const lastUpdated = newestIso(
@@ -2578,6 +2688,12 @@ function normalizeMarket(raw) {
     slug: String(raw?.slug || raw?.id || ""),
     url: buildMarketUrl(raw),
     category,
+    displayCategory,
+    eventGroup: family.eventGroup,
+    marketFamilyKey: family.marketFamilyKey,
+    marketTopic: family.marketTopic,
+    outcomeLabel: family.outcomeLabel,
+    shortQuestion: family.outcomeLabel || buildShortQuestion(question),
     active,
     closed,
     archived,

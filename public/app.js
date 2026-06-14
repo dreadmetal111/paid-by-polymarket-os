@@ -590,11 +590,13 @@ function getPublicCategoryKey(market) {
     .join(" ")
     .toLowerCase();
 
-  if (category.includes("SPORT") || /\b(nba|wnba|nfl|mlb|nhl|fifa|uefa|ufc|mma|soccer|football|baseball|basketball|hockey|tennis|golf|world cup)\b/.test(text)) {
-    return "SPORTS";
-  }
-  if (category.includes("POLITIC") || category.includes("WORLD") || /\b(election|president|senate|house|governor|congress|mayor|trump|biden|vote|referendum)\b/.test(text)) {
+  // Politics/election words intentionally override sports terms like "win"
+  // or "House" collisions so public category filters stay trustworthy.
+  if (category.includes("POLITIC") || /\b(election|elections|midterm|midterms|president|presidential|senate|house|party|republican|democrat|governor|congress|government|minister|prime minister|parliament|mayor|trump|biden|vote|referendum)\b/.test(text)) {
     return "POLITICS";
+  }
+  if (category.includes("SPORT") || /\b(nba|wnba|nfl|mlb|nhl|fifa|uefa|champions league|ufc|mma|soccer|football|baseball|basketball|hockey|tennis|golf|world cup|team|player|game)\b/.test(text)) {
+    return "SPORTS";
   }
   if (category.includes("CRYPTO") || /\b(bitcoin|btc|ethereum|eth|solana|crypto|blockchain|web3|defi|stablecoin)\b/.test(text)) {
     return "CRYPTO";
@@ -637,6 +639,30 @@ function getMarketEventGroup(market) {
   if (/\b(fed|fomc|rate cut|rate cuts|interest rate|interest rates|cpi|inflation)\b/.test(text)) return "Fed / Rates";
 
   return "";
+}
+
+function getMarketFamilyKey(market) {
+  const explicit = String(market?.marketFamilyKey || "").trim();
+  if (explicit) return explicit;
+
+  const group = getMarketEventGroup(market);
+  if (!group) return "";
+
+  return `${getPublicCategoryKey(market).toLowerCase()}:${group
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "")}`;
+}
+
+function getMarketOutcomeLabel(market) {
+  const explicit = String(market?.outcomeLabel || market?.shortQuestion || "").trim();
+  if (explicit) return explicit;
+
+  const question = String(market?.question || "").trim();
+  const worldCupMatch = question.match(/^Will\s+(.+?)\s+win\s+the\s+2026\s+FIFA\s+World\s+Cup\??$/i);
+  if (worldCupMatch?.[1]) return worldCupMatch[1].trim();
+
+  return question.replace(/^Will\s+/i, "").replace(/\?$/, "").trim() || question;
 }
 
 function getCategoryOptionLabel(value) {
@@ -838,6 +864,91 @@ function getEmergingMarkets(markets) {
   return scored.sort((a, b) => b._emergingScore - a._emergingScore).slice(0, 8);
 }
 
+function shouldGroupCurrentDiscoverView() {
+  return currentDiscoverView === "opportunities" || currentDiscoverView === "volume";
+}
+
+function getMarketSortScoreForView(market, viewKey = currentDiscoverView) {
+  if (viewKey === "volume") return market?.volume24hr || 0;
+  if (viewKey === "liquid") return market?.liquidity || 0;
+  return getDiscoveryRankScore(market);
+}
+
+function getMarketFamilyReason(groupName) {
+  if (groupName === "2026 FIFA World Cup") {
+    return "Team winner markets grouped together for easier scanning.";
+  }
+  if (groupName === "Election / Midterms" || groupName === "Election") {
+    return "Related election markets grouped together so similar questions are easier to compare.";
+  }
+  if (groupName === "Fed / Rates") {
+    return "Rates and inflation markets grouped together for a cleaner macro scan.";
+  }
+  if (groupName === "Crypto") {
+    return "Related crypto markets grouped together for a quicker scan.";
+  }
+  if (groupName === "NBA") {
+    return "Related NBA markets grouped together for easier scanning.";
+  }
+  return "Related markets grouped together for easier scanning.";
+}
+
+// Grouping is intentionally conservative: only obvious repeated market
+// families become grouped cards, and every child still keeps a direct
+// Polymarket link plus the full market question for accuracy.
+function buildGroupedDiscoverItems(markets, viewKey = currentDiscoverView) {
+  const source = Array.isArray(markets) ? markets : [];
+  const familyMap = new Map();
+  const singles = [];
+
+  source.forEach((market) => {
+    const familyKey = getMarketFamilyKey(market);
+    const groupName = getMarketEventGroup(market);
+    if (!familyKey || !groupName) {
+      singles.push(market);
+      return;
+    }
+
+    const existing = familyMap.get(familyKey) || {
+      type: "group",
+      key: familyKey,
+      eventGroup: groupName,
+      category: getPublicCategoryLabel(market),
+      reason: getMarketFamilyReason(groupName),
+      children: [],
+      score: 0,
+    };
+
+    existing.children.push(market);
+    existing.score = Math.max(existing.score, getMarketSortScoreForView(market, viewKey));
+    familyMap.set(familyKey, existing);
+  });
+
+  const groups = [];
+
+  familyMap.forEach((group) => {
+    if (group.children.length < 2) {
+      singles.push(...group.children);
+      return;
+    }
+
+    group.children = group.children
+      .sort((a, b) => getMarketSortScoreForView(b, viewKey) - getMarketSortScoreForView(a, viewKey));
+    groups.push(group);
+  });
+
+  return [
+    ...groups,
+    ...singles.map((market) => ({
+      type: "market",
+      market,
+      score: getMarketSortScoreForView(market, viewKey),
+    })),
+  ]
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 8);
+}
+
 function getDiscoverMarketsForCurrentView() {
   const baseMarkets = getDiscoveryBaseMarkets();
 
@@ -847,7 +958,7 @@ function getDiscoverMarketsForCurrentView() {
     case "volume":
       return [...baseMarkets]
         .sort((a, b) => (b.volume24hr || 0) - (a.volume24hr || 0))
-        .slice(0, 8);
+        .slice(0, 24);
     case "liquid":
       return [...baseMarkets]
         .sort((a, b) => (b.liquidity || 0) - (a.liquidity || 0))
@@ -858,7 +969,7 @@ function getDiscoverMarketsForCurrentView() {
     default:
       return [...baseMarkets]
         .sort((a, b) => getDiscoveryRankScore(b) - getDiscoveryRankScore(a))
-        .slice(0, 8);
+        .slice(0, 24);
   }
 }
 
@@ -899,7 +1010,10 @@ function renderDiscoverPrimaryView() {
     return;
   }
 
-  const items = getDiscoverMarketsForCurrentView();
+  const rawItems = getDiscoverMarketsForCurrentView();
+  const items = shouldGroupCurrentDiscoverView()
+    ? buildGroupedDiscoverItems(rawItems, currentDiscoverView)
+    : rawItems;
 
   if (!Array.isArray(items) || items.length === 0) {
     resultsEl.innerHTML = `<p class="empty">${meta.empty}</p>`;
@@ -907,11 +1021,16 @@ function renderDiscoverPrimaryView() {
   }
 
   resultsEl.innerHTML = items
-    .map((item) => (
-      meta.type === "mover"
-        ? renderMoverCard(item, currentDiscoverView)
-        : renderHotCard(item, currentDiscoverView)
-    ))
+    .map((item) => {
+      if (item?.type === "group") {
+        return renderMarketFamilyCard(item, currentDiscoverView);
+      }
+
+      const market = item?.type === "market" ? item.market : item;
+      return meta.type === "mover"
+        ? renderMoverCard(market, currentDiscoverView)
+        : renderHotCard(market, currentDiscoverView);
+    })
     .join("");
 
   bindTradeActionButtons();
@@ -2636,6 +2755,89 @@ function renderHotCard(market, sourceSection = currentDiscoverView) {
         <button class="trade-action-btn secondary-trade-btn" data-market-id="${safeAttr(market.id)}" data-side="BUY YES">Preview YES</button>
         <button class="trade-action-btn secondary-trade-btn" data-market-id="${safeAttr(market.id)}" data-side="BUY NO">Preview NO</button>
       </div>
+    </article>
+  `;
+}
+
+function renderGroupedMarketChild(market, sourceSection, index) {
+  const trackingSource = normalizeOutboundSourceSection(sourceSection);
+  const label = getMarketOutcomeLabel(market);
+  const isExtra = index >= 5;
+
+  return `
+    <div class="grouped-market-child ${isExtra ? "grouped-market-child-extra" : ""}">
+      <div class="grouped-market-child-main">
+        <div class="alert-message">${safeText(label)}</div>
+        <div class="alert-time">${safeText(market.question)}</div>
+      </div>
+      <div class="grouped-market-child-meta">
+        <span>${safeText(formatProbability(market.yesPriceLive))}</span>
+        <span>${safeText(formatMoney(market.volume24hr))} vol</span>
+        <span>${safeText(formatMoney(market.liquidity))} liq</span>
+      </div>
+      <div class="grouped-market-child-actions">
+        <a
+          class="market-link market-link-primary"
+          href="${safeUrl(market.url)}"
+          target="_blank"
+          rel="noopener noreferrer"
+          data-outbound-click="polymarket"
+          data-market-id="${safeAttr(getMarketTrackingId(market))}"
+          data-market-slug="${safeAttr(market.slug)}"
+          data-market-question="${safeAttr(market.question)}"
+          data-market-url="${safeAttr(market.url)}"
+          data-source-section="${safeAttr(trackingSource)}"
+          data-cta="view-on-polymarket"
+        >View</a>
+        <button class="trade-action-btn secondary-trade-btn" data-market-id="${safeAttr(market.id)}" data-side="BUY YES">Preview YES</button>
+        <button class="trade-action-btn secondary-trade-btn" data-market-id="${safeAttr(market.id)}" data-side="BUY NO">Preview NO</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderMarketFamilyCard(group, sourceSection = currentDiscoverView) {
+  const children = Array.isArray(group.children) ? group.children : [];
+  const visibleChildren = children.slice(0, 5);
+  const extraChildren = children.slice(5);
+  const groupId = `group-${safeAttr(group.key)}`;
+
+  return `
+    <article class="market-card market-family-card">
+      <div class="market-context-row">
+        <span>${safeText(group.category)}</span>
+        <span>${safeText(group.eventGroup)}</span>
+      </div>
+
+      <div class="market-family-header">
+        <div>
+          <h3>${safeText(group.eventGroup)}</h3>
+          <div class="alert-time">${safeText(group.reason)}</div>
+        </div>
+        <span class="signal">${safeText(children.length)} markets</span>
+      </div>
+
+      <div class="grouped-market-list" aria-label="${safeAttr(group.eventGroup)} markets">
+        ${visibleChildren
+          .map((market, index) => renderGroupedMarketChild(market, sourceSection, index))
+          .join("")}
+      </div>
+
+      ${extraChildren.length ? `
+        <details id="${groupId}" class="grouped-market-more">
+          <summary>
+            <span class="show-more-label">Show ${safeText(extraChildren.length)} more</span>
+            <span class="show-less-label">Show less</span>
+          </summary>
+          <div class="grouped-market-list">
+            ${extraChildren
+              .map((market, index) => renderGroupedMarketChild(market, sourceSection, index + 5))
+              .join("")}
+          </div>
+        </details>
+      ` : ""}
+
+      <div class="alert-time market-family-note">Future: add event-level chart for grouped market families.</div>
     </article>
   `;
 }
