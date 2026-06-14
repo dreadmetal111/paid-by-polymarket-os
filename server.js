@@ -15,7 +15,12 @@ const WAITLIST_DATA_FILE = path.resolve(
   process.env.PBP_WAITLIST_DATA_FILE ||
     path.join(__dirname, "data", "waitlist-submissions.json")
 );
+const OUTBOUND_CLICK_DATA_FILE = path.resolve(
+  process.env.PBP_OUTBOUND_CLICK_DATA_FILE ||
+    path.join(__dirname, "data", "outbound-click-events.json")
+);
 const ALERT_SIGNALS_TABLE = "alert_signals";
+const OUTBOUND_CLICK_EVENTS_TABLE = "outbound_click_events";
 const PUBLIC_ALERT_SIGNAL_LIMIT = 5;
 
 const GAMMA_BASE = "https://gamma-api.polymarket.com";
@@ -195,6 +200,7 @@ const liveDataState = {
 const priceMemoryByMarketId = new Map();
 const signalLogByMarketId = new Map();
 let waitlistWriteQueue = Promise.resolve();
+let outboundClickWriteQueue = Promise.resolve();
 
 const demoState = {
   account: createInitialAccountState(),
@@ -335,6 +341,65 @@ function normalizeAlertSignalInput(body) {
   };
 }
 
+function sanitizeOutboundClickText(value, maxLength) {
+  const text = redactSensitivePublicText(value)
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return text.length > maxLength ? text.slice(0, maxLength).trim() : text;
+}
+
+function normalizeOutboundClickToken(value, fallback, maxLength = 120) {
+  const text = sanitizeOutboundClickText(value, maxLength)
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, maxLength);
+
+  return text || fallback;
+}
+
+function normalizeOutboundMarketUrl(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+
+  try {
+    const url = new URL(raw);
+    const hostname = url.hostname.toLowerCase();
+    if (
+      url.protocol !== "https:" ||
+      (hostname !== "polymarket.com" && !hostname.endsWith(".polymarket.com"))
+    ) {
+      return "";
+    }
+
+    url.username = "";
+    url.password = "";
+    url.hash = "";
+    return url.toString().slice(0, 600);
+  } catch {
+    return "";
+  }
+}
+
+function normalizeOutboundClickInput(body) {
+  return {
+    marketId: sanitizeOutboundClickText(body?.marketId ?? body?.market_id, 160),
+    marketSlug: sanitizeOutboundClickText(body?.marketSlug ?? body?.market_slug, 220),
+    marketQuestion: sanitizeOutboundClickText(
+      body?.marketQuestion ?? body?.market_question,
+      300
+    ),
+    marketUrl: normalizeOutboundMarketUrl(body?.marketUrl ?? body?.market_url),
+    sourceSection: normalizeOutboundClickToken(
+      body?.sourceSection ?? body?.source_section,
+      "unknown-section",
+      120
+    ),
+    cta: normalizeOutboundClickToken(body?.cta, "open-market", 120),
+  };
+}
+
 function toPublicAlertSignal(signal) {
   return {
     alertType: signal.alertType,
@@ -366,6 +431,33 @@ function normalizeWaitlistData(raw) {
     version: 1,
     updatedAt: String(raw?.updatedAt || new Date().toISOString()),
     submissions: normalizedSubmissions,
+  };
+}
+
+function normalizeOutboundClickData(raw) {
+  const events = Array.isArray(raw?.events) ? raw.events : [];
+  const normalizedEvents = [];
+
+  for (const event of events) {
+    const normalized = normalizeOutboundClickInput({
+      marketId: event?.marketId,
+      marketSlug: event?.marketSlug,
+      marketQuestion: event?.marketQuestion,
+      marketUrl: event?.marketUrl,
+      sourceSection: event?.sourceSection,
+      cta: event?.cta,
+    });
+
+    normalizedEvents.push({
+      ...normalized,
+      createdAt: String(event?.createdAt || new Date().toISOString()),
+    });
+  }
+
+  return {
+    version: 1,
+    updatedAt: String(raw?.updatedAt || new Date().toISOString()),
+    events: normalizedEvents,
   };
 }
 
@@ -401,6 +493,38 @@ async function writeWaitlistData(data) {
   await fs.rename(tempFile, WAITLIST_DATA_FILE);
 }
 
+async function readOutboundClickData() {
+  try {
+    const rawJson = await fs.readFile(OUTBOUND_CLICK_DATA_FILE, "utf8");
+    return normalizeOutboundClickData(JSON.parse(rawJson));
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return normalizeOutboundClickData({ events: [] });
+    }
+    throw error;
+  }
+}
+
+async function writeOutboundClickData(data) {
+  const normalizedData = normalizeOutboundClickData({
+    ...data,
+    updatedAt: new Date().toISOString(),
+  });
+  const directory = path.dirname(OUTBOUND_CLICK_DATA_FILE);
+  const tempFile = path.join(
+    directory,
+    `.outbound-click-events.${process.pid}.${Date.now()}.tmp`
+  );
+
+  await fs.mkdir(directory, { recursive: true });
+  await fs.writeFile(
+    tempFile,
+    `${JSON.stringify(normalizedData, null, 2)}\n`,
+    "utf8"
+  );
+  await fs.rename(tempFile, OUTBOUND_CLICK_DATA_FILE);
+}
+
 function getSupabaseWaitlistConfig() {
   const supabaseUrl = envFirst("SUPABASE_URL").replace(/\/+$/, "");
   const serviceRoleKey = envFirst("SUPABASE_SERVICE_ROLE_KEY");
@@ -423,6 +547,18 @@ function getSupabaseAlertSignalConfig() {
     supabaseUrl,
     serviceRoleKey,
     table: ALERT_SIGNALS_TABLE,
+  };
+}
+
+function getSupabaseOutboundClickConfig() {
+  const supabaseUrl = envFirst("SUPABASE_URL").replace(/\/+$/, "");
+  const serviceRoleKey = envFirst("SUPABASE_SERVICE_ROLE_KEY");
+
+  return {
+    enabled: !!(supabaseUrl && serviceRoleKey),
+    supabaseUrl,
+    serviceRoleKey,
+    table: OUTBOUND_CLICK_EVENTS_TABLE,
   };
 }
 
@@ -482,6 +618,21 @@ function logAlertSignalStorageMode(context) {
   console.log(`[alert-signals] ${context}`, buildAlertSignalStorageLog());
 }
 
+function buildOutboundClickStorageLog(config = getSupabaseOutboundClickConfig()) {
+  return {
+    storageMode: config.enabled ? "supabase" : "json",
+    supabaseEnabled: config.enabled,
+    supabaseHost: getSupabaseHost(config.supabaseUrl) || "not-configured",
+    supabaseTable: config.table,
+    supabaseUrlConfigured: !!config.supabaseUrl,
+    supabaseServiceRoleKeyConfigured: !!config.serviceRoleKey,
+  };
+}
+
+function logOutboundClickStorageMode(context) {
+  console.log(`[outbound-clicks] ${context}`, buildOutboundClickStorageLog());
+}
+
 function getActiveWaitlistStorageProvider() {
   const config = getSupabaseWaitlistConfig();
 
@@ -496,6 +647,15 @@ function getActiveAlertSignalStorageProvider() {
 
   return {
     storageMode: config.enabled ? "supabase" : "not_configured",
+    config,
+  };
+}
+
+function getActiveOutboundClickStorageProvider() {
+  const config = getSupabaseOutboundClickConfig();
+
+  return {
+    storageMode: config.enabled ? "supabase" : "json",
     config,
   };
 }
@@ -922,6 +1082,166 @@ async function readAlertSignalStatusSummary() {
     },
     alertStorage: "ok",
   };
+}
+
+function mapSupabaseOutboundClickRow(row) {
+  return {
+    marketId: sanitizeOutboundClickText(row?.market_id ?? row?.marketId, 160),
+    marketSlug: sanitizeOutboundClickText(row?.market_slug ?? row?.marketSlug, 220),
+    marketQuestion: sanitizeOutboundClickText(
+      row?.market_question ?? row?.marketQuestion,
+      300
+    ),
+    marketUrl: normalizeOutboundMarketUrl(row?.market_url ?? row?.marketUrl),
+    sourceSection: normalizeOutboundClickToken(
+      row?.source_section ?? row?.sourceSection,
+      "unknown-section",
+      120
+    ),
+    cta: normalizeOutboundClickToken(row?.cta, "open-market", 120),
+    createdAt: String(row?.created_at || row?.createdAt || new Date().toISOString()),
+  };
+}
+
+async function addSupabaseOutboundClickEvent({
+  clickEvent,
+  config = getSupabaseOutboundClickConfig(),
+}) {
+  const url = buildSupabaseTableUrl(config);
+
+  const rows = await fetchSupabaseJson(url, {
+    method: "POST",
+    headers: getSupabaseHeaders(config, {
+      "Content-Type": "application/json",
+      Prefer: "return=representation",
+    }),
+    body: JSON.stringify({
+      market_id: clickEvent.marketId || null,
+      market_slug: clickEvent.marketSlug || null,
+      market_question: clickEvent.marketQuestion || null,
+      market_url: clickEvent.marketUrl || null,
+      source_section: clickEvent.sourceSection,
+      cta: clickEvent.cta,
+    }),
+    logLabel: "outbound-clicks",
+    errorLabel: "outbound click",
+  });
+
+  return Array.isArray(rows) && rows[0]
+    ? mapSupabaseOutboundClickRow(rows[0])
+    : {
+        ...clickEvent,
+        createdAt: new Date().toISOString(),
+      };
+}
+
+async function addJsonOutboundClickEvent(clickEvent) {
+  const task = async () => {
+    const data = await readOutboundClickData();
+    const event = {
+      ...normalizeOutboundClickInput(clickEvent),
+      createdAt: new Date().toISOString(),
+    };
+
+    data.events.push(event);
+    await writeOutboundClickData(data);
+
+    return {
+      event,
+      count: data.events.length,
+    };
+  };
+
+  outboundClickWriteQueue = outboundClickWriteQueue.then(task, task);
+  return outboundClickWriteQueue;
+}
+
+async function addOutboundClickEvent(clickEvent) {
+  const provider = getActiveOutboundClickStorageProvider();
+  const result =
+    provider.storageMode === "supabase"
+      ? {
+          event: await addSupabaseOutboundClickEvent({
+            clickEvent,
+            config: provider.config,
+          }),
+          count: null,
+        }
+      : await addJsonOutboundClickEvent(clickEvent);
+
+  return {
+    ...result,
+    storageMode: provider.storageMode,
+  };
+}
+
+function getLatestOutboundClickAt(events) {
+  let latestTimestamp = 0;
+
+  for (const event of Array.isArray(events) ? events : []) {
+    const timestamp = Date.parse(event?.createdAt);
+    if (Number.isFinite(timestamp) && timestamp > latestTimestamp) {
+      latestTimestamp = timestamp;
+    }
+  }
+
+  return latestTimestamp ? new Date(latestTimestamp).toISOString() : null;
+}
+
+async function readJsonOutboundClickStatusSummary() {
+  const data = await readOutboundClickData();
+  const events = Array.isArray(data.events) ? data.events : [];
+
+  return {
+    outboundClicks: {
+      count: events.length,
+      latestClickAt: getLatestOutboundClickAt(events),
+    },
+    outboundClickStorage: "ok",
+  };
+}
+
+async function readSupabaseOutboundClickStatusSummary(config) {
+  const url = buildSupabaseTableUrl(config);
+  url.searchParams.set("select", "created_at");
+  url.searchParams.set("order", "created_at.desc");
+
+  const rows = await fetchSupabaseJson(url, {
+    headers: getSupabaseHeaders(config),
+    logLabel: "outbound-clicks",
+    errorLabel: "outbound clicks",
+  });
+
+  const events = (Array.isArray(rows) ? rows : []).map(mapSupabaseOutboundClickRow);
+
+  return {
+    outboundClicks: {
+      count: events.length,
+      latestClickAt: getLatestOutboundClickAt(events),
+    },
+    outboundClickStorage: "ok",
+  };
+}
+
+async function readOutboundClickStatusSummary() {
+  const provider = getActiveOutboundClickStorageProvider();
+
+  try {
+    if (provider.storageMode === "supabase") {
+      return await readSupabaseOutboundClickStatusSummary(provider.config);
+    }
+
+    return await readJsonOutboundClickStatusSummary();
+  } catch (error) {
+    console.error("[outbound-clicks] Status read failed:", error.message);
+    return {
+      outboundClicks: {
+        count: 0,
+        latestClickAt: null,
+      },
+      outboundClickStorage: "error",
+    };
+  }
 }
 
 function getAdminSecret() {
@@ -3197,6 +3517,35 @@ app.get("/api/alerts/recent", async (req, res) => {
   }
 });
 
+app.post("/api/events/outbound-click", async (req, res) => {
+  try {
+    const clickEvent = normalizeOutboundClickInput(req.body);
+
+    if (!clickEvent.marketUrl) {
+      return res.status(400).json({
+        ok: false,
+        error: "A valid Polymarket marketUrl is required.",
+      });
+    }
+
+    logOutboundClickStorageMode("save start");
+    const result = await addOutboundClickEvent(clickEvent);
+
+    return res.status(201).json({
+      ok: true,
+      status: "created",
+      storageMode: result.storageMode,
+      message: "Outbound click recorded.",
+    });
+  } catch (error) {
+    console.error("[outbound-clicks] Save failed:", error.message);
+    return res.status(500).json({
+      ok: false,
+      error: "Failed to record outbound click.",
+    });
+  }
+});
+
 app.post("/api/waitlist", async (req, res) => {
   try {
     const email = normalizeWaitlistEmail(req.body?.email);
@@ -3266,9 +3615,11 @@ app.get("/api/admin/status", async (req, res) => {
   try {
     logWaitlistStorageMode("admin status start");
     logAlertSignalStorageMode("admin status start");
-    const [waitlistSummary, alertSignalSummary] = await Promise.all([
+    logOutboundClickStorageMode("admin status start");
+    const [waitlistSummary, alertSignalSummary, outboundClickSummary] = await Promise.all([
       readWaitlistStatusSummary(),
       readAlertSignalStatusSummary(),
+      readOutboundClickStatusSummary(),
     ]);
 
     res.set("Cache-Control", "no-store");
@@ -3277,6 +3628,7 @@ app.get("/api/admin/status", async (req, res) => {
       storageMode: waitlistSummary.storageMode,
       waitlist: waitlistSummary.waitlist,
       alertSignals: alertSignalSummary.alertSignals,
+      outboundClicks: outboundClickSummary.outboundClicks,
       app: {
         name: "Paid by Polymarket OS",
         feature: "PBP Alerts",
@@ -3285,6 +3637,7 @@ app.get("/api/admin/status", async (req, res) => {
       checks: {
         waitlistStorage: "ok",
         alertStorage: alertSignalSummary.alertStorage,
+        outboundClickStorage: outboundClickSummary.outboundClickStorage,
         adminAuth: "ok",
       },
       generatedAt: new Date().toISOString(),

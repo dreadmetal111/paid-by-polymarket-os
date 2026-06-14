@@ -8,3 +8,5 @@ pbp-alert-worker/*.sqlite3
 pbp-alert-worker/*.sqlite3-*
 data/waitlist-submissions.json
 data/.waitlist-submissions.*.tmp
+data/outbound-click-events.json
+data/.outbound-click-events.*.tmp

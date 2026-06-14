@@ -150,6 +150,69 @@ function safeUrl(value) {
   return "#";
 }
 
+function normalizeOutboundSourceSection(value) {
+  return String(value || "market-discovery")
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 120) || "market-discovery";
+}
+
+function getMarketTrackingId(market) {
+  return market?.id || market?.marketId || market?.conditionId || market?.slug || "";
+}
+
+function getOutboundMarketClickPayload(link) {
+  return {
+    marketId: link.dataset.marketId || "",
+    marketSlug: link.dataset.marketSlug || "",
+    marketQuestion: link.dataset.marketQuestion || "",
+    marketUrl: link.dataset.marketUrl || link.href || "",
+    sourceSection: normalizeOutboundSourceSection(link.dataset.sourceSection),
+    cta: link.dataset.cta || "view-on-polymarket",
+  };
+}
+
+function sendOutboundMarketClick(payload) {
+  const body = JSON.stringify(payload);
+
+  try {
+    if (navigator.sendBeacon) {
+      const blob = new Blob([body], { type: "application/json" });
+      if (navigator.sendBeacon("/api/events/outbound-click", blob)) {
+        return;
+      }
+    }
+  } catch {}
+
+  try {
+    fetch("/api/events/outbound-click", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body,
+      keepalive: true,
+    }).catch(() => {});
+  } catch {}
+}
+
+let outboundClickTrackingBound = false;
+
+function bindOutboundClickTracking() {
+  if (outboundClickTrackingBound) return;
+  outboundClickTrackingBound = true;
+
+  document.addEventListener(
+    "click",
+    (event) => {
+      const link = event.target?.closest?.("[data-outbound-click='polymarket']");
+      if (!link) return;
+
+      sendOutboundMarketClick(getOutboundMarketClickPayload(link));
+    },
+    { capture: true }
+  );
+}
+
 function isValidEmail(value) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || "").trim());
 }
@@ -649,7 +712,11 @@ function renderDiscoverPrimaryView() {
   }
 
   resultsEl.innerHTML = items
-    .map((item) => (meta.type === "mover" ? renderMoverCard(item) : renderHotCard(item)))
+    .map((item) => (
+      meta.type === "mover"
+        ? renderMoverCard(item, currentDiscoverView)
+        : renderHotCard(item, currentDiscoverView)
+    ))
     .join("");
 
   bindTradeActionButtons();
@@ -2286,7 +2353,9 @@ function renderLivePreparation(preparation) {
   `;
 }
 
-function renderHotCard(market) {
+function renderHotCard(market, sourceSection = currentDiscoverView) {
+  const trackingSource = normalizeOutboundSourceSection(sourceSection);
+
   return `
     <article class="market-card">
       <h3>${safeText(market.question)}</h3>
@@ -2319,7 +2388,19 @@ function renderHotCard(market) {
 
       <div class="market-footer">
         <span class="market-small">${safeText(market.slug)} • Updated ${safeText(market.lastUpdated ? formatTimestamp(market.lastUpdated) : "—")}</span>
-        <a class="market-link market-link-primary" href="${safeUrl(market.url)}" target="_blank" rel="noopener noreferrer">View on Polymarket</a>
+        <a
+          class="market-link market-link-primary"
+          href="${safeUrl(market.url)}"
+          target="_blank"
+          rel="noopener noreferrer"
+          data-outbound-click="polymarket"
+          data-market-id="${safeAttr(getMarketTrackingId(market))}"
+          data-market-slug="${safeAttr(market.slug)}"
+          data-market-question="${safeAttr(market.question)}"
+          data-market-url="${safeAttr(market.url)}"
+          data-source-section="${safeAttr(trackingSource)}"
+          data-cta="view-on-polymarket"
+        >View on Polymarket</a>
       </div>
 
       <div class="market-footer" style="margin-top: 12px;">
@@ -2330,8 +2411,9 @@ function renderHotCard(market) {
   `;
 }
 
-function renderMoverCard(market) {
+function renderMoverCard(market, sourceSection = "movers") {
   const changeClass = market.percentChange >= 0 ? "positive" : "negative";
+  const trackingSource = normalizeOutboundSourceSection(sourceSection);
 
   return `
     <article class="market-card">
@@ -2347,7 +2429,19 @@ function renderMoverCard(market) {
 
       <div class="market-footer">
         <span class="market-small">24h Vol: ${safeText(formatMoney(market.volume24hr))}</span>
-        <a class="market-link market-link-primary" href="${safeUrl(market.url)}" target="_blank" rel="noopener noreferrer">View on Polymarket</a>
+        <a
+          class="market-link market-link-primary"
+          href="${safeUrl(market.url)}"
+          target="_blank"
+          rel="noopener noreferrer"
+          data-outbound-click="polymarket"
+          data-market-id="${safeAttr(getMarketTrackingId(market))}"
+          data-market-slug="${safeAttr(market.slug)}"
+          data-market-question="${safeAttr(market.question)}"
+          data-market-url="${safeAttr(market.url)}"
+          data-source-section="${safeAttr(trackingSource)}"
+          data-cta="view-on-polymarket"
+        >View on Polymarket</a>
       </div>
 
       <div class="market-footer" style="margin-top: 12px;">
@@ -2988,6 +3082,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   const applyBtn = document.getElementById("applyFilters");
 
   bindAlertsWaitlistForm();
+  bindOutboundClickTracking();
   ensureHomepageStrategyLayer();
   ensureTopLevelTabs();
   hideLegacyDiscoverSections();
