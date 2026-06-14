@@ -85,6 +85,10 @@ let walletConnectionSource = "NONE";
 let browserWalletEventsBound = false;
 let polymarketBrowserModulesPromise = null;
 let latestAlertSignalsFallbackHtml = "";
+let publicConfig = {
+  discordInviteEnabled: false,
+  discordInviteUrl: "",
+};
 
 function createEmptyUserAuthDraft() {
   return {
@@ -275,6 +279,49 @@ function setAlertsWaitlistStatus(type, message) {
   status.textContent = message;
 }
 
+function renderDiscordBetaCta(show = false) {
+  const container = document.getElementById("pbpDiscordBetaCta");
+  const content = document.getElementById("pbpDiscordBetaCtaContent");
+  if (!container || !content) return;
+
+  container.classList.toggle("is-hidden", !show);
+  if (!show) return;
+
+  if (publicConfig.discordInviteEnabled && publicConfig.discordInviteUrl) {
+    content.innerHTML = `
+      <p class="alert-time">You are on the alerts beta waitlist. You can also join the first free Discord alerts beta now.</p>
+      <a
+        class="market-link market-link-primary pbp-discord-beta-link"
+        href="${safeUrl(publicConfig.discordInviteUrl)}"
+        target="_blank"
+        rel="noopener noreferrer"
+      >Join free Discord alerts beta</a>
+    `;
+  } else {
+    content.innerHTML = `
+      <p class="alert-time">You are on the alerts beta waitlist. Discord beta invite coming soon.</p>
+    `;
+  }
+}
+
+async function loadPublicConfig() {
+  try {
+    const res = await fetch("/api/public-config", { cache: "no-store" });
+    const data = await res.json();
+    publicConfig = {
+      discordInviteEnabled: !!data?.discordInviteEnabled,
+      discordInviteUrl: data?.discordInviteEnabled && data?.discordInviteUrl
+        ? String(data.discordInviteUrl)
+        : "",
+    };
+  } catch {
+    publicConfig = {
+      discordInviteEnabled: false,
+      discordInviteUrl: "",
+    };
+  }
+}
+
 async function handleAlertsWaitlistSubmit(event) {
   event.preventDefault();
 
@@ -313,9 +360,10 @@ async function handleAlertsWaitlistSubmit(event) {
     } else {
       setAlertsWaitlistStatus(
         "success",
-        `You are on the PBP Alerts waitlist. Discord alerts are planned first; watchlists and premium tiers come later.${localMemoryNote}`
+        `You are on the alerts beta waitlist.${localMemoryNote}`
       );
     }
+    renderDiscordBetaCta(true);
   } catch (err) {
     const remembered = getStoredAlertsWaitlistEmails().includes(email);
     if (remembered) {
@@ -323,6 +371,7 @@ async function handleAlertsWaitlistSubmit(event) {
         "success",
         "This browser remembers a previous successful signup, but the waitlist server could not be reached right now."
       );
+      renderDiscordBetaCta(true);
     } else {
       setAlertsWaitlistStatus(
         "error",
@@ -346,6 +395,7 @@ function bindAlertsWaitlistForm() {
       "success",
       `This browser remembers ${storedCount} previous waitlist signup${storedCount === 1 ? "" : "s"}. Submit again to confirm with the server.`
     );
+    renderDiscordBetaCta(true);
   }
 }
 
@@ -3615,6 +3665,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   const refreshAccount = document.getElementById("refreshAccount");
   const applyBtn = document.getElementById("applyFilters");
 
+  await loadPublicConfig();
   bindAlertsWaitlistForm();
   bindBetaFeedbackForm();
   bindOutboundClickTracking();

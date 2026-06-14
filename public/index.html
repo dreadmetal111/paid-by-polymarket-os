@@ -11,7 +11,7 @@
       name="description"
       content="Paid by Polymarket OS helps users scan active Polymarket markets, spot movement faster, and open the markets that matter."
     />
-    <link rel="stylesheet" href="/style.css?v=pbp-beta-nav-1" />
+    <link rel="stylesheet" href="/style.css?v=pbp-discord-beta-1" />
   </head>
   <body>
     <header id="hero">
@@ -111,7 +111,8 @@
             <h2 id="pbpAlertsTitle">PBP Alerts Beta</h2>
             <p class="pbp-alerts-copy">
               Get notified when prediction markets start moving, heating up, or attracting new liquidity.
-              Discord alerts are coming first, with watchlists and premium tiers planned later.
+              Join the waitlist to get early access to free Discord alert notifications.
+              Watchlists and premium tiers are planned later.
             </p>
 
             <div class="pbp-alert-feature-grid" aria-label="PBP Alerts features">
@@ -151,6 +152,11 @@
                 Join the PBP Alerts waitlist. This site saves your signup on the server.
               </p>
             </form>
+
+            <div id="pbpDiscordBetaCta" class="pbp-discord-beta-card is-hidden" aria-live="polite">
+              <p class="market-small">Discord alerts beta</p>
+              <div id="pbpDiscordBetaCtaContent"></div>
+            </div>
           </article>
 
           <article class="market-card pbp-alerts-example-card">
@@ -190,6 +196,11 @@
                 <div class="alert-message">Will a major election headline resolve this week?</div>
                 <div class="alert-time">Reason: Fresh market crossed a high-volume threshold quickly.</div>
               </div>
+            </div>
+
+            <div class="pbp-alerts-discord-nudge">
+              <span>Want these in Discord?</span>
+              <a href="#pbpAlertsEmail">Join the alerts beta</a>
             </div>
           </article>
         </div>
@@ -497,6 +508,6 @@
       </section>
     </main>
 
-    <script src="/app.js?v=pbp-beta-nav-1" type="module"></script>
+    <script src="/app.js?v=pbp-discord-beta-1" type="module"></script>
   </body>
 </html>

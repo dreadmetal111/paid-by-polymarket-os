@@ -400,6 +400,26 @@ details summary {
   color: var(--negative);
 }
 
+.pbp-discord-beta-card {
+  border: 1px solid rgba(88, 101, 242, 0.24);
+  border-radius: var(--radius-sm);
+  background: rgba(88, 101, 242, 0.1);
+  margin-top: 14px;
+  padding: 13px;
+}
+
+.pbp-discord-beta-card.is-hidden {
+  display: none;
+}
+
+.pbp-discord-beta-card .alert-time {
+  margin: 6px 0 12px;
+}
+
+.pbp-discord-beta-link {
+  width: fit-content;
+}
+
 .pbp-alerts-example-card {
   background: linear-gradient(180deg, rgba(10, 19, 35, 0.96), rgba(7, 15, 29, 0.96));
 }
@@ -434,6 +454,26 @@ details summary {
   flex-wrap: wrap;
   gap: 8px;
   margin-top: 10px;
+}
+
+.pbp-alerts-discord-nudge {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1px solid rgba(56, 189, 248, 0.16);
+  border-radius: var(--radius-sm);
+  background: rgba(2, 8, 23, 0.5);
+  color: var(--muted);
+  font-size: 0.88rem;
+  margin-top: 14px;
+  padding: 12px;
+}
+
+.pbp-alerts-discord-nudge a {
+  color: #bae6fd;
+  font-weight: 800;
+  white-space: nowrap;
 }
 
 .pbp-example-alert-topline {
@@ -1007,6 +1047,19 @@ body.pbp-debug-mode .public-beta-internal-section {
   .pbp-alert-waitlist-status {
     font-size: 0.82rem;
     line-height: 1.45;
+  }
+
+  .pbp-discord-beta-link {
+    width: 100%;
+  }
+
+  .pbp-alerts-discord-nudge {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .pbp-alerts-discord-nudge a {
+    white-space: normal;
   }
 
   .pbp-alerts-example-header {

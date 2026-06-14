@@ -232,6 +232,41 @@ app.use((error, req, res, next) => {
 });
 app.use(express.static(PUBLIC_DIR));
 
+function getSafeDiscordInviteUrl() {
+  const raw = String(process.env.PBP_DISCORD_INVITE_URL || "").trim();
+  if (!raw) return "";
+
+  try {
+    const url = new URL(raw);
+    const host = url.hostname.toLowerCase();
+    const isDiscordInviteHost =
+      host === "discord.gg" ||
+      host === "discord.com" ||
+      host === "www.discord.com" ||
+      host === "ptb.discord.com" ||
+      host === "canary.discord.com";
+    const isInvitePath =
+      host === "discord.gg" ||
+      url.pathname.toLowerCase().startsWith("/invite/");
+
+    return url.protocol === "https:" && isDiscordInviteHost && isInvitePath
+      ? url.toString()
+      : "";
+  } catch {
+    return "";
+  }
+}
+
+function buildPublicConfig() {
+  const discordInviteUrl = getSafeDiscordInviteUrl();
+
+  return {
+    ok: true,
+    discordInviteEnabled: !!discordInviteUrl,
+    ...(discordInviteUrl ? { discordInviteUrl } : {}),
+  };
+}
+
 function createInitialAccountState() {
   return {
     isConnected: false,
@@ -4019,6 +4054,11 @@ app.post("/api/internal/alerts", async (req, res) => {
         : "Failed to store alert signal.",
     });
   }
+});
+
+app.get("/api/public-config", (req, res) => {
+  res.set("Cache-Control", "no-store");
+  return res.json(buildPublicConfig());
 });
 
 app.get("/api/alerts/recent", async (req, res) => {
