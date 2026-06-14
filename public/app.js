@@ -542,9 +542,53 @@ function getUsableHomepageMarkets() {
   );
 }
 
+function getMarketDisplayReason(market) {
+  return (
+    market?.displayReason ||
+    market?.marketReason ||
+    market?.signalReason ||
+    market?.actionReason ||
+    "High activity makes this market worth watching."
+  );
+}
+
+function getMarketSignalLabel(market) {
+  return market?.marketSignal || "Worth watching";
+}
+
+function getMarketOpportunityScore(market) {
+  const score = market?.opportunityScore ?? market?.confidenceScore;
+  return Number.isFinite(Number(score)) ? Number(score) : null;
+}
+
+function getMarketFreshnessLabel(market) {
+  if (market?.dataFreshness === "fresh") return "Fresh";
+  if (market?.dataFreshness === "stale") return "Limited";
+  return "Unknown";
+}
+
+function getDiscoveryRankScore(market) {
+  const opportunityScore = getMarketOpportunityScore(market) || 0;
+  const volumeScore = Math.log10((market?.volume24hr || 0) + 1) * 8;
+  const liquidityScore = Math.log10((market?.liquidity || 0) + 1) * 7;
+  const moveScore = Math.abs(market?.oneDayPriceChange || market?.priceChange || 0) * 180;
+  const freshnessBoost = market?.dataFreshness === "fresh" ? 8 : market?.dataFreshness === "stale" ? -14 : 0;
+  return opportunityScore + volumeScore + liquidityScore + moveScore + freshnessBoost;
+}
+
+function isDiscoveryQualityMarket(market) {
+  if (!market || market.active === false || market.closed || market.archived || market.resolved || market.ended) {
+    return false;
+  }
+  if (market.dataFreshness === "stale" && (market.volume24hr || 0) < 100000 && (market.liquidity || 0) < 100000) {
+    return false;
+  }
+  return true;
+}
+
 function getDiscoveryBaseMarkets() {
   return getUsableHomepageMarkets().filter(
-    (market) => market.active !== false && !market.closed
+    (market) => isDiscoveryQualityMarket(market)
   );
 }
 
@@ -562,7 +606,7 @@ function renderHomepageCategoryChipRail() {
 
   const categories = getCategoryCounts(
     (Array.isArray(liveMarketsCache) ? liveMarketsCache : []).filter(
-      (market) => market.active !== false && !market.closed
+      (market) => isDiscoveryQualityMarket(market)
     )
   );
 
@@ -628,17 +672,17 @@ function getEmergingMarkets(markets) {
     .map((market) => {
       const updatedTs = market.lastUpdated ? new Date(market.lastUpdated).getTime() : 0;
       const hoursOld = updatedTs ? (now - updatedTs) / 3600000 : 9999;
-      const recencyScore = Math.max(0, 96 - hoursOld);
-      const lowerVolumeScore = Math.max(0, 200000 - (market.volume24hr || 0)) / 5000;
-      const lowerLiquidityScore = Math.max(0, 150000 - (market.liquidity || 0)) / 5000;
-      const confidenceScore = (market.confidenceScore || 0) / 10;
+      const recencyScore = Math.max(0, 72 - hoursOld);
+      const volumeScore = Math.log10((market.volume24hr || 0) + 1) * 8;
+      const liquidityScore = Math.log10((market.liquidity || 0) + 1) * 6;
+      const opportunityScore = (getMarketOpportunityScore(market) || 0) / 4;
 
       return {
         ...market,
-        _emergingScore: recencyScore + lowerVolumeScore + lowerLiquidityScore + confidenceScore,
+        _emergingScore: recencyScore + volumeScore + liquidityScore + opportunityScore,
       };
     })
-    .filter((market) => market.lastUpdated || market.volume24hr || market.liquidity);
+    .filter((market) => isDiscoveryQualityMarket(market) && (market.lastUpdated || market.volume24hr || market.liquidity));
 
   return scored.sort((a, b) => b._emergingScore - a._emergingScore).slice(0, 8);
 }
@@ -662,7 +706,7 @@ function getDiscoverMarketsForCurrentView() {
     case "opportunities":
     default:
       return [...baseMarkets]
-        .sort((a, b) => (b.confidenceScore || 0) - (a.confidenceScore || 0))
+        .sort((a, b) => getDiscoveryRankScore(b) - getDiscoveryRankScore(a))
         .slice(0, 8);
   }
 }
@@ -2362,14 +2406,10 @@ function renderHotCard(market, sourceSection = currentDiscoverView) {
 
       <div class="signals">
         ${[
-          market.actionSignal === "BUY YES"
-            ? "BUY YES"
-            : market.actionSignal === "BUY NO"
-              ? "BUY NO"
-              : "WATCH",
+          getMarketSignalLabel(market),
           (market.hotScore || 0) > 800000 ? "Momentum" : "",
           (market.liquidity || 0) > 200000 ? "Liquid" : "",
-          (market.confidenceScore || 0) >= 80 ? "High activity" : "",
+          market.dataFreshness === "fresh" ? "Fresh" : "",
         ]
           .filter(Boolean)
           .map((signal) => `<span class="signal">${safeText(signal)}</span>`)
@@ -2380,10 +2420,10 @@ function renderHotCard(market, sourceSection = currentDiscoverView) {
         <div class="meta-box"><span class="meta-label">Yes Price</span><span class="meta-value">${safeText(formatProbability(market.yesPriceLive))}</span></div>
         <div class="meta-box"><span class="meta-label">24h Volume</span><span class="meta-value">${safeText(formatMoney(market.volume24hr))}</span></div>
         <div class="meta-box"><span class="meta-label">Liquidity</span><span class="meta-value">${safeText(formatMoney(market.liquidity))}</span></div>
-        <div class="meta-box"><span class="meta-label">Activity Score</span><span class="meta-value">${safeText(market.confidenceScore ?? "—")}/100</span></div>
+        <div class="meta-box"><span class="meta-label">Activity</span><span class="meta-value">${safeText(getMarketOpportunityScore(market) ?? "—")}/100</span></div>
         <div class="meta-box"><span class="meta-label">Category</span><span class="meta-value">${safeText(getCategoryDisplayLabel(market.category))}</span></div>
-        <div class="meta-box"><span class="meta-label">Market Read</span><span class="meta-value">${safeText(market.actionSignal ?? "WATCH")}</span></div>
-        <div class="meta-box"><span class="meta-label">Why it matters</span><span class="meta-value">${safeText(market.actionReason ?? "No reason yet")}</span></div>
+        <div class="meta-box"><span class="meta-label">Freshness</span><span class="meta-value">${safeText(getMarketFreshnessLabel(market))}</span></div>
+        <div class="meta-box"><span class="meta-label">Why it matters</span><span class="meta-value">${safeText(getMarketDisplayReason(market))}</span></div>
       </div>
 
       <div class="market-footer">
@@ -2425,6 +2465,7 @@ function renderMoverCard(market, sourceSection = "movers") {
         <div class="meta-box"><span class="meta-label">Price Change</span><span class="meta-value ${changeClass}">${safeText(formatChangeAsProbability(market.priceChange))}</span></div>
         <div class="meta-box"><span class="meta-label">Percent Change</span><span class="meta-value ${changeClass}">${safeText(formatPercentChange(market.percentChange))}</span></div>
         <div class="meta-box"><span class="meta-label">Category</span><span class="meta-value">${safeText(getCategoryDisplayLabel(market.category))}</span></div>
+        <div class="meta-box"><span class="meta-label">Why it matters</span><span class="meta-value">${safeText(getMarketDisplayReason(market))}</span></div>
       </div>
 
       <div class="market-footer">

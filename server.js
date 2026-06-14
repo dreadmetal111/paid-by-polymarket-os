@@ -2095,10 +2095,11 @@ function calculateConfidenceAndSignal(market) {
         : freshnessHours <= 72
           ? 4
           : 1;
+  const stalePenalty = freshnessHours > 72 ? 14 : 0;
 
   const confidenceScore = Math.round(
     clamp(
-      volumeScore + liquidityScore + spreadScore + moveScore + freshnessScore,
+      volumeScore + liquidityScore + spreadScore + moveScore + freshnessScore - stalePenalty,
       5,
       98
     )
@@ -2125,27 +2126,69 @@ function calculateConfidenceAndSignal(market) {
     actionSignal = "BUY NO";
   }
 
-  const reasons = [];
-  if ((market.volume24hr || 0) >= 100_000) reasons.push("High 24h volume");
-  if ((market.liquidity || 0) >= 100_000) reasons.push("Deep liquidity");
-  if (Math.abs(market.oneDayPriceChange || 0) >= 0.03) {
-    reasons.push(
-      `${market.oneDayPriceChange > 0 ? "Up" : "Down"} ${(
-        Math.abs(market.oneDayPriceChange) * 100
-      ).toFixed(1)} pts in 24h`
-    );
+  const hasHighVolume = (market.volume24hr || 0) >= 100_000;
+  const hasStrongLiquidity = (market.liquidity || 0) >= 100_000;
+  const hasMeaningfulMove = Math.abs(market.oneDayPriceChange || 0) >= 0.03;
+  const isRecentlyUpdated = freshnessHours <= 24;
+  const isFresh = freshnessHours <= 6;
+  const isStale = freshnessHours > 72;
+
+  let marketSignal = "Worth watching";
+  if (hasMeaningfulMove && (hasHighVolume || hasStrongLiquidity)) {
+    marketSignal = "Moving market";
+  } else if (hasHighVolume && hasStrongLiquidity) {
+    marketSignal = "High activity";
+  } else if (hasStrongLiquidity) {
+    marketSignal = "Strong liquidity";
+  } else if (isRecentlyUpdated && (market.volume24hr || market.liquidity)) {
+    marketSignal = "Fresh activity";
   }
-  if (freshnessHours <= 24) reasons.push("Recently updated");
+
+  let displayReason = "High activity makes this market worth watching.";
+  if (hasMeaningfulMove && (hasHighVolume || hasStrongLiquidity)) {
+    displayReason = "Recent movement suggests traders are repricing new information.";
+  } else if (hasHighVolume && hasStrongLiquidity) {
+    displayReason = "High volume and strong liquidity make this market easier to evaluate.";
+  } else if (hasStrongLiquidity) {
+    displayReason = "Strong liquidity may make this market easier to enter or exit.";
+  } else if (isFresh && (market.volume24hr || market.liquidity)) {
+    displayReason = "Newer active market with rising attention.";
+  } else if (hasHighVolume) {
+    displayReason = "High activity makes this market worth watching.";
+  } else if (isStale) {
+    displayReason = "Market activity is available, but freshness is limited.";
+  }
+
+  const opportunityScore = Math.round(
+    clamp(
+      confidenceScore +
+        (hasHighVolume ? 8 : 0) +
+        (hasStrongLiquidity ? 8 : 0) +
+        (hasMeaningfulMove ? 10 : 0) +
+        (isRecentlyUpdated ? 4 : 0) -
+        stalePenalty,
+      1,
+      100
+    )
+  );
 
   return {
     confidenceScore,
+    opportunityScore,
     actionSignal,
-    actionReason: reasons[0] || "Balanced market structure",
+    actionReason: displayReason,
+    displayReason,
+    marketReason: displayReason,
+    marketSignal,
+    freshnessHours: Number.isFinite(freshnessHours)
+      ? roundTo(freshnessHours, 2)
+      : null,
     hotScore: Math.round(
-      (market.volume24hr || 0) * 0.55 +
+      (market.volume24hr || 0) * 0.45 +
         (market.liquidity || 0) * 0.35 +
-        confidenceScore * 1000 +
-        Math.abs(market.oneDayPriceChange || 0) * 100_000
+        opportunityScore * 1200 +
+        Math.abs(market.oneDayPriceChange || 0) * 120_000 -
+        stalePenalty * 3000
     ),
   };
 }
@@ -2363,7 +2406,28 @@ function buildBiggestMovers(markets) {
   return (Array.isArray(markets) ? markets : [])
     .map(computeMoverForMarket)
     .filter(Boolean)
-    .sort((a, b) => Math.abs(b.priceChange) - Math.abs(a.priceChange))
+    .filter((market) => {
+      const hasUsefulActivity =
+        (market.volume24hr || 0) >= 5_000 || (market.liquidity || 0) >= 5_000;
+      const hasMeaningfulMove = Math.abs(market.priceChange || 0) >= 0.01;
+      return hasUsefulActivity && hasMeaningfulMove && market.dataFreshness !== "stale";
+    })
+    .map((market) => ({
+      ...market,
+      displayReason:
+        market.displayReason ||
+        "Recent movement suggests traders are repricing new information.",
+      marketReason:
+        market.marketReason ||
+        "Recent movement suggests traders are repricing new information.",
+      marketSignal: market.marketSignal || "Moving market",
+      moverScore: Math.round(
+        Math.abs(market.priceChange || 0) * 100_000 +
+          Math.log10((market.volume24hr || 0) + 1) * 1_200 +
+          Math.log10((market.liquidity || 0) + 1) * 1_000
+      ),
+    }))
+    .sort((a, b) => (b.moverScore || 0) - (a.moverScore || 0))
     .slice(0, 8);
 }
 
