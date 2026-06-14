@@ -231,6 +231,11 @@ details summary {
   border-color: rgba(56, 189, 248, 0.24);
 }
 
+.pbp-alerts-intro-card,
+.pbp-alerts-example-card {
+  overflow-wrap: anywhere;
+}
+
 .pbp-alerts-copy {
   max-width: 760px;
   color: var(--muted);
@@ -267,6 +272,11 @@ details summary {
   margin-top: 8px;
 }
 
+.pbp-alert-waitlist-row input,
+.pbp-alert-waitlist-row button {
+  min-height: 46px;
+}
+
 .pbp-alert-waitlist-row button {
   min-width: 118px;
 }
@@ -300,6 +310,14 @@ details summary {
   background: rgba(2, 8, 23, 0.58);
 }
 
+.pbp-example-alert .alert-message {
+  line-height: 1.35;
+}
+
+.pbp-example-alert .alert-time {
+  line-height: 1.45;
+}
+
 .pbp-example-alert-topline {
   display: flex;
   align-items: center;
@@ -318,6 +336,7 @@ details summary {
   font-size: 0.75rem;
   font-weight: 700;
   letter-spacing: 0.08em;
+  line-height: 1.25;
   text-transform: uppercase;
 }
 
@@ -483,12 +502,65 @@ pre {
     padding: 16px;
   }
 
+  .pbp-alerts-section {
+    margin-top: 14px;
+  }
+
+  .pbp-alerts-intro-card,
+  .pbp-alerts-example-card {
+    padding: 16px;
+  }
+
+  .pbp-alerts-copy {
+    font-size: 0.92rem;
+    line-height: 1.5;
+  }
+
+  .pbp-alert-feature-grid {
+    gap: 10px;
+    margin-top: 14px;
+  }
+
+  .pbp-alert-feature {
+    min-height: auto;
+    padding: 11px 12px;
+  }
+
+  .pbp-alert-waitlist-form {
+    margin-top: 16px;
+  }
+
   .market-meta {
     grid-template-columns: 1fr;
   }
 
   .pbp-alert-waitlist-row {
     grid-template-columns: 1fr;
+    gap: 9px;
+  }
+
+  .pbp-alert-waitlist-row button {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .pbp-alert-waitlist-status {
+    font-size: 0.82rem;
+    line-height: 1.45;
+  }
+
+  .pbp-alerts-example-header {
+    align-items: flex-start;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+
+  .pbp-alerts-example-header .signal {
+    align-self: flex-start;
+  }
+
+  .pbp-example-alert {
+    padding: 13px;
   }
 
   .pbp-example-alert-topline {
@@ -513,5 +585,22 @@ pre {
   #pbpTopLevelTabsSection .pbp-top-tab-btn {
     width: 100%;
     text-align: center;
+  }
+}
+
+@media (max-width: 380px) {
+  header,
+  main {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+
+  .pbp-alerts-intro-card,
+  .pbp-alerts-example-card {
+    padding: 14px;
+  }
+
+  .pbp-example-alert {
+    padding: 12px;
   }
 }
