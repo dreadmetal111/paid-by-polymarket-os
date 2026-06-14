@@ -318,6 +318,13 @@ details summary {
   line-height: 1.45;
 }
 
+.pbp-live-alert-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
 .pbp-example-alert-topline {
   display: flex;
   align-items: center;
@@ -340,6 +347,37 @@ details summary {
   text-transform: uppercase;
 }
 
+.pbp-alert-severity {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 999px;
+  color: #dbeafe;
+  font-size: 0.74rem;
+  font-weight: 700;
+  line-height: 1;
+  padding: 5px 9px;
+  text-transform: uppercase;
+}
+
+.pbp-alert-severity-high {
+  background: rgba(248, 113, 113, 0.14);
+  border-color: rgba(248, 113, 113, 0.28);
+  color: #fecaca;
+}
+
+.pbp-alert-severity-medium {
+  background: rgba(245, 158, 11, 0.14);
+  border-color: rgba(245, 158, 11, 0.28);
+  color: #fde68a;
+}
+
+.pbp-alert-severity-low {
+  background: rgba(56, 189, 248, 0.12);
+  border-color: rgba(56, 189, 248, 0.24);
+  color: #bae6fd;
+}
+
 .signals {
   display: flex;
   flex-wrap: wrap;
@@ -357,6 +395,12 @@ details summary {
   color: #dbeafe;
   font-size: 0.78rem;
   font-weight: 600;
+}
+
+.signal.live {
+  background: rgba(34, 197, 94, 0.13);
+  border-color: rgba(34, 197, 94, 0.28);
+  color: #bbf7d0;
 }
 
 .positive {

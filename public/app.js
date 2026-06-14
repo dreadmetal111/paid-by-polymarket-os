@@ -2,6 +2,13 @@ const POLYMARKET_CLOB_HOST = "https://clob.polymarket.com";
 const POLYMARKET_CHAIN_ID = 137;
 const POLYGON_HEX_CHAIN_ID = "0x89";
 const PBP_ALERTS_WAITLIST_STORAGE_KEY = "pbpAlertsWaitlistEmails";
+const PBP_LATEST_ALERT_SIGNALS_LIMIT = 3;
+
+const PBP_ALERT_TYPE_LABELS = {
+  new_high_volume: "New high-activity market",
+  probability_movement: "Market movement",
+  volume_liquidity_spike: "Volume/liquidity spike",
+};
 
 const DISCOVER_VIEWS = {
   opportunities: {
@@ -52,6 +59,7 @@ let currentUserAuthUiState = createEmptyUserAuthUiState();
 let walletConnectionSource = "NONE";
 let browserWalletEventsBound = false;
 let polymarketBrowserModulesPromise = null;
+let latestAlertSignalsFallbackHtml = "";
 
 function createEmptyUserAuthDraft() {
   return {
@@ -231,6 +239,141 @@ function bindAlertsWaitlistForm() {
       "success",
       `This browser remembers ${storedCount} previous waitlist signup${storedCount === 1 ? "" : "s"}. Submit again to confirm with the server.`
     );
+  }
+}
+
+function getLatestAlertSignalsElements() {
+  return {
+    list: document.getElementById("pbpLatestAlertSignalsList"),
+    badge: document.getElementById("pbpLatestAlertSignalsBadge"),
+  };
+}
+
+function captureLatestAlertSignalsFallback(list) {
+  if (!list || latestAlertSignalsFallbackHtml) return;
+  latestAlertSignalsFallbackHtml = list.innerHTML;
+}
+
+function restoreLatestAlertSignalsFallback() {
+  const { list, badge } = getLatestAlertSignalsElements();
+  if (!list) return;
+
+  captureLatestAlertSignalsFallback(list);
+  if (latestAlertSignalsFallbackHtml) {
+    list.innerHTML = latestAlertSignalsFallbackHtml;
+  }
+  if (badge) {
+    badge.textContent = "Static examples";
+    badge.classList.remove("live");
+  }
+}
+
+function getAlertTypeLabel(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "Alert signal";
+
+  const key = raw.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  if (PBP_ALERT_TYPE_LABELS[key]) return PBP_ALERT_TYPE_LABELS[key];
+
+  return raw
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (char) => char.toUpperCase()) || "Alert signal";
+}
+
+function getAlertSeverityClass(value) {
+  const severity = String(value || "").trim().toLowerCase();
+  if (["high", "medium", "low"].includes(severity)) return severity;
+  return "low";
+}
+
+function formatLatestAlertTimestamp(value) {
+  if (!value) return "Recent alert";
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Recent alert";
+
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(date);
+}
+
+function normalizeLatestAlertSignal(alert) {
+  const alertType = alert?.alertType ?? alert?.alert_type;
+  const marketQuestion = alert?.marketQuestion ?? alert?.market_question;
+  const createdAt = alert?.createdAt ?? alert?.created_at;
+
+  return {
+    alertType: getAlertTypeLabel(alertType),
+    marketQuestion: String(marketQuestion || "").trim() || "Market signal",
+    reason: String(alert?.reason || "").trim() || "Signal detected from recent market activity.",
+    severity: String(alert?.severity || "").trim(),
+    createdAt,
+  };
+}
+
+function renderLatestAlertSignalCard(alert) {
+  const normalized = normalizeLatestAlertSignal(alert);
+  const severityHtml = normalized.severity
+    ? `
+      <div class="pbp-live-alert-meta">
+        <span class="pbp-alert-severity pbp-alert-severity-${escapeHtml(getAlertSeverityClass(normalized.severity))}">
+          ${escapeHtml(getAlertTypeLabel(normalized.severity))}
+        </span>
+      </div>
+    `
+    : "";
+
+  return `
+    <div class="alert-item pbp-example-alert pbp-live-alert">
+      <div class="pbp-example-alert-topline">
+        <span class="pbp-alert-type">${escapeHtml(normalized.alertType)}</span>
+        <span class="alert-time">${escapeHtml(formatLatestAlertTimestamp(normalized.createdAt))}</span>
+      </div>
+      <div class="alert-message">${escapeHtml(normalized.marketQuestion)}</div>
+      <div class="alert-time">Reason: ${escapeHtml(normalized.reason)}</div>
+      ${severityHtml}
+    </div>
+  `;
+}
+
+async function loadLatestAlertSignals() {
+  const { list, badge } = getLatestAlertSignalsElements();
+  if (!list) return;
+
+  captureLatestAlertSignalsFallback(list);
+
+  try {
+    const res = await fetch("/api/alerts/recent", {
+      headers: { Accept: "application/json" },
+    });
+    const data = await res.json();
+
+    if (!res.ok || !data.ok || !Array.isArray(data.alerts)) {
+      throw new Error("Invalid recent alerts response");
+    }
+
+    const alerts = data.alerts
+      .filter((alert) => alert && (alert.marketQuestion || alert.market_question))
+      .slice(0, PBP_LATEST_ALERT_SIGNALS_LIMIT);
+
+    if (!alerts.length) {
+      restoreLatestAlertSignalsFallback();
+      return;
+    }
+
+    list.innerHTML = alerts.map(renderLatestAlertSignalCard).join("");
+    if (badge) {
+      badge.textContent = "Live feed";
+      badge.classList.add("live");
+    }
+  } catch {
+    console.warn("Latest alert signals unavailable; showing static examples.");
+    restoreLatestAlertSignalsFallback();
   }
 }
 
@@ -2834,6 +2977,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   renderTradeExecutionResult(`<p class="empty">No execution prep run yet.</p>`);
   applyTopLevelView();
 
+  await loadLatestAlertSignals();
   await loadAccountState();
   await loadAlerts();
   await loadPerformanceStats();
@@ -2845,6 +2989,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   setTopLevelView("discover");
 
   setInterval(loadAccountState, 60000);
+  setInterval(loadLatestAlertSignals, 60000);
   setInterval(loadAlerts, 60000);
   setInterval(loadPerformanceStats, 60000);
   setInterval(loadPaperPortfolio, 60000);
