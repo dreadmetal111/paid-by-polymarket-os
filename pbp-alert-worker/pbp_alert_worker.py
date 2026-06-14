@@ -15,6 +15,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import signal
 import sqlite3
 import threading
@@ -112,6 +113,8 @@ class Settings:
     discord_username: str
     discord_avatar_url: str
     max_discord_alerts_per_cycle: int
+    render_alert_ingest_url: str
+    alert_ingest_secret: str
     alert_cooldown_minutes: int
     alert_on_first_run: bool
     min_new_market_volume_24h: float
@@ -136,6 +139,8 @@ def build_settings() -> Settings:
         discord_username=env_str("PBP_DISCORD_USERNAME", "PBP Alerts"),
         discord_avatar_url=env_str("PBP_DISCORD_AVATAR_URL", ""),
         max_discord_alerts_per_cycle=max(1, env_int("PBP_MAX_DISCORD_ALERTS_PER_CYCLE", 10)),
+        render_alert_ingest_url=env_str("PBP_RENDER_ALERT_INGEST_URL", ""),
+        alert_ingest_secret=env_str("PBP_ALERT_INGEST_SECRET", ""),
         alert_cooldown_minutes=max(1, env_int("PBP_ALERT_COOLDOWN_MINUTES", 60)),
         alert_on_first_run=env_bool("PBP_ALERT_ON_FIRST_RUN", False),
         min_new_market_volume_24h=max(0.0, env_float("PBP_MIN_NEW_MARKET_VOLUME_24H", 100000.0)),
@@ -397,7 +402,10 @@ def init_db(settings: Settings) -> None:
                 created_at TEXT NOT NULL,
                 sent_to_discord INTEGER NOT NULL DEFAULT 0,
                 sent_at TEXT,
-                discord_error TEXT
+                discord_error TEXT,
+                sent_to_render INTEGER NOT NULL DEFAULT 0,
+                render_sent_at TEXT,
+                render_status TEXT
             );
 
             CREATE INDEX IF NOT EXISTS idx_alerts_created_at
@@ -407,6 +415,35 @@ def init_db(settings: Settings) -> None:
                 ON alerts (alert_type, market_id, created_at DESC);
             """
         )
+        ensure_alert_render_columns(conn)
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_alerts_render_pending
+                ON alerts (sent_to_render, render_status, created_at);
+            """
+        )
+
+
+def sqlite_column_exists(conn: sqlite3.Connection, table_name: str, column_name: str) -> bool:
+    rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+    return any(row["name"] == column_name for row in rows)
+
+
+def ensure_sqlite_column(
+    conn: sqlite3.Connection,
+    table_name: str,
+    column_name: str,
+    column_definition: str,
+) -> None:
+    if sqlite_column_exists(conn, table_name, column_name):
+        return
+    conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_definition}")
+
+
+def ensure_alert_render_columns(conn: sqlite3.Connection) -> None:
+    ensure_sqlite_column(conn, "alerts", "sent_to_render", "INTEGER NOT NULL DEFAULT 0")
+    ensure_sqlite_column(conn, "alerts", "render_sent_at", "TEXT")
+    ensure_sqlite_column(conn, "alerts", "render_status", "TEXT")
 
 
 def fetch_live_markets(settings: Settings) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -808,6 +845,8 @@ def alert_from_row(row: sqlite3.Row) -> dict[str, Any]:
     except json.JSONDecodeError:
         alert["details"] = {}
     alert["sent_to_discord"] = bool(alert["sent_to_discord"])
+    if "sent_to_render" in alert:
+        alert["sent_to_render"] = bool(alert["sent_to_render"])
     return alert
 
 
@@ -824,6 +863,65 @@ def trim_discord(value: Any, limit: int) -> str:
     if len(text) <= limit:
         return text
     return text[: limit - 1] + "..."
+
+
+def redact_public_signal_text(value: Any) -> str:
+    text = clean_string(value)
+    text = re.sub(
+        r"\b(?:PBP_ADMIN_SECRET|PBP_ALERT_INGEST_SECRET|SUPABASE_SERVICE_ROLE_KEY|DISCORD_WEBHOOK_URL|WEBHOOK_URL)\s*[:=]\s*[\"']?[^\"'\s]+[\"']?",
+        "[redacted-secret]",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(r"\bBearer\s+[A-Za-z0-9._~+/=-]+", "Bearer [redacted]", text, flags=re.IGNORECASE)
+    text = re.sub(
+        r"\beyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\b",
+        "[redacted-token]",
+        text,
+    )
+    text = re.sub(r"https?://\S+", "[redacted-url]", text, flags=re.IGNORECASE)
+    text = re.sub(
+        r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b",
+        "[redacted-email]",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r"\b(?:10|127)\.(?:\d{1,3}\.){2}\d{1,3}\b|\b192\.168\.\d{1,3}\.\d{1,3}\b|\b172\.(?:1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}\b|\b169\.254\.\d{1,3}\.\d{1,3}\b",
+        "[redacted-ip]",
+        text,
+    )
+    text = re.sub(r"\blocalhost(?::\d{2,5})?\b", "[redacted-host]", text, flags=re.IGNORECASE)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def sanitize_public_signal_text(value: Any, limit: int, default: str = "") -> str:
+    text = redact_public_signal_text(value)
+    if not text:
+        text = default
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1].rstrip() + "..."
+
+
+def normalize_public_signal_token(value: Any, limit: int, default: str) -> str:
+    text = sanitize_public_signal_text(value, limit, default).lower()
+    text = re.sub(r"[^a-z0-9_-]+", "_", text).strip("_")
+    return text[:limit] or default
+
+
+def render_alert_bridge_configured(settings: Settings) -> bool:
+    return bool(settings.render_alert_ingest_url and settings.alert_ingest_secret)
+
+
+def build_render_alert_payload(alert: dict[str, Any]) -> dict[str, str]:
+    return {
+        "alertType": normalize_public_signal_token(alert.get("alert_type"), 80, "alert_signal"),
+        "marketQuestion": sanitize_public_signal_text(alert.get("question"), 280, "Untitled market"),
+        "reason": sanitize_public_signal_text(alert.get("message") or alert.get("title"), 400, "Alert triggered."),
+        "severity": normalize_public_signal_token(alert.get("severity"), 40, "low"),
+        "source": "acer-alert-worker",
+    }
 
 
 def build_discord_payload(settings: Settings, alert: dict[str, Any]) -> dict[str, Any]:
@@ -877,6 +975,23 @@ def send_discord_alert(settings: Settings, alert: dict[str, Any]) -> None:
         raise RuntimeError(f"Discord returned HTTP {response.status_code}: {safe_body}")
 
 
+def send_render_alert_signal(settings: Settings, alert: dict[str, Any]) -> None:
+    payload = build_render_alert_payload(alert)
+    response = requests.post(
+        settings.render_alert_ingest_url,
+        json=payload,
+        headers={
+            "Accept": "application/json",
+            "Authorization": f"Bearer {settings.alert_ingest_secret}",
+            "User-Agent": f"{SERVICE_NAME}/1.0",
+        },
+        timeout=min(settings.request_timeout_seconds, 10),
+    )
+    if response.status_code not in {200, 201, 202, 204}:
+        safe_body = sanitize_public_signal_text(response.text, 300, "no response body")
+        raise RuntimeError(f"Render ingest returned HTTP {response.status_code}: {safe_body}")
+
+
 def dispatch_pending_alerts(conn: sqlite3.Connection, settings: Settings) -> int:
     if not settings.discord_enabled:
         logging.info("Discord dispatch is disabled by PBP_DISCORD_ENABLED=false")
@@ -924,6 +1039,59 @@ def dispatch_pending_alerts(conn: sqlite3.Connection, settings: Settings) -> int
     return sent_count
 
 
+def dispatch_pending_render_alerts(conn: sqlite3.Connection, settings: Settings) -> int:
+    if not render_alert_bridge_configured(settings):
+        logging.info("Render alert ingest is not configured; skipping public alert bridge")
+        return 0
+
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM alerts
+        WHERE sent_to_render = 0
+          AND COALESCE(render_status, '') = ''
+        ORDER BY created_at ASC
+        LIMIT ?
+        """,
+        (settings.max_discord_alerts_per_cycle,),
+    ).fetchall()
+
+    sent_count = 0
+    for row in rows:
+        alert = alert_from_row(row)
+        try:
+            send_render_alert_signal(settings, alert)
+        except Exception as exc:
+            safe_error = sanitize_public_signal_text(str(exc), 300, "Render ingest failed")
+            logging.warning("Could not send alert %s to Render ingest: %s", alert["id"], safe_error)
+            conn.execute(
+                """
+                UPDATE alerts
+                SET sent_to_render = 0,
+                    render_status = ?
+                WHERE id = ?
+                """,
+                ("failed", alert["id"]),
+            )
+            continue
+
+        sent_at = utc_now()
+        conn.execute(
+            """
+            UPDATE alerts
+            SET sent_to_render = 1,
+                render_sent_at = ?,
+                render_status = 'sent'
+            WHERE id = ?
+            """,
+            (sent_at, alert["id"]),
+        )
+        logging.info("Sent alert %s to Render ingest", alert["id"])
+        sent_count += 1
+
+    return sent_count
+
+
 status_lock = threading.Lock()
 cycle_lock = threading.Lock()
 stop_event = threading.Event()
@@ -941,6 +1109,7 @@ worker_status: dict[str, Any] = {
     "last_market_count": 0,
     "last_alerts_created": 0,
     "last_discord_sent": 0,
+    "last_render_sent": 0,
 }
 
 
@@ -972,6 +1141,7 @@ def run_cycle(settings: Settings, reason: str = "manual") -> dict[str, Any]:
 
         with db_connection(settings) as conn:
             discord_sent = dispatch_pending_alerts(conn, settings)
+            render_sent = dispatch_pending_render_alerts(conn, settings)
 
         summary = {
             "ok": True,
@@ -979,6 +1149,7 @@ def run_cycle(settings: Settings, reason: str = "manual") -> dict[str, Any]:
             "markets": len(markets),
             "alerts_created": len(alerts),
             "discord_sent": discord_sent,
+            "render_sent": render_sent,
         }
         update_status(
             cycle_running=False,
@@ -989,13 +1160,15 @@ def run_cycle(settings: Settings, reason: str = "manual") -> dict[str, Any]:
             last_market_count=len(markets),
             last_alerts_created=len(alerts),
             last_discord_sent=discord_sent,
+            last_render_sent=render_sent,
         )
         logging.info(
-            "Cycle complete: snapshot=%s markets=%s alerts=%s discord_sent=%s",
+            "Cycle complete: snapshot=%s markets=%s alerts=%s discord_sent=%s render_sent=%s",
             snapshot_id,
             len(markets),
             len(alerts),
             discord_sent,
+            render_sent,
         )
         return summary
     except Exception as exc:
@@ -1031,6 +1204,7 @@ def index() -> Any:
             "endpoints": ["/health", "/alerts"],
             "port": SETTINGS.port,
             "discordConfigured": bool(SETTINGS.discord_webhook_url),
+            "renderIngestConfigured": render_alert_bridge_configured(SETTINGS),
         }
     )
 
@@ -1061,6 +1235,7 @@ def health() -> Any:
         "snapshotCount": snapshot_count,
         "alertCount": alert_count,
         "discordConfigured": bool(SETTINGS.discord_webhook_url),
+        "renderIngestConfigured": render_alert_bridge_configured(SETTINGS),
         "status": status,
     }
     return jsonify(response), 200 if ok else 503
