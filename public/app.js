@@ -331,7 +331,7 @@ async function handleAlertsWaitlistSubmit(event) {
   const email = String(input?.value || "").trim().toLowerCase();
 
   if (!isValidEmail(email)) {
-    setAlertsWaitlistStatus("error", "Enter a valid email to join the PBP Alerts waitlist.");
+    setAlertsWaitlistStatus("error", "Enter a valid email to join the alerts beta.");
     return;
   }
 
@@ -355,7 +355,7 @@ async function handleAlertsWaitlistSubmit(event) {
     if (data.status === "existing") {
       setAlertsWaitlistStatus(
         "success",
-        `You are already on the PBP Alerts waitlist.${localMemoryNote}`
+        `You are already on the House of Markets alerts beta waitlist.${localMemoryNote}`
       );
     } else {
       setAlertsWaitlistStatus(
@@ -1452,10 +1452,10 @@ function ensureHomepageStrategyLayer() {
     <div class="market-grid">
       <article class="market-card discover-front-door-card">
         <p class="market-small">Live discovery</p>
-        <h3>Scan active Polymarket markets</h3>
+        <h3>Live Market Signals</h3>
         <div class="alerts-list">
           <div class="alert-item">
-            <div class="alert-message">Scan active Polymarket markets, spot movement faster, and open the markets that matter.</div>
+            <div class="alert-message">House of Markets helps you scan active prediction markets, spot movement faster, and open the markets that matter.</div>
           </div>
           <div class="alert-item">
             <div class="alert-message">Use categories and views to narrow the live feed into a focused board.</div>
