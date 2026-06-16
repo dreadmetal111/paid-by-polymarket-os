@@ -95,6 +95,7 @@ let walletConnectionSource = "NONE";
 let browserWalletEventsBound = false;
 let polymarketBrowserModulesPromise = null;
 let latestAlertSignalsFallbackHtml = "";
+let latestAlertSignalTimestamp = "";
 let publicConfig = {
   discordInviteEnabled: false,
   discordInviteUrl: "",
@@ -503,6 +504,8 @@ function restoreLatestAlertSignalsFallback() {
     badge.classList.remove("live");
     badge.classList.add("soft");
   }
+  latestAlertSignalTimestamp = "";
+  updateMarketIntelligenceStrip();
 }
 
 function getAlertTypeLabel(value) {
@@ -603,12 +606,14 @@ async function loadLatestAlertSignals() {
       return;
     }
 
+    latestAlertSignalTimestamp = normalizeLatestAlertSignal(alerts[0]).createdAt || "";
     list.innerHTML = alerts.map(renderLatestAlertSignalCard).join("");
     if (badge) {
       badge.textContent = "Live alerts active";
       badge.classList.add("live");
       badge.classList.remove("soft");
     }
+    updateMarketIntelligenceStrip();
   } catch {
     console.warn("Latest alert signals unavailable; showing static examples.");
     restoreLatestAlertSignalsFallback();
@@ -807,6 +812,114 @@ function getMarketFreshnessLabel(market) {
   if (market?.dataFreshness === "fresh") return "Fresh";
   if (market?.dataFreshness === "stale") return "Limited";
   return "Unknown";
+}
+
+function getActiveGroupedEventCount(markets = liveMarketsCache) {
+  const eventKeys = new Set();
+  (Array.isArray(markets) ? markets : [])
+    .filter((market) => market && market.question && market.url && isDiscoveryQualityMarket(market))
+    .forEach((market) => {
+      const familyKey = getMarketFamilyKey(market);
+      if (familyKey) eventKeys.add(familyKey);
+    });
+  return eventKeys.size;
+}
+
+function updateMarketIntelligenceStrip() {
+  const liveCountEl = document.getElementById("marketIntelLiveCount");
+  const eventCountEl = document.getElementById("marketIntelEventCount");
+  const latestSignalEl = document.getElementById("marketIntelLatestSignal");
+
+  const activeMarkets = (Array.isArray(liveMarketsCache) ? liveMarketsCache : [])
+    .filter((market) => market && market.question && market.url && isDiscoveryQualityMarket(market));
+  if (liveCountEl) liveCountEl.textContent = activeMarkets.length ? String(activeMarkets.length) : "--";
+  if (eventCountEl) {
+    const groupedCount = getActiveGroupedEventCount(activeMarkets);
+    eventCountEl.textContent = groupedCount ? String(groupedCount) : "--";
+  }
+  if (latestSignalEl) {
+    latestSignalEl.textContent = latestAlertSignalTimestamp
+      ? formatLatestAlertTimestamp(latestAlertSignalTimestamp)
+      : "Awaiting signal";
+  }
+}
+
+function getMarketHeatBadges(market) {
+  const badges = [];
+  const volume = Number(market?.volume24hr || 0);
+  const liquidity = Number(market?.liquidity || 0);
+  const movement = Math.abs(getMarketMovementValue(market));
+  const opportunityScore = getMarketOpportunityScore(market) || 0;
+  const hotScore = Number(market?.hotScore || 0);
+
+  if (hotScore > 800000 || opportunityScore >= 80) badges.push({ label: "Hot", type: "hot" });
+  if (movement >= 0.04) badges.push({ label: "Moving", type: "moving" });
+  if (volume >= 250000) badges.push({ label: "High volume", type: "volume" });
+  if (liquidity >= 150000) badges.push({ label: "Liquid", type: "liquid" });
+  if (market?.dataFreshness === "fresh" || market?.lastUpdated) badges.push({ label: "New signal", type: "new" });
+
+  return badges.slice(0, 4);
+}
+
+function getGroupHeatBadges(group) {
+  const children = Array.isArray(group?.children) ? group.children : [];
+  const totalVolume = children.reduce((sum, market) => sum + Number(market.volume24hr || 0), 0);
+  const totalLiquidity = children.reduce((sum, market) => sum + Number(market.liquidity || 0), 0);
+  const maxMovement = children.reduce(
+    (best, market) => Math.max(best, Math.abs(getMarketMovementValue(market))),
+    0
+  );
+  const maxScore = children.reduce(
+    (best, market) => Math.max(best, getMarketOpportunityScore(market) || 0, Number(market.hotScore || 0) / 10000),
+    0
+  );
+  const badges = [];
+
+  if (maxScore >= 80 || totalVolume >= 1000000) badges.push({ label: "Hot", type: "hot" });
+  if (maxMovement >= 0.04) badges.push({ label: "Moving", type: "moving" });
+  if (totalVolume >= 500000) badges.push({ label: "High volume", type: "volume" });
+  if (totalLiquidity >= 300000) badges.push({ label: "Liquid", type: "liquid" });
+  if (children.some((market) => market?.dataFreshness === "fresh" || market?.lastUpdated)) {
+    badges.push({ label: "New signal", type: "new" });
+  }
+
+  return badges.slice(0, 4);
+}
+
+function renderHeatBadges(badges = []) {
+  const safeBadges = Array.isArray(badges) ? badges.filter((badge) => badge?.label) : [];
+  if (!safeBadges.length) return "";
+
+  return `
+    <div class="heat-badge-row">
+      ${safeBadges
+        .map(
+          (badge) => `
+            <span class="heat-badge heat-badge-${safeAttr(badge.type || "neutral")}">
+              ${safeText(badge.label)}
+            </span>
+          `
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function renderMovementVisual(market) {
+  const movement = getMarketMovementValue(market);
+  if (!movement) return "";
+
+  const direction = movement > 0 ? "up" : "down";
+  const width = Math.max(8, Math.min(100, Math.abs(movement) * 1000));
+  const arrow = movement > 0 ? "+" : "-";
+
+  return `
+    <div class="movement-visual movement-${direction}" aria-label="Recent movement ${safeAttr(formatChangeAsProbability(movement))}">
+      <span class="movement-arrow">${safeText(arrow)}</span>
+      <span class="movement-track"><span style="width:${safeAttr(width)}%;"></span></span>
+      <span class="movement-label">${safeText(formatChangeAsProbability(movement))}</span>
+    </div>
+  `;
 }
 
 function getDiscoveryRankScore(market) {
@@ -1244,6 +1357,7 @@ function renderDiscoverPrimaryView() {
   renderHomepageCategoryChipRail();
   renderHomepageDiscoverViewRail();
   updateHomepageLastRefreshedLabel();
+  updateMarketIntelligenceStrip();
 
   const titleEl = document.getElementById("discoverPrimaryViewLabel");
   const descriptionEl = document.getElementById("discoverPrimaryViewDescription");
@@ -2962,6 +3076,7 @@ function renderHotCard(market, sourceSection = currentDiscoverView) {
   const trackingSource = normalizeOutboundSourceSection(sourceSection);
   const publicCategory = getPublicCategoryLabel(market);
   const eventGroup = getMarketEventGroup(market);
+  const heatBadges = getMarketHeatBadges(market);
 
   return `
     <article class="market-card">
@@ -2971,12 +3086,12 @@ function renderHotCard(market, sourceSection = currentDiscoverView) {
       </div>
       <h3>${safeText(market.question)}</h3>
 
+      ${renderHeatBadges(heatBadges)}
+      ${renderMovementVisual(market)}
+
       <div class="signals">
         ${[
-          eventGroup,
           getMarketSignalLabel(market),
-          (market.hotScore || 0) > 800000 ? "Momentum" : "",
-          (market.liquidity || 0) > 200000 ? "Liquid" : "",
           market.dataFreshness === "fresh" ? "Fresh" : "",
         ]
           .filter(Boolean)
@@ -3030,6 +3145,7 @@ function renderGroupedMarketChild(market, sourceSection, index) {
       <div class="grouped-market-child-main">
         <div class="alert-message">${safeText(label)}</div>
         <div class="alert-time">${safeText(market.question)}</div>
+        ${renderMovementVisual(market)}
       </div>
       <div class="grouped-market-child-meta">
         <span>${safeText(formatProbability(market.yesPriceLive))}</span>
@@ -3063,6 +3179,7 @@ function renderMarketFamilyCard(group, sourceSection = currentDiscoverView) {
   const extraChildren = children.slice(5);
   const groupId = `group-${safeAttr(group.key)}`;
   const eventSlug = group.eventSlug || getEventSlugFromParts(group.eventGroup, group.key);
+  const heatBadges = getGroupHeatBadges(group);
 
   return `
     <article class="market-card market-family-card">
@@ -3085,6 +3202,8 @@ function renderMarketFamilyCard(group, sourceSection = currentDiscoverView) {
           >View Event</button>
         </div>
       </div>
+
+      ${renderHeatBadges(heatBadges)}
 
       <div class="grouped-market-list" aria-label="${safeAttr(group.eventGroup)} markets">
         ${visibleChildren
@@ -3133,6 +3252,7 @@ function renderEventMarketCard(market, sourceSection = "event-detail") {
   const trackingSource = normalizeOutboundSourceSection(sourceSection);
   const movementValue = getMarketMovementValue(market);
   const movementClass = movementValue > 0 ? "positive" : movementValue < 0 ? "negative" : "";
+  const heatBadges = getMarketHeatBadges(market);
 
   return `
     <article class="market-card event-market-card">
@@ -3147,6 +3267,9 @@ function renderEventMarketCard(market, sourceSection = "event-detail") {
           <h3>${safeText(market.question)}</h3>
         </div>
       </div>
+
+      ${renderHeatBadges(heatBadges)}
+      ${renderMovementVisual(market)}
 
       <div class="market-meta">
         <div class="meta-box"><span class="meta-label">YES Price</span><span class="meta-value">${safeText(formatProbability(market.yesPriceLive))}</span></div>
@@ -3174,6 +3297,7 @@ function renderEventMarketCard(market, sourceSection = "event-detail") {
       </div>
 
       <div class="market-footer" style="margin-top: 12px;">
+        <span class="market-small">Safe preview only</span>
         <button class="trade-action-btn secondary-trade-btn" data-market-id="${safeAttr(market.id)}" data-side="BUY YES">Preview YES</button>
         <button class="trade-action-btn secondary-trade-btn" data-market-id="${safeAttr(market.id)}" data-side="BUY NO">Preview NO</button>
       </div>
@@ -3214,6 +3338,7 @@ function renderEventDetailView(eventSlugOrFamilyKey, options = {}) {
 
   const summary = getEventSummary(markets);
   const sortedMarkets = getSortedEventMarkets(markets, currentEventSort);
+  const eventBadges = getGroupHeatBadges({ children: markets });
 
   section.classList.remove("event-detail-hidden");
   section.innerHTML = `
@@ -3236,6 +3361,8 @@ function renderEventDetailView(eventSlugOrFamilyKey, options = {}) {
           <span>${safeText(summary.count)} related markets</span>
         </div>
 
+        ${renderHeatBadges(eventBadges)}
+
         <p class="alert-time event-detail-description">${safeText(summary.reason)}</p>
 
         <div class="market-meta event-detail-summary">
@@ -3243,6 +3370,7 @@ function renderEventDetailView(eventSlugOrFamilyKey, options = {}) {
           <div class="meta-box"><span class="meta-label">Combined 24h Volume</span><span class="meta-value">${safeText(formatMoney(summary.totalVolume))}</span></div>
           <div class="meta-box"><span class="meta-label">Combined Liquidity</span><span class="meta-value">${safeText(formatMoney(summary.totalLiquidity))}</span></div>
           <div class="meta-box"><span class="meta-label">Real Market Action</span><span class="meta-value">View on Polymarket</span></div>
+          <div class="meta-box"><span class="meta-label">Preview Safety</span><span class="meta-value">Preview YES/NO stays on this site</span></div>
         </div>
       </article>
     </div>
@@ -3251,8 +3379,9 @@ function renderEventDetailView(eventSlugOrFamilyKey, options = {}) {
       <article class="market-card event-detail-controls-card">
         <div class="event-detail-controls">
           <div>
+            <p class="market-small">Compare related markets</p>
             <h3>Related Markets</h3>
-            <p class="alert-time">Compare every market in this event family. Preview buttons are safe previews only.</p>
+            <p class="alert-time">Sort the event family, compare outcomes, and use View on Polymarket for the real market action.</p>
           </div>
           <label class="event-detail-sort-label">
             <span class="meta-label">Sort</span>
@@ -3340,6 +3469,7 @@ function renderMoverCard(market, sourceSection = "movers") {
   const trackingSource = normalizeOutboundSourceSection(sourceSection);
   const publicCategory = getPublicCategoryLabel(market);
   const eventGroup = getMarketEventGroup(market);
+  const heatBadges = getMarketHeatBadges(market);
 
   return `
     <article class="market-card">
@@ -3348,6 +3478,9 @@ function renderMoverCard(market, sourceSection = "movers") {
         ${eventGroup ? `<span>${safeText(eventGroup)}</span>` : ""}
       </div>
       <h3>${safeText(market.question)}</h3>
+
+      ${renderHeatBadges(heatBadges)}
+      ${renderMovementVisual(market)}
 
       <div class="market-meta">
         <div class="meta-box"><span class="meta-label">Current Price</span><span class="meta-value">${safeText(formatProbability(market.yesPriceLive))}</span></div>
