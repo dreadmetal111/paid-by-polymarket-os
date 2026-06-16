@@ -19,6 +19,14 @@ const PBP_PUBLIC_BETA_INTERNAL_SECTION_IDS = [
   "closedPositionsPanel",
 ];
 
+const EVENT_DETAIL_SORTS = {
+  volume: "Highest volume",
+  liquidity: "Most liquid",
+  movement: "Biggest movement",
+  highProbability: "Highest probability",
+  lowProbability: "Lowest probability",
+};
+
 const PBP_ALERT_TYPE_LABELS = {
   new_high_volume: "New high-activity market",
   probability_movement: "Market movement",
@@ -75,6 +83,8 @@ let lastHomepageDiscoveryRefreshAt = "";
 let activeHomepageCategory = "ALL";
 let currentTopLevelView = "discover";
 let currentDiscoverView = "opportunities";
+let currentEventSlug = "";
+let currentEventSort = "volume";
 let currentTradeTicket = null;
 let accountStateCache = null;
 let currentLivePreparation = null;
@@ -967,6 +977,109 @@ function getMarketFamilyReason(groupName) {
   return "Related markets grouped together for easier scanning.";
 }
 
+function slugifyEventValue(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 120);
+}
+
+function getEventSlugFromParts(eventGroup, familyKey = "") {
+  const groupSlug = slugifyEventValue(eventGroup);
+  if (groupSlug) return groupSlug;
+  return slugifyEventValue(familyKey);
+}
+
+function getMarketEventSlug(market) {
+  return getEventSlugFromParts(getMarketEventGroup(market), getMarketFamilyKey(market));
+}
+
+function getRequestedEventSlug() {
+  try {
+    return slugifyEventValue(new URLSearchParams(window.location.search).get("event"));
+  } catch {
+    return "";
+  }
+}
+
+function setEventUrlParam(eventSlug, options = {}) {
+  try {
+    const url = new URL(window.location.href);
+    if (eventSlug) {
+      url.searchParams.set("event", eventSlug);
+    } else {
+      url.searchParams.delete("event");
+    }
+    const method = options.replace ? "replaceState" : "pushState";
+    window.history[method]({}, "", url);
+  } catch {}
+}
+
+function getEventMarkets(eventSlugOrFamilyKey) {
+  const requested = String(eventSlugOrFamilyKey || "").trim();
+  if (!requested) return [];
+
+  const requestedSlug = slugifyEventValue(requested);
+  const requestedRaw = requested.toLowerCase();
+
+  return (Array.isArray(liveMarketsCache) ? liveMarketsCache : [])
+    .filter((market) => market && market.question && market.url && isDiscoveryQualityMarket(market))
+    .filter((market) => {
+    const familyKey = String(getMarketFamilyKey(market) || "").toLowerCase();
+    const eventSlug = getMarketEventSlug(market);
+    return familyKey === requestedRaw || eventSlug === requestedSlug;
+  });
+}
+
+function getEventSummary(markets) {
+  const children = Array.isArray(markets) ? markets : [];
+  const first = children[0] || {};
+  const eventGroup = getMarketEventGroup(first) || "Market event";
+  const familyKey = getMarketFamilyKey(first);
+
+  return {
+    eventGroup,
+    eventSlug: getEventSlugFromParts(eventGroup, familyKey),
+    category: getPublicCategoryLabel(first),
+    reason: getMarketFamilyReason(eventGroup),
+    count: children.length,
+    totalVolume: children.reduce((sum, market) => sum + Number(market.volume24hr || 0), 0),
+    totalLiquidity: children.reduce((sum, market) => sum + Number(market.liquidity || 0), 0),
+  };
+}
+
+function getMarketMovementValue(market) {
+  const values = [
+    market?.priceChange,
+    market?.oneDayPriceChange,
+    market?.percentChange,
+  ]
+    .map(Number)
+    .filter(Number.isFinite);
+
+  return values.length ? values[0] : 0;
+}
+
+function getMarketMovementLabel(market) {
+  const movement = getMarketMovementValue(market);
+  if (!movement) return "Movement: --";
+  return `Movement: ${formatChangeAsProbability(movement)}`;
+}
+
+function getSortedEventMarkets(markets, sortKey = currentEventSort) {
+  const source = [...(Array.isArray(markets) ? markets : [])];
+
+  return source.sort((a, b) => {
+    if (sortKey === "liquidity") return (b.liquidity || 0) - (a.liquidity || 0);
+    if (sortKey === "movement") return Math.abs(getMarketMovementValue(b)) - Math.abs(getMarketMovementValue(a));
+    if (sortKey === "highProbability") return (b.yesPriceLive || 0) - (a.yesPriceLive || 0);
+    if (sortKey === "lowProbability") return (a.yesPriceLive || 0) - (b.yesPriceLive || 0);
+    return (b.volume24hr || 0) - (a.volume24hr || 0);
+  });
+}
+
 function getDiscoverItemCategoryKey(item) {
   if (item?.type === "group") {
     return PUBLIC_BROWSE_CATEGORIES.find((category) => category.label === item.category)?.key || "OTHER";
@@ -1056,6 +1169,7 @@ function buildGroupedDiscoverItems(markets, viewKey = currentDiscoverView) {
     const existing = familyMap.get(familyKey) || {
       type: "group",
       key: familyKey,
+      eventSlug: getEventSlugFromParts(groupName, familyKey),
       eventGroup: groupName,
       category: getPublicCategoryLabel(market),
       reason: getMarketFamilyReason(groupName),
@@ -1179,6 +1293,7 @@ function renderDiscoverPrimaryView() {
     .join("");
 
   bindTradeActionButtons();
+  bindEventOpenButtons();
   applyTopLevelView();
 }
 
@@ -1571,6 +1686,7 @@ async function loadHomepageDiscoveryData() {
       renderDiscoverPrimaryView();
     }
 
+    renderRequestedEventFromUrl({ scroll: false });
     applyTopLevelView();
   } catch (err) {
     console.error("Homepage discovery load error:", err);
@@ -2946,6 +3062,7 @@ function renderMarketFamilyCard(group, sourceSection = currentDiscoverView) {
   const visibleChildren = children.slice(0, 5);
   const extraChildren = children.slice(5);
   const groupId = `group-${safeAttr(group.key)}`;
+  const eventSlug = group.eventSlug || getEventSlugFromParts(group.eventGroup, group.key);
 
   return `
     <article class="market-card market-family-card">
@@ -2959,7 +3076,14 @@ function renderMarketFamilyCard(group, sourceSection = currentDiscoverView) {
           <h3>${safeText(group.eventGroup)}</h3>
           <div class="alert-time">${safeText(group.reason)}</div>
         </div>
-        <span class="signal">${safeText(children.length)} markets</span>
+        <div class="market-family-header-actions">
+          <span class="signal">${safeText(children.length)} markets</span>
+          <button
+            class="market-link market-link-primary event-detail-open-btn"
+            type="button"
+            data-event-slug="${safeAttr(eventSlug)}"
+          >View Event</button>
+        </div>
       </div>
 
       <div class="grouped-market-list" aria-label="${safeAttr(group.eventGroup)} markets">
@@ -2982,9 +3106,233 @@ function renderMarketFamilyCard(group, sourceSection = currentDiscoverView) {
         </details>
       ` : ""}
 
-      <div class="alert-time market-family-note">Future: add event-level chart for grouped market families.</div>
+      <div class="alert-time market-family-note">Open the event to compare every related market in one focused view.</div>
     </article>
   `;
+}
+
+function ensureEventDetailSection() {
+  let section = document.getElementById("eventDetailView");
+  if (section) return section;
+
+  section = document.createElement("section");
+  section.id = "eventDetailView";
+  section.className = "event-detail-section event-detail-hidden";
+
+  const strategySection = document.getElementById("homepageStrategyLayer");
+  if (strategySection?.parentElement) {
+    strategySection.parentElement.insertBefore(section, strategySection);
+    return section;
+  }
+
+  document.querySelector("main")?.prepend(section);
+  return section;
+}
+
+function renderEventMarketCard(market, sourceSection = "event-detail") {
+  const trackingSource = normalizeOutboundSourceSection(sourceSection);
+  const movementValue = getMarketMovementValue(market);
+  const movementClass = movementValue > 0 ? "positive" : movementValue < 0 ? "negative" : "";
+
+  return `
+    <article class="market-card event-market-card">
+      <div class="market-context-row">
+        <span>${safeText(getPublicCategoryLabel(market))}</span>
+        <span>${safeText(getMarketEventGroup(market) || "Event")}</span>
+      </div>
+
+      <div class="event-market-heading">
+        <div>
+          <p class="market-small">${safeText(getMarketOutcomeLabel(market))}</p>
+          <h3>${safeText(market.question)}</h3>
+        </div>
+      </div>
+
+      <div class="market-meta">
+        <div class="meta-box"><span class="meta-label">YES Price</span><span class="meta-value">${safeText(formatProbability(market.yesPriceLive))}</span></div>
+        <div class="meta-box"><span class="meta-label">24h Volume</span><span class="meta-value">${safeText(formatMoney(market.volume24hr))}</span></div>
+        <div class="meta-box"><span class="meta-label">Liquidity</span><span class="meta-value">${safeText(formatMoney(market.liquidity))}</span></div>
+        <div class="meta-box"><span class="meta-label">Recent Movement</span><span class="meta-value ${movementClass}">${safeText(getMarketMovementLabel(market))}</span></div>
+        <div class="meta-box"><span class="meta-label">Why it matters</span><span class="meta-value">${safeText(getMarketDisplayReason(market))}</span></div>
+      </div>
+
+      <div class="market-footer">
+        <span class="market-small">Updated ${safeText(market.lastUpdated ? formatTimestamp(market.lastUpdated) : "--")}</span>
+        <a
+          class="market-link market-link-primary"
+          href="${safeUrl(market.url)}"
+          target="_blank"
+          rel="noopener noreferrer"
+          data-outbound-click="polymarket"
+          data-market-id="${safeAttr(getMarketTrackingId(market))}"
+          data-market-slug="${safeAttr(market.slug)}"
+          data-market-question="${safeAttr(market.question)}"
+          data-market-url="${safeAttr(market.url)}"
+          data-source-section="${safeAttr(trackingSource)}"
+          data-cta="view-on-polymarket"
+        >View on Polymarket</a>
+      </div>
+
+      <div class="market-footer" style="margin-top: 12px;">
+        <button class="trade-action-btn secondary-trade-btn" data-market-id="${safeAttr(market.id)}" data-side="BUY YES">Preview YES</button>
+        <button class="trade-action-btn secondary-trade-btn" data-market-id="${safeAttr(market.id)}" data-side="BUY NO">Preview NO</button>
+      </div>
+    </article>
+  `;
+}
+
+function renderEventDetailView(eventSlugOrFamilyKey, options = {}) {
+  const section = ensureEventDetailSection();
+  const eventSlug = slugifyEventValue(eventSlugOrFamilyKey);
+  const markets = getEventMarkets(eventSlugOrFamilyKey);
+  currentEventSlug = eventSlug;
+
+  if (!eventSlug) {
+    section.classList.add("event-detail-hidden");
+    section.innerHTML = "";
+    return;
+  }
+
+  if (!markets.length) {
+    section.classList.remove("event-detail-hidden");
+    section.innerHTML = `
+      <div class="market-grid">
+        <article class="market-card event-detail-card">
+          <p class="market-small">Event detail</p>
+          <h2>Event not found</h2>
+          <p class="alert-time">This event is not available in the current live market feed. It may have moved, closed, or fallen out of the active filter.</p>
+          <div class="market-footer" style="justify-content: flex-start;">
+            <button id="eventDetailBackBtn" type="button">Back to live markets</button>
+          </div>
+        </article>
+      </div>
+    `;
+    bindEventDetailControls();
+    if (options.scroll !== false) section.scrollIntoView({ behavior: "smooth", block: "start" });
+    return;
+  }
+
+  const summary = getEventSummary(markets);
+  const sortedMarkets = getSortedEventMarkets(markets, currentEventSort);
+
+  section.classList.remove("event-detail-hidden");
+  section.innerHTML = `
+    <div class="market-grid">
+      <article class="market-card event-detail-card">
+        <div class="event-detail-topline">
+          <div>
+            <p class="market-small">Event detail</p>
+            <h2>${safeText(summary.eventGroup)}</h2>
+            <p class="alert-time">
+              House of Markets helps users discover active prediction market events,
+              compare related markets, and open real markets on Polymarket when ready.
+            </p>
+          </div>
+          <button id="eventDetailBackBtn" type="button">Back to live markets</button>
+        </div>
+
+        <div class="market-context-row event-detail-context">
+          <span>${safeText(summary.category)}</span>
+          <span>${safeText(summary.count)} related markets</span>
+        </div>
+
+        <p class="alert-time event-detail-description">${safeText(summary.reason)}</p>
+
+        <div class="market-meta event-detail-summary">
+          <div class="meta-box"><span class="meta-label">Related Markets</span><span class="meta-value">${safeText(summary.count)}</span></div>
+          <div class="meta-box"><span class="meta-label">Combined 24h Volume</span><span class="meta-value">${safeText(formatMoney(summary.totalVolume))}</span></div>
+          <div class="meta-box"><span class="meta-label">Combined Liquidity</span><span class="meta-value">${safeText(formatMoney(summary.totalLiquidity))}</span></div>
+          <div class="meta-box"><span class="meta-label">Real Market Action</span><span class="meta-value">View on Polymarket</span></div>
+        </div>
+      </article>
+    </div>
+
+    <div class="market-grid event-detail-controls-grid" style="margin-top: 18px;">
+      <article class="market-card event-detail-controls-card">
+        <div class="event-detail-controls">
+          <div>
+            <h3>Related Markets</h3>
+            <p class="alert-time">Compare every market in this event family. Preview buttons are safe previews only.</p>
+          </div>
+          <label class="event-detail-sort-label">
+            <span class="meta-label">Sort</span>
+            <select id="eventDetailSortSelect">
+              ${Object.entries(EVENT_DETAIL_SORTS)
+                .map(([value, label]) => `<option value="${safeAttr(value)}" ${currentEventSort === value ? "selected" : ""}>${safeText(label)}</option>`)
+                .join("")}
+            </select>
+          </label>
+        </div>
+      </article>
+    </div>
+
+    <div id="eventDetailMarketList" class="market-grid event-market-grid" style="margin-top: 18px;">
+      ${sortedMarkets.map((market) => renderEventMarketCard(market, "event-detail")).join("")}
+    </div>
+  `;
+
+  bindEventDetailControls();
+  bindTradeActionButtons();
+
+  if (options.updateUrl) {
+    setEventUrlParam(summary.eventSlug || eventSlug);
+  }
+
+  if (options.scroll !== false) {
+    section.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+}
+
+function clearEventDetailView(options = {}) {
+  currentEventSlug = "";
+  const section = document.getElementById("eventDetailView");
+  if (section) {
+    section.classList.add("event-detail-hidden");
+    section.innerHTML = "";
+  }
+
+  if (options.updateUrl !== false) {
+    setEventUrlParam("", { replace: true });
+  }
+
+  if (options.scroll !== false) {
+    document.getElementById("homepageStrategyLayer")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+}
+
+function bindEventDetailControls() {
+  const backBtn = document.getElementById("eventDetailBackBtn");
+  const sortSelect = document.getElementById("eventDetailSortSelect");
+
+  if (backBtn) backBtn.onclick = () => clearEventDetailView({ updateUrl: true });
+  if (sortSelect) {
+    sortSelect.onchange = () => {
+      currentEventSort = sortSelect.value || "volume";
+      renderEventDetailView(currentEventSlug, { updateUrl: false, scroll: false });
+    };
+  }
+}
+
+function bindEventOpenButtons() {
+  document.querySelectorAll(".event-detail-open-btn").forEach((button) => {
+    button.onclick = () => {
+      const eventSlug = button.dataset.eventSlug || "";
+      renderEventDetailView(eventSlug, { updateUrl: true, scroll: true });
+    };
+  });
+}
+
+function renderRequestedEventFromUrl(options = {}) {
+  const requestedEventSlug = getRequestedEventSlug();
+  if (!requestedEventSlug) {
+    if (currentEventSlug) clearEventDetailView({ updateUrl: false, scroll: false });
+    return;
+  }
+
+  renderEventDetailView(requestedEventSlug, {
+    updateUrl: false,
+    scroll: options.scroll !== false,
+  });
 }
 
 function renderMoverCard(market, sourceSection = "movers") {
@@ -3642,6 +3990,9 @@ async function loadBiggestMovers() {
       lastHomepageDiscoveryRefreshAt = data.lastRefreshedAt;
     }
     renderDiscoverPrimaryView();
+    if (currentEventSlug) {
+      renderEventDetailView(currentEventSlug, { updateUrl: false, scroll: false });
+    }
   } catch (err) {
     console.error("Biggest movers load error:", err);
     biggestMoversCache = [];
@@ -3686,6 +4037,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   setupBrowserWalletEventSync();
 
+  window.addEventListener("popstate", () => {
+    renderRequestedEventFromUrl({ scroll: true });
+  });
+
   await beginCleanPublicLoad();
 
   renderTradeTicketPanel();
@@ -3698,6 +4053,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   await loadAlerts();
   await loadHomepageDiscoveryData(true);
   await loadBiggestMovers();
+  renderRequestedEventFromUrl({ scroll: !!getRequestedEventSlug() });
   if (PBP_PUBLIC_BETA_DEBUG_MODE) {
     await loadAccountState();
     await loadPerformanceStats();

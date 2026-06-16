@@ -648,6 +648,14 @@ details summary {
   margin-bottom: 5px;
 }
 
+.market-family-header-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .grouped-market-list {
   display: flex;
   flex-direction: column;
@@ -742,6 +750,71 @@ details summary {
 
 .market-family-note {
   margin-top: 12px;
+}
+
+.event-detail-hidden {
+  display: none;
+}
+
+.event-detail-section {
+  scroll-margin-top: 18px;
+}
+
+.event-detail-card {
+  border-color: rgba(34, 197, 94, 0.28);
+}
+
+.event-detail-topline,
+.event-detail-controls {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.event-detail-topline h2 {
+  margin-bottom: 8px;
+}
+
+.event-detail-context {
+  margin-top: 14px;
+}
+
+.event-detail-description {
+  margin-top: 10px;
+}
+
+.event-detail-summary {
+  margin-top: 14px;
+}
+
+.event-detail-controls-card {
+  grid-column: 1 / -1;
+}
+
+.event-detail-sort-label {
+  display: grid;
+  gap: 7px;
+  min-width: 210px;
+}
+
+.event-market-grid {
+  align-items: stretch;
+}
+
+.event-market-card {
+  display: flex;
+  flex-direction: column;
+}
+
+.event-market-heading {
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.event-market-heading h3 {
+  margin-top: 4px;
 }
 
 .signal {
@@ -1091,12 +1164,29 @@ body.pbp-debug-mode .public-beta-internal-section {
   }
 
   .market-family-header,
+  .event-detail-topline,
+  .event-detail-controls,
+  .event-market-heading,
   .grouped-market-child {
     grid-template-columns: 1fr;
   }
 
-  .market-family-header {
+  .market-family-header,
+  .event-detail-topline,
+  .event-detail-controls,
+  .event-market-heading {
     flex-direction: column;
+  }
+
+  .market-family-header-actions,
+  .event-detail-sort-label {
+    justify-content: stretch;
+    width: 100%;
+  }
+
+  .event-detail-topline button,
+  .event-detail-sort-label select {
+    width: 100%;
   }
 
   .grouped-market-child-meta {
