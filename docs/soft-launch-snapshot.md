@@ -5,6 +5,13 @@
 - Soft-launch snapshot status: ready.
 - Ready for limited public beta / friends-and-trusted-users soft launch.
 
+Post-snapshot update:
+
+- Public brand is now House of Markets.
+- Event detail page v0 is live for grouped market families.
+- The current public flow is: discover grouped event -> compare related markets -> preview safely -> open real market on Polymarket.
+- Paid by Polymarket OS remains the earlier working name and internal history.
+
 ## 2. URLs
 
 - Public URL: [https://paid-by-polymarket-os.onrender.com/](https://paid-by-polymarket-os.onrender.com/)
