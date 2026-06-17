@@ -87,6 +87,8 @@ let currentTopLevelView = "discover";
 let currentDiscoverView = "opportunities";
 let activeTopDiscoveryTab = "trending";
 let quickDiscoveryExpanded = false;
+let activeMarketDetailId = "";
+let activeMarketDetailTab = "overview";
 let currentEventSlug = "";
 let currentEventSort = "volume";
 let currentTradeTicket = null;
@@ -926,6 +928,300 @@ function renderMovementVisual(market) {
   `;
 }
 
+function getMarketByDetailId(detailId) {
+  const target = String(detailId || "").trim();
+  if (!target) return null;
+
+  return (Array.isArray(liveMarketsCache) ? liveMarketsCache : []).find((market) => {
+    const ids = [
+      getMarketTrackingId(market),
+      market?.id,
+      market?.marketId,
+      market?.conditionId,
+      market?.slug,
+    ].map((value) => String(value || "").trim());
+    return ids.includes(target);
+  }) || null;
+}
+
+function getStrengthPercent(value, scale) {
+  const numeric = Number(value || 0);
+  if (!Number.isFinite(numeric) || numeric <= 0) return 0;
+  return Math.max(4, Math.min(100, (numeric / scale) * 100));
+}
+
+function renderMetricBar(label, valueLabel, percent, className = "") {
+  return `
+    <div class="market-detail-metric-bar ${safeAttr(className)}">
+      <div class="market-detail-metric-bar-top">
+        <span>${safeText(label)}</span>
+        <strong>${safeText(valueLabel)}</strong>
+      </div>
+      <div class="market-detail-bar-track">
+        <span style="width:${safeAttr(Math.max(0, Math.min(100, percent)))}%;"></span>
+      </div>
+    </div>
+  `;
+}
+
+function getWhyMarketIsInteresting(market) {
+  const reasons = [];
+  const movement = Math.abs(getMarketMovementValue(market));
+  const volume = Number(market?.volume24hr || 0);
+  const liquidity = Number(market?.liquidity || 0);
+  const eventGroup = getMarketEventGroup(market);
+
+  if (volume >= 250000) {
+    reasons.push("High volume means many traders are watching this market.");
+  }
+  if (movement >= 0.04) {
+    reasons.push("Strong movement means odds recently shifted.");
+  }
+  if (liquidity >= 150000) {
+    reasons.push("High liquidity means the market may be easier to enter or exit.");
+  }
+  if (eventGroup) {
+    reasons.push("Related event markets can be compared in the event view.");
+  }
+  if (market?.dataFreshness === "fresh" || market?.lastUpdated) {
+    reasons.push("Recent updates make this market worth a fresh look.");
+  }
+
+  return reasons.length
+    ? reasons.slice(0, 4)
+    : ["This market is active enough to appear in the current discovery feed."];
+}
+
+function ensureMarketDetailDrawer() {
+  let drawer = document.getElementById("marketDetailDrawer");
+  if (drawer) return drawer;
+
+  drawer = document.createElement("div");
+  drawer.id = "marketDetailDrawer";
+  drawer.className = "market-detail-drawer-shell market-detail-drawer-hidden";
+  drawer.setAttribute("aria-hidden", "true");
+  drawer.innerHTML = `
+    <div class="market-detail-backdrop" data-market-detail-close="true"></div>
+    <aside class="market-detail-drawer" role="dialog" aria-modal="true" aria-labelledby="marketDetailTitle">
+      <div id="marketDetailContent"></div>
+    </aside>
+  `;
+  document.body.appendChild(drawer);
+  return drawer;
+}
+
+function renderMarketDetailOverview(market) {
+  const probability = Number(market?.yesPriceLive || 0);
+  const probabilityPercent = Number.isFinite(probability) ? Math.max(0, Math.min(100, probability * 100)) : 0;
+  const volumePercent = getStrengthPercent(market?.volume24hr, 1000000);
+  const liquidityPercent = getStrengthPercent(market?.liquidity, 500000);
+  const movement = getMarketMovementValue(market);
+  const movementPercent = Math.max(4, Math.min(100, Math.abs(movement) * 1000));
+
+  return `
+    <div class="market-detail-visual-stack">
+      ${renderMetricBar("YES probability", formatProbability(market.yesPriceLive), probabilityPercent, "probability")}
+      ${renderMetricBar("Volume strength", formatMoney(market.volume24hr), volumePercent, "volume")}
+      ${renderMetricBar("Liquidity strength", formatMoney(market.liquidity), liquidityPercent, "liquidity")}
+      ${movement
+        ? renderMetricBar("Recent movement", formatChangeAsProbability(movement), movementPercent, movement > 0 ? "moving-up" : "moving-down")
+        : `<p class="alert-time">Recent movement data is not available for this market yet.</p>`}
+    </div>
+
+    <div class="market-detail-why">
+      <h3>Why this is interesting</h3>
+      <div class="alerts-list">
+        ${getWhyMarketIsInteresting(market)
+          .map(
+            (reason) => `
+              <div class="alert-item">
+                <div class="alert-message">${safeText(reason)}</div>
+              </div>
+            `
+          )
+          .join("")}
+      </div>
+    </div>
+  `;
+}
+
+function renderMarketDetailMarketTab(market) {
+  const eventGroup = getMarketEventGroup(market);
+  const movement = getMarketMovementValue(market);
+
+  return `
+    <div class="market-meta market-detail-meta-grid">
+      <div class="meta-box"><span class="meta-label">Full Question</span><span class="meta-value">${safeText(market.question)}</span></div>
+      <div class="meta-box"><span class="meta-label">Event / Group</span><span class="meta-value">${safeText(eventGroup || "Ungrouped market")}</span></div>
+      <div class="meta-box"><span class="meta-label">Category</span><span class="meta-value">${safeText(getPublicCategoryLabel(market))}</span></div>
+      <div class="meta-box"><span class="meta-label">YES Probability</span><span class="meta-value">${safeText(formatProbability(market.yesPriceLive))}</span></div>
+      <div class="meta-box"><span class="meta-label">24h Volume</span><span class="meta-value">${safeText(formatMoney(market.volume24hr))}</span></div>
+      <div class="meta-box"><span class="meta-label">Liquidity</span><span class="meta-value">${safeText(formatMoney(market.liquidity))}</span></div>
+      <div class="meta-box"><span class="meta-label">Movement</span><span class="meta-value">${safeText(movement ? formatChangeAsProbability(movement) : "--")}</span></div>
+      <div class="meta-box"><span class="meta-label">Updated</span><span class="meta-value">${safeText(market.lastUpdated ? formatTimestamp(market.lastUpdated) : "--")}</span></div>
+    </div>
+  `;
+}
+
+function renderMarketDetailSocialTab(market) {
+  const eventGroup = getMarketEventGroup(market);
+
+  return `
+    <div class="market-detail-social-card">
+      <p class="market-small">Draft share angle</p>
+      <h3>This market is moving on House of Markets.</h3>
+      <p class="alert-time">
+        ${safeText(eventGroup ? `${eventGroup}: ` : "")}${safeText(market.question)}
+      </p>
+      <p class="alert-time">
+        Future: add charts, social context, and discussion tabs here. For v0, this is only a draft prompt.
+      </p>
+    </div>
+  `;
+}
+
+function renderMarketDetailTabContent(market) {
+  if (activeMarketDetailTab === "market") return renderMarketDetailMarketTab(market);
+  if (activeMarketDetailTab === "social") return renderMarketDetailSocialTab(market);
+  return renderMarketDetailOverview(market);
+}
+
+function renderMarketDetailDrawer(market) {
+  const eventGroup = getMarketEventGroup(market);
+  const content = document.getElementById("marketDetailContent");
+  if (!content) return;
+
+  content.innerHTML = `
+    <div class="market-detail-header">
+      <div>
+        <p class="market-small">Market window</p>
+        <h2 id="marketDetailTitle">${safeText(market.question)}</h2>
+        <div class="market-context-row">
+          <span>${safeText(getPublicCategoryLabel(market))}</span>
+          ${eventGroup ? `<span>${safeText(eventGroup)}</span>` : ""}
+        </div>
+      </div>
+      <button class="market-detail-close-btn" type="button" data-market-detail-close="true" aria-label="Close market detail">Close</button>
+    </div>
+
+    ${renderHeatBadges(getMarketHeatBadges(market))}
+    ${renderMovementVisual(market)}
+
+    <div class="market-detail-primary-stats">
+      <span><strong>${safeText(formatProbability(market.yesPriceLive))}</strong><small>YES</small></span>
+      <span><strong>${safeText(formatMoney(market.volume24hr))}</strong><small>24h vol</small></span>
+      <span><strong>${safeText(formatMoney(market.liquidity))}</strong><small>liquidity</small></span>
+    </div>
+
+    <div class="market-detail-tabs" role="tablist" aria-label="Market detail tabs">
+      ${["overview", "market", "social"]
+        .map(
+          (tab) => `
+            <button
+              class="${activeMarketDetailTab === tab ? "active" : ""}"
+              type="button"
+              data-market-detail-tab="${safeAttr(tab)}"
+              role="tab"
+              aria-selected="${activeMarketDetailTab === tab ? "true" : "false"}"
+            >${safeText(tab[0].toUpperCase() + tab.slice(1))}</button>
+          `
+        )
+        .join("")}
+    </div>
+
+    <div class="market-detail-tab-panel">
+      ${renderMarketDetailTabContent(market)}
+    </div>
+
+    <div class="market-footer market-detail-actions">
+      <a
+        class="market-link market-link-primary"
+        href="${safeUrl(market.url)}"
+        target="_blank"
+        rel="noopener noreferrer"
+        data-outbound-click="polymarket"
+        data-market-id="${safeAttr(getMarketTrackingId(market))}"
+        data-market-slug="${safeAttr(market.slug)}"
+        data-market-question="${safeAttr(market.question)}"
+        data-market-url="${safeAttr(market.url)}"
+        data-source-section="market-detail-drawer"
+        data-cta="view-on-polymarket"
+      >View on Polymarket</a>
+      <button class="trade-action-btn secondary-trade-btn" data-market-id="${safeAttr(market.id)}" data-side="BUY YES">Preview YES</button>
+      <button class="trade-action-btn secondary-trade-btn" data-market-id="${safeAttr(market.id)}" data-side="BUY NO">Preview NO</button>
+    </div>
+  `;
+
+  bindMarketDetailControls();
+  bindTradeActionButtons();
+}
+
+function openMarketDetailDrawer(detailId) {
+  const market = getMarketByDetailId(detailId);
+  if (!market) return;
+
+  activeMarketDetailId = String(detailId || getMarketTrackingId(market));
+  activeMarketDetailTab = "overview";
+
+  const drawer = ensureMarketDetailDrawer();
+  drawer.classList.remove("market-detail-drawer-hidden");
+  drawer.setAttribute("aria-hidden", "false");
+  document.body.classList.add("market-detail-open");
+  renderMarketDetailDrawer(market);
+}
+
+function closeMarketDetailDrawer() {
+  const drawer = document.getElementById("marketDetailDrawer");
+  if (!drawer) return;
+
+  drawer.classList.add("market-detail-drawer-hidden");
+  drawer.setAttribute("aria-hidden", "true");
+  document.body.classList.remove("market-detail-open");
+  activeMarketDetailId = "";
+  activeMarketDetailTab = "overview";
+}
+
+function bindMarketDetailControls() {
+  const drawer = ensureMarketDetailDrawer();
+
+  drawer.querySelectorAll("[data-market-detail-close]").forEach((element) => {
+    element.onclick = closeMarketDetailDrawer;
+  });
+
+  drawer.querySelectorAll("[data-market-detail-tab]").forEach((button) => {
+    button.onclick = () => {
+      const nextTab = button.dataset.marketDetailTab || "overview";
+      const market = getMarketByDetailId(activeMarketDetailId);
+      if (!market) return;
+      activeMarketDetailTab = nextTab;
+      renderMarketDetailDrawer(market);
+    };
+  });
+}
+
+function bindMarketDetailOpeners() {
+  document.querySelectorAll("[data-market-detail-id]").forEach((element) => {
+    element.onclick = (event) => {
+      if (event.target?.closest?.("a, button, input, select, textarea, label, summary, details")) return;
+      openMarketDetailDrawer(element.dataset.marketDetailId);
+    };
+
+    element.onkeydown = (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      if (event.target?.closest?.("a, button, input, select, textarea, label, summary, details")) return;
+      event.preventDefault();
+      openMarketDetailDrawer(element.dataset.marketDetailId);
+    };
+  });
+}
+
+function bindMarketDetailGlobalControls() {
+  ensureMarketDetailDrawer();
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeMarketDetailDrawer();
+  });
+}
+
 function getTopDiscoveryCategory(tab = activeTopDiscoveryTab) {
   const map = {
     trending: "ALL",
@@ -1018,7 +1314,13 @@ function renderFeaturedMarketPanel(market) {
   const eventGroup = getMarketEventGroup(market);
 
   return `
-    <div class="featured-market-content">
+    <div
+      class="featured-market-content market-detail-clickable"
+      data-market-detail-id="${safeAttr(getMarketTrackingId(market))}"
+      role="button"
+      tabindex="0"
+      aria-label="Open market detail for ${safeAttr(market.question)}"
+    >
       <div class="market-context-row">
         <span>${safeText(getPublicCategoryLabel(market))}</span>
         ${eventGroup ? `<span>${safeText(eventGroup)}</span>` : ""}
@@ -1041,7 +1343,13 @@ function renderQuickDiscoveryCard(market) {
   const eventGroup = getMarketEventGroup(market);
 
   return `
-    <article class="quick-market-card">
+    <article
+      class="quick-market-card market-detail-clickable"
+      data-market-detail-id="${safeAttr(getMarketTrackingId(market))}"
+      role="button"
+      tabindex="0"
+      aria-label="Open market detail for ${safeAttr(market.question)}"
+    >
       <div>
         <div class="quick-market-topline">
           <span class="playful-label">${safeText(getPlayfulDiscoveryLabel(market))}</span>
@@ -1090,6 +1398,7 @@ function renderHomepageQuickDiscovery() {
   }
 
   bindTradeActionButtons();
+  bindMarketDetailOpeners();
 }
 
 function bindPublicTopDiscoveryTabs() {
@@ -1996,6 +2305,10 @@ async function loadHomepageDiscoveryData() {
     }
 
     renderRequestedEventFromUrl({ scroll: false });
+    if (activeMarketDetailId) {
+      const activeMarket = getMarketByDetailId(activeMarketDetailId);
+      if (activeMarket) renderMarketDetailDrawer(activeMarket);
+    }
     applyTopLevelView();
   } catch (err) {
     console.error("Homepage discovery load error:", err);
@@ -4349,6 +4662,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   bindBetaFeedbackForm();
   bindOutboundClickTracking();
   bindPublicTopDiscoveryTabs();
+  bindMarketDetailGlobalControls();
   ensureHomepageStrategyLayer();
   ensureTopLevelTabs();
   hideLegacyDiscoverSections();
