@@ -5,6 +5,8 @@ const PBP_ALERTS_WAITLIST_STORAGE_KEY = "pbpAlertsWaitlistEmails";
 const PBP_LATEST_ALERT_SIGNALS_LIMIT = 3;
 const DISCOVER_RESULT_LIMIT = 8;
 const DISCOVER_CANDIDATE_LIMIT = 120;
+const QUICK_DISCOVERY_INITIAL_LIMIT = 4;
+const QUICK_DISCOVERY_EXPANDED_LIMIT = 8;
 // Advanced demo sections stay available for internal testing with ?debug=1 during public beta.
 const PBP_PUBLIC_BETA_DEBUG_MODE = new URLSearchParams(window.location.search).get("debug") === "1";
 const PBP_PUBLIC_BETA_INTERNAL_SECTION_IDS = [
@@ -83,6 +85,8 @@ let lastHomepageDiscoveryRefreshAt = "";
 let activeHomepageCategory = "ALL";
 let currentTopLevelView = "discover";
 let currentDiscoverView = "opportunities";
+let activeTopDiscoveryTab = "trending";
+let quickDiscoveryExpanded = false;
 let currentEventSlug = "";
 let currentEventSort = "volume";
 let currentTradeTicket = null;
@@ -922,6 +926,193 @@ function renderMovementVisual(market) {
   `;
 }
 
+function getTopDiscoveryCategory(tab = activeTopDiscoveryTab) {
+  const map = {
+    trending: "ALL",
+    sports: "SPORTS",
+    politics: "POLITICS",
+    crypto: "CRYPTO",
+    culture: "CULTURE_NEWS",
+  };
+  return map[tab] || "ALL";
+}
+
+function getTopDiscoveryTabForCategory(category = activeHomepageCategory) {
+  const map = {
+    ALL: "trending",
+    SPORTS: "sports",
+    POLITICS: "politics",
+    CRYPTO: "crypto",
+    CULTURE_NEWS: "culture",
+  };
+  return map[category] || "trending";
+}
+
+function renderPublicTopDiscoveryTabs() {
+  document.querySelectorAll("[data-top-discovery-tab]").forEach((button) => {
+    const tab = button.dataset.topDiscoveryTab || "trending";
+    button.classList.toggle("active", tab === activeTopDiscoveryTab);
+    button.setAttribute("aria-pressed", tab === activeTopDiscoveryTab ? "true" : "false");
+  });
+}
+
+function getQuickDiscoveryMarkets() {
+  const category = getTopDiscoveryCategory();
+  const source = (Array.isArray(liveMarketsCache) ? liveMarketsCache : [])
+    .filter((market) => market && market.question && market.url && isDiscoveryQualityMarket(market));
+  const filtered = category === "ALL"
+    ? source
+    : source.filter((market) => getPublicCategoryKey(market) === category);
+
+  return filtered
+    .sort((a, b) => getDiscoveryRankScore(b) - getDiscoveryRankScore(a))
+    .slice(0, DISCOVER_CANDIDATE_LIMIT);
+}
+
+function getFeaturedMarket() {
+  return getQuickDiscoveryMarkets()[0] || null;
+}
+
+function getPlayfulDiscoveryLabel(market) {
+  const movement = Math.abs(getMarketMovementValue(market));
+  const volume = Number(market?.volume24hr || 0);
+  const liquidity = Number(market?.liquidity || 0);
+
+  if (movement >= 0.05) return "Big mover";
+  if (volume >= 500000) return "High-volume event";
+  if (liquidity >= 250000) return "Crowd is watching";
+  if (getMarketEventGroup(market)) return "Hot right now";
+  if (market?.dataFreshness === "fresh" || market?.lastUpdated) return "New signal";
+  return "Weird but active";
+}
+
+function renderCompactMarketActions(market, sourceSection) {
+  const trackingSource = normalizeOutboundSourceSection(sourceSection);
+
+  return `
+    <div class="market-footer quick-market-actions">
+      <a
+        class="market-link market-link-primary"
+        href="${safeUrl(market.url)}"
+        target="_blank"
+        rel="noopener noreferrer"
+        data-outbound-click="polymarket"
+        data-market-id="${safeAttr(getMarketTrackingId(market))}"
+        data-market-slug="${safeAttr(market.slug)}"
+        data-market-question="${safeAttr(market.question)}"
+        data-market-url="${safeAttr(market.url)}"
+        data-source-section="${safeAttr(trackingSource)}"
+        data-cta="view-on-polymarket"
+      >View on Polymarket</a>
+      <button class="trade-action-btn secondary-trade-btn" data-market-id="${safeAttr(market.id)}" data-side="BUY YES">Preview YES</button>
+      <button class="trade-action-btn secondary-trade-btn" data-market-id="${safeAttr(market.id)}" data-side="BUY NO">Preview NO</button>
+    </div>
+  `;
+}
+
+function renderFeaturedMarketPanel(market) {
+  if (!market) {
+    return `<p class="empty">No featured market is available for this tab yet.</p>`;
+  }
+
+  const eventGroup = getMarketEventGroup(market);
+
+  return `
+    <div class="featured-market-content">
+      <div class="market-context-row">
+        <span>${safeText(getPublicCategoryLabel(market))}</span>
+        ${eventGroup ? `<span>${safeText(eventGroup)}</span>` : ""}
+      </div>
+      <div class="playful-label">${safeText(getPlayfulDiscoveryLabel(market))}</div>
+      <h2>${safeText(market.question)}</h2>
+      ${renderHeatBadges(getMarketHeatBadges(market))}
+      ${renderMovementVisual(market)}
+      <div class="quick-market-stat-row">
+        <span><strong>${safeText(formatProbability(market.yesPriceLive))}</strong><small>YES</small></span>
+        <span><strong>${safeText(formatMoney(market.volume24hr))}</strong><small>24h vol</small></span>
+        <span><strong>${safeText(formatMoney(market.liquidity))}</strong><small>liquidity</small></span>
+      </div>
+      ${renderCompactMarketActions(market, "featured-market")}
+    </div>
+  `;
+}
+
+function renderQuickDiscoveryCard(market) {
+  const eventGroup = getMarketEventGroup(market);
+
+  return `
+    <article class="quick-market-card">
+      <div>
+        <div class="quick-market-topline">
+          <span class="playful-label">${safeText(getPlayfulDiscoveryLabel(market))}</span>
+          <span>${safeText(getPublicCategoryLabel(market))}</span>
+        </div>
+        <h3>${safeText(market.question)}</h3>
+        ${eventGroup ? `<p class="alert-time">${safeText(eventGroup)}</p>` : ""}
+      </div>
+      ${renderMovementVisual(market)}
+      <div class="quick-market-stat-row">
+        <span><strong>${safeText(formatProbability(market.yesPriceLive))}</strong><small>YES</small></span>
+        <span><strong>${safeText(formatMoney(market.volume24hr))}</strong><small>vol</small></span>
+      </div>
+      ${renderCompactMarketActions(market, "trending-now")}
+    </article>
+  `;
+}
+
+function renderHomepageQuickDiscovery() {
+  renderPublicTopDiscoveryTabs();
+
+  const featuredEl = document.getElementById("featuredMarketPanel");
+  const feedEl = document.getElementById("quickDiscoveryFeed");
+  const toggleBtn = document.getElementById("quickDiscoveryToggle");
+  if (!featuredEl || !feedEl) return;
+
+  const markets = getQuickDiscoveryMarkets();
+  const featured = getFeaturedMarket();
+  const feedMarkets = markets
+    .filter((market) => market !== featured)
+    .slice(0, quickDiscoveryExpanded ? QUICK_DISCOVERY_EXPANDED_LIMIT : QUICK_DISCOVERY_INITIAL_LIMIT);
+
+  featuredEl.innerHTML = renderFeaturedMarketPanel(featured);
+  feedEl.innerHTML = feedMarkets.length
+    ? feedMarkets.map(renderQuickDiscoveryCard).join("")
+    : `<p class="empty">No trending markets found for this tab yet.</p>`;
+
+  if (toggleBtn) {
+    const canExpand = markets.length > QUICK_DISCOVERY_INITIAL_LIMIT + 1;
+    toggleBtn.hidden = !canExpand;
+    toggleBtn.textContent = quickDiscoveryExpanded ? "Show less" : "Show more";
+    toggleBtn.onclick = () => {
+      quickDiscoveryExpanded = !quickDiscoveryExpanded;
+      renderHomepageQuickDiscovery();
+    };
+  }
+
+  bindTradeActionButtons();
+}
+
+function bindPublicTopDiscoveryTabs() {
+  document.querySelectorAll("[data-top-discovery-tab]").forEach((button) => {
+    button.onclick = () => {
+      const tab = button.dataset.topDiscoveryTab || "trending";
+      if (tab === "alerts") {
+        document.getElementById("pbpAlertsComingSoon")?.scrollIntoView({ behavior: "smooth", block: "start" });
+        return;
+      }
+
+      activeTopDiscoveryTab = tab;
+      quickDiscoveryExpanded = false;
+      activeHomepageCategory = getTopDiscoveryCategory(tab);
+      currentDiscoverView = "opportunities";
+      renderHomepageQuickDiscovery();
+      renderHomepageCategoryChipRail();
+      renderDiscoverPrimaryView();
+      document.getElementById("homepageQuickDiscovery")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    };
+  });
+}
+
 function getDiscoveryRankScore(market) {
   const opportunityScore = getMarketOpportunityScore(market) || 0;
   const volumeScore = Math.log10((market?.volume24hr || 0) + 1) * 8;
@@ -986,7 +1177,10 @@ function renderHomepageCategoryChipRail() {
   rail.querySelectorAll("[data-category-value]").forEach((button) => {
     button.onclick = () => {
       activeHomepageCategory = button.dataset.categoryValue || "ALL";
+      activeTopDiscoveryTab = getTopDiscoveryTabForCategory(activeHomepageCategory);
+      quickDiscoveryExpanded = false;
       renderHomepageCategoryChipRail();
+      renderHomepageQuickDiscovery();
       renderDiscoverPrimaryView();
     };
   });
@@ -1358,6 +1552,7 @@ function renderDiscoverPrimaryView() {
   renderHomepageDiscoverViewRail();
   updateHomepageLastRefreshedLabel();
   updateMarketIntelligenceStrip();
+  renderHomepageQuickDiscovery();
 
   const titleEl = document.getElementById("discoverPrimaryViewLabel");
   const descriptionEl = document.getElementById("discoverPrimaryViewDescription");
@@ -4153,6 +4348,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   bindAlertsWaitlistForm();
   bindBetaFeedbackForm();
   bindOutboundClickTracking();
+  bindPublicTopDiscoveryTabs();
   ensureHomepageStrategyLayer();
   ensureTopLevelTabs();
   hideLegacyDiscoverSections();

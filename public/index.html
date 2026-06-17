@@ -19,38 +19,79 @@
         <div class="market-grid">
           <article class="market-card">
             <p class="market-small">House of Markets</p>
-            <h1>Find active prediction markets faster.</h1>
+            <h1>What are people betting on right now?</h1>
             <p class="alert-time" style="max-width: 760px; margin-top: 10px;">
-              House of Markets helps you discover grouped market opportunities,
-              track event signals, and open real markets on Polymarket when you are ready.
+              Discover trending prediction markets, compare related events,
+              and open real markets on Polymarket when you are ready.
             </p>
             <div class="market-footer" style="justify-content: flex-start;">
-              <a class="market-link market-link-primary" href="#pbpAlertsEmail">Join the Alerts Beta</a>
-              <a class="market-link" href="#homepageStrategyLayer">Browse Live Markets</a>
+              <a class="market-link market-link-primary" href="#homepageQuickDiscovery">Browse Trending</a>
+              <a class="market-link" href="#pbpAlertsEmail">Join the Alerts Beta</a>
             </div>
           </article>
 
           <article class="market-card">
-            <h3>How it works</h3>
+            <h3>Start with one question</h3>
             <div class="alerts-list">
               <div class="alert-item">
-                <div class="alert-message">1. Discover</div>
+                <div class="alert-message">What is moving?</div>
                 <div class="alert-time">
-                  Scan one live discovery board at a time.
+                  Trending cards highlight activity using live market fields.
                 </div>
               </div>
               <div class="alert-item">
-                <div class="alert-message">2. Preview</div>
+                <div class="alert-message">What belongs together?</div>
                 <div class="alert-time">
-                  Review price, volume, liquidity, and the reason it stands out.
+                  Event groups keep related markets easier to compare.
                 </div>
               </div>
               <div class="alert-item">
-                <div class="alert-message">3. Open</div>
+                <div class="alert-message">Where is the real market?</div>
                 <div class="alert-time">
-                  View the market on Polymarket, or preview a paper trade first.
+                  View on Polymarket is the real action. Previews stay safe here.
                 </div>
               </div>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="public-top-tabs-section" aria-labelledby="publicTopTabsTitle">
+        <div class="market-card public-top-tabs-card">
+          <div>
+            <p class="market-small">Pick a lane</p>
+            <h2 id="publicTopTabsTitle">Browse what people are watching</h2>
+          </div>
+          <nav id="publicTopDiscoveryTabs" class="public-top-discovery-tabs" aria-label="Top discovery tabs">
+            <button class="active" type="button" data-top-discovery-tab="trending">Trending</button>
+            <button type="button" data-top-discovery-tab="sports">Sports</button>
+            <button type="button" data-top-discovery-tab="politics">Politics</button>
+            <button type="button" data-top-discovery-tab="crypto">Crypto</button>
+            <button type="button" data-top-discovery-tab="culture">Culture</button>
+            <button type="button" data-top-discovery-tab="alerts">Alerts</button>
+          </nav>
+        </div>
+      </section>
+
+      <section id="homepageQuickDiscovery" class="quick-discovery-section" aria-labelledby="quickDiscoveryTitle">
+        <div class="market-grid quick-discovery-layout">
+          <article class="market-card featured-market-card">
+            <p class="market-small">Featured Market</p>
+            <div id="featuredMarketPanel">
+              <p class="loading">Loading featured market...</p>
+            </div>
+          </article>
+
+          <article class="market-card trending-now-card">
+            <div class="market-footer quick-discovery-header">
+              <div>
+                <p class="market-small">Hot right now</p>
+                <h2 id="quickDiscoveryTitle">Trending Now</h2>
+              </div>
+              <button id="quickDiscoveryToggle" type="button">Show more</button>
+            </div>
+            <div id="quickDiscoveryFeed" class="quick-discovery-feed">
+              <p class="loading">Loading trending markets...</p>
             </div>
           </article>
         </div>
