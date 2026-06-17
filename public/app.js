@@ -99,6 +99,7 @@ let currentUserAuthDraft = createEmptyUserAuthDraft();
 let currentUserAuthUiState = createEmptyUserAuthUiState();
 let walletConnectionSource = "NONE";
 let browserWalletEventsBound = false;
+let marketDetailOpenersBound = false;
 let polymarketBrowserModulesPromise = null;
 let latestAlertSignalsFallbackHtml = "";
 let latestAlertSignalTimestamp = "";
@@ -934,6 +935,7 @@ function getMarketByDetailId(detailId) {
 
   return (Array.isArray(liveMarketsCache) ? liveMarketsCache : []).find((market) => {
     const ids = [
+      getMarketDetailId(market),
       getMarketTrackingId(market),
       market?.id,
       market?.marketId,
@@ -942,6 +944,17 @@ function getMarketByDetailId(detailId) {
     ].map((value) => String(value || "").trim());
     return ids.includes(target);
   }) || null;
+}
+
+function getMarketDetailId(market) {
+  return String(
+    getMarketTrackingId(market) ||
+      market?.id ||
+      market?.marketId ||
+      market?.conditionId ||
+      market?.slug ||
+      ""
+  ).trim();
 }
 
 function getStrengthPercent(value, scale) {
@@ -1200,18 +1213,43 @@ function bindMarketDetailControls() {
 }
 
 function bindMarketDetailOpeners() {
-  document.querySelectorAll("[data-market-detail-id]").forEach((element) => {
-    element.onclick = (event) => {
-      if (event.target?.closest?.("a, button, input, select, textarea, label, summary, details")) return;
-      openMarketDetailDrawer(element.dataset.marketDetailId);
-    };
+  if (marketDetailOpenersBound) return;
+  marketDetailOpenersBound = true;
 
-    element.onkeydown = (event) => {
-      if (event.key !== "Enter" && event.key !== " ") return;
-      if (event.target?.closest?.("a, button, input, select, textarea, label, summary, details")) return;
-      event.preventDefault();
-      openMarketDetailDrawer(element.dataset.marketDetailId);
-    };
+  const interactiveSelector = [
+    "a",
+    "button",
+    "input",
+    "select",
+    "textarea",
+    "label",
+    "summary",
+    "details",
+    "[role='button']:not([data-market-detail-id])",
+    "[data-top-discovery-tab]",
+    "[data-category-value]",
+    "[data-discover-view]",
+    "[data-market-detail-tab]",
+    "[data-market-detail-close]",
+    ".trade-action-btn",
+    ".market-link",
+    ".event-detail-open-btn",
+  ].join(", ");
+
+  document.addEventListener("click", (event) => {
+    if (event.target?.closest?.(interactiveSelector)) return;
+    const card = event.target?.closest?.("[data-market-detail-id]");
+    if (!card) return;
+    openMarketDetailDrawer(card.dataset.marketDetailId);
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    if (event.target?.closest?.(interactiveSelector)) return;
+    const card = event.target?.closest?.("[data-market-detail-id]");
+    if (!card) return;
+    event.preventDefault();
+    openMarketDetailDrawer(card.dataset.marketDetailId);
   });
 }
 
@@ -1316,7 +1354,7 @@ function renderFeaturedMarketPanel(market) {
   return `
     <div
       class="featured-market-content market-detail-clickable"
-      data-market-detail-id="${safeAttr(getMarketTrackingId(market))}"
+      data-market-detail-id="${safeAttr(getMarketDetailId(market))}"
       role="button"
       tabindex="0"
       aria-label="Open market detail for ${safeAttr(market.question)}"
@@ -1345,7 +1383,7 @@ function renderQuickDiscoveryCard(market) {
   return `
     <article
       class="quick-market-card market-detail-clickable"
-      data-market-detail-id="${safeAttr(getMarketTrackingId(market))}"
+      data-market-detail-id="${safeAttr(getMarketDetailId(market))}"
       role="button"
       tabindex="0"
       aria-label="Open market detail for ${safeAttr(market.question)}"
@@ -1383,6 +1421,19 @@ function renderHomepageQuickDiscovery() {
     .slice(0, quickDiscoveryExpanded ? QUICK_DISCOVERY_EXPANDED_LIMIT : QUICK_DISCOVERY_INITIAL_LIMIT);
 
   featuredEl.innerHTML = renderFeaturedMarketPanel(featured);
+  if (featured) {
+    featuredEl.classList.add("market-detail-clickable");
+    featuredEl.dataset.marketDetailId = getMarketDetailId(featured);
+    featuredEl.setAttribute("role", "button");
+    featuredEl.setAttribute("tabindex", "0");
+    featuredEl.setAttribute("aria-label", `Open market detail for ${featured.question || "featured market"}`);
+  } else {
+    featuredEl.classList.remove("market-detail-clickable");
+    delete featuredEl.dataset.marketDetailId;
+    featuredEl.removeAttribute("role");
+    featuredEl.removeAttribute("tabindex");
+    featuredEl.removeAttribute("aria-label");
+  }
   feedEl.innerHTML = feedMarkets.length
     ? feedMarkets.map(renderQuickDiscoveryCard).join("")
     : `<p class="empty">No trending markets found for this tab yet.</p>`;
