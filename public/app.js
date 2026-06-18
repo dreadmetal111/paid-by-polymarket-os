@@ -4406,24 +4406,113 @@ function getRelatedMarketsForMarket(market) {
     .slice(0, 8);
 }
 
-function renderMarketPageRelatedCard(market) {
-  const eventGroup = getMarketEventGroup(market);
+function getMarketComparisonContext(currentMarket, relatedMarkets = []) {
+  const markets = [currentMarket, ...(Array.isArray(relatedMarkets) ? relatedMarkets : [])].filter(Boolean);
+  const maxVolume = markets.reduce((best, market) => Math.max(best, getNonNegativeNumber(market?.volume24hr) ?? 0), 0);
+  const maxLiquidity = markets.reduce((best, market) => Math.max(best, getNonNegativeNumber(market?.liquidity) ?? 0), 0);
+  const leaders = [];
+
+  const getLeader = (label, getter, formatter) => {
+    const candidates = markets
+      .map((market) => ({ market, value: getter(market) }))
+      .filter((item) => item.value !== null && Number.isFinite(item.value));
+    if (!candidates.length) return null;
+    candidates.sort((a, b) => b.value - a.value);
+    const top = candidates[0];
+    return {
+      label,
+      value: formatter(top.value),
+      market: top.market,
+    };
+  };
+
+  [
+    getLeader("Highest probability", (market) => hasUsableProbability(market?.yesPriceLive) ? getFiniteNumber(market.yesPriceLive) : null, formatProbability),
+    getLeader("Highest volume", (market) => getNonNegativeNumber(market?.volume24hr), (value) => formatMoney(value)),
+    getLeader("Most liquid", (market) => getNonNegativeNumber(market?.liquidity), (value) => formatMoney(value)),
+    getLeader("Biggest mover", (market) => hasMarketMovementData(market) ? Math.abs(getMarketMovementValue(market)) : null, (value) => formatChangeAsProbability(value)),
+  ].forEach((leader) => {
+    if (leader) leaders.push(leader);
+  });
+
+  return { maxVolume, maxLiquidity, leaders };
+}
+
+function renderMarketComparisonLeaders(context) {
+  const leaders = Array.isArray(context?.leaders) ? context.leaders : [];
+  if (!leaders.length) return "";
 
   return `
-    <article class="market-card market-page-related-card">
+    <div class="market-comparison-leaders" aria-label="Event leaders">
+      ${leaders
+        .map((leader) => {
+          const isCurrent = getMarketDetailId(leader.market) === currentMarketPageId;
+          const outcome = getMarketOutcomeLabel(leader.market) || leader.market?.question || "Market";
+          return `
+            <div class="market-comparison-leader-badge">
+              <span>${safeText(leader.label)}</span>
+              <strong>${safeText(leader.value)}</strong>
+              <small>${safeText(isCurrent ? "This market" : outcome)}</small>
+            </div>
+          `;
+        })
+        .join("")}
+    </div>
+  `;
+}
+
+function renderComparisonMiniBar(label, valueLabel, percent, className = "") {
+  const safePercent = Math.max(0, Math.min(100, getFiniteNumber(percent) ?? 0));
+
+  return `
+    <div class="market-comparison-bar ${safeAttr(className)} ${safePercent <= 0 ? "is-empty" : ""}">
+      <div class="market-comparison-bar-top">
+        <span>${safeText(label)}</span>
+        <strong>${safeText(valueLabel)}</strong>
+      </div>
+      <div class="market-comparison-bar-track">
+        <span style="width:${safeAttr(safePercent)}%;"></span>
+      </div>
+    </div>
+  `;
+}
+
+function renderMarketPageRelatedCard(market, context = {}, options = {}) {
+  const eventGroup = getMarketEventGroup(market);
+  const probability = hasUsableProbability(market?.yesPriceLive) ? getFiniteNumber(market.yesPriceLive) : null;
+  const movement = getMarketMovementValue(market);
+  const hasMovement = hasMarketMovementData(market);
+  const volume = getNonNegativeNumber(market?.volume24hr);
+  const liquidity = getNonNegativeNumber(market?.liquidity);
+  const watched = isMarketWatched(market);
+  const compact = options.mode === "beginner";
+  const probabilityPercent = probability !== null ? probability * 100 : 0;
+  const volumePercent = context.maxVolume ? getStrengthPercent(volume, context.maxVolume) : 0;
+  const liquidityPercent = context.maxLiquidity ? getStrengthPercent(liquidity, context.maxLiquidity) : 0;
+  const movementClass = movement > 0 ? "positive" : movement < 0 ? "negative" : "";
+
+  return `
+    <article class="market-card market-page-related-card market-comparison-card ${compact ? "compact" : ""}">
       <div class="market-context-row">
         <span>${safeText(getPublicCategoryLabel(market))}</span>
         ${eventGroup ? `<span>${safeText(eventGroup)}</span>` : ""}
+        ${watched ? `<span>Watching</span>` : ""}
       </div>
       <p class="market-small">${safeText(getMarketOutcomeLabel(market))}</p>
       <h3>${safeText(market.question)}</h3>
-      ${renderHeatBadges(getMarketHeatBadges(market))}
-      ${renderMovementVisual(market)}
-      <div class="market-meta">
-        <div class="meta-box"><span class="meta-label">YES</span><span class="meta-value">${safeText(formatProbability(market.yesPriceLive))}</span></div>
-        <div class="meta-box"><span class="meta-label">Volume</span><span class="meta-value">${safeText(formatMoney(market.volume24hr, "Volume unavailable"))}</span></div>
-        <div class="meta-box"><span class="meta-label">Liquidity</span><span class="meta-value">${safeText(formatMoney(market.liquidity, "Liquidity unavailable"))}</span></div>
+
+      <div class="market-comparison-bars">
+        ${renderComparisonMiniBar("YES probability", formatProbability(market.yesPriceLive), probabilityPercent, "probability")}
+        ${renderComparisonMiniBar("Volume", formatMoney(market.volume24hr, "Volume unavailable"), volumePercent, "volume")}
+        ${compact ? "" : renderComparisonMiniBar("Liquidity", formatMoney(market.liquidity, "Liquidity unavailable"), liquidityPercent, "liquidity")}
       </div>
+
+      <div class="market-comparison-movement ${safeAttr(movementClass)}">
+        <span class="meta-label">Movement</span>
+        <strong>${safeText(hasMovement ? formatChangeAsProbability(movement) : "No movement data yet")}</strong>
+      </div>
+
+      ${compact ? "" : renderHeatBadges(getMarketHeatBadges(market))}
       <div class="market-footer market-page-action-row">
         ${renderMarketPageLink(market, "Open market page")}
         <a
@@ -4444,6 +4533,30 @@ function renderMarketPageRelatedCard(market) {
         <button class="trade-action-btn secondary-trade-btn" data-market-id="${safeAttr(market.id)}" data-side="BUY YES">Preview YES</button>
         <button class="trade-action-btn secondary-trade-btn" data-market-id="${safeAttr(market.id)}" data-side="BUY NO">Preview NO</button>
         ${renderWatchlistButton(market, "market-page-related")}
+      </div>
+    </article>
+  `;
+}
+
+function renderMarketPageComparisonSection(currentMarket, relatedMarkets = [], options = {}) {
+  const compact = options.mode === "beginner";
+  const visibleRelated = compact ? relatedMarkets.slice(0, 4) : relatedMarkets;
+  const context = getMarketComparisonContext(currentMarket, relatedMarkets);
+
+  return `
+    <article id="marketPageRelated" class="market-card market-page-card market-page-related-section market-page-mobile-panel" data-market-page-mobile-panel="related">
+      <div class="market-page-section-heading">
+        <p class="market-small">${compact ? "Related markets" : "Comparison"}</p>
+        <h3>${compact ? "Related markets to compare" : "Compare related markets"}</h3>
+        <p class="alert-time">${compact
+          ? "Related markets help you see whether this outcome is part of a larger event. Compare the YES price before opening anything."
+          : "See how this market stacks up against other markets in the same event."}</p>
+      </div>
+      ${compact ? "" : renderMarketComparisonLeaders(context)}
+      <div class="market-grid market-page-related-grid market-comparison-grid" style="margin-top: 14px;">
+        ${visibleRelated.length
+          ? visibleRelated.map((market) => renderMarketPageRelatedCard(market, context, { mode: compact ? "beginner" : "advanced" })).join("")
+          : `<p class="empty">No related markets are available in the current live feed.</p>`}
       </div>
     </article>
   `;
@@ -4621,14 +4734,14 @@ function renderMarketPageView(marketId, options = {}) {
     <nav class="market-page-nav market-page-desktop-nav" aria-label="Market page sections">
       <a href="#marketPageOverview">Overview</a>
       ${isAdvancedMode ? `<a href="#marketPageSignals">Signals</a>` : ""}
-      ${isAdvancedMode ? `<a href="#marketPageRelated">Related</a>` : ""}
+      <a href="#marketPageRelated">Related</a>
       ${isAdvancedMode ? `<a href="#marketPageShare">Share</a>` : ""}
     </nav>
 
     <div class="market-page-mobile-tabs" role="tablist" aria-label="Market page mobile sections">
       <button class="active" type="button" role="tab" aria-selected="true" data-market-page-mobile-tab="read">Read</button>
       <button type="button" role="tab" aria-selected="false" data-market-page-mobile-tab="actions">Actions</button>
-      ${isAdvancedMode ? `<button type="button" role="tab" aria-selected="false" data-market-page-mobile-tab="related">Related</button>` : ""}
+      <button type="button" role="tab" aria-selected="false" data-market-page-mobile-tab="related">Related</button>
       ${isAdvancedMode ? `<button type="button" role="tab" aria-selected="false" data-market-page-mobile-tab="share">Share</button>` : ""}
     </div>
 
@@ -4658,20 +4771,9 @@ function renderMarketPageView(marketId, options = {}) {
           ` : ""}
         </div>
 
-        ${isAdvancedMode ? `
-          <article id="marketPageRelated" class="market-card market-page-card market-page-related-section market-page-mobile-panel" data-market-page-mobile-panel="related">
-            <div class="market-page-section-heading">
-              <p class="market-small">Related Markets</p>
-              <h3>${safeText(eventGroup || "Related markets")}</h3>
-              <p class="alert-time">Compare markets from the same event or family. Each card links to its own dedicated market page.</p>
-            </div>
-            <div class="market-grid market-page-related-grid" style="margin-top: 14px;">
-              ${relatedMarkets.length
-                ? relatedMarkets.map(renderMarketPageRelatedCard).join("")
-                : `<p class="empty">No related markets are available in the current live feed.</p>`}
-            </div>
-          </article>
+        ${renderMarketPageComparisonSection(market, relatedMarkets, { mode: isAdvancedMode ? "advanced" : "beginner" })}
 
+        ${isAdvancedMode ? `
           <article id="marketPageShare" class="market-card market-page-card market-page-mobile-panel" data-market-page-mobile-panel="share">
             <div class="market-page-section-heading">
               <p class="market-small">Share</p>
