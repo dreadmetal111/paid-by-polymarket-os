@@ -146,6 +146,14 @@ details summary {
   margin-bottom: 12px;
 }
 
+.trade-preview-highlight {
+  border-color: rgba(250, 204, 21, 0.72);
+  box-shadow:
+    0 0 0 3px rgba(250, 204, 21, 0.18),
+    var(--shadow);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
 .public-top-tabs-card {
   display: grid;
   grid-template-columns: minmax(0, 0.85fr) minmax(360px, 1.15fr);

@@ -4434,7 +4434,30 @@ async function handleResetPaperPortfolio() {
   }
 }
 
-async function handleQuoteTrade(marketId, side) {
+function getTradePreviewCard() {
+  const panel = document.getElementById("tradeTicketPanel");
+  return panel?.closest?.(".market-card") || panel;
+}
+
+function focusTradePreviewPanel() {
+  const target = getTradePreviewCard();
+  if (!target) return;
+
+  target.classList.remove("trade-preview-highlight");
+  target.scrollIntoView({ behavior: "smooth", block: "center" });
+
+  window.setTimeout(() => {
+    target.classList.add("trade-preview-highlight");
+    target.setAttribute("tabindex", "-1");
+    target.focus({ preventScroll: true });
+  }, 250);
+
+  window.setTimeout(() => {
+    target.classList.remove("trade-preview-highlight");
+  }, 1850);
+}
+
+async function handleQuoteTrade(marketId, side, options = {}) {
   try {
     const sizeDollars = Number(document.getElementById("tradeTicketSize")?.value || 50) || 50;
     const mode = getCurrentTradeMode();
@@ -4451,6 +4474,12 @@ async function handleQuoteTrade(marketId, side) {
     currentClientSignedOrder = null;
     renderTradeTicketPanel();
     renderTradeExecutionResult(`<p class="empty">No execution prep run yet.</p>`);
+
+    if (options.focusPreview) {
+      if (options.closeDrawer) closeMarketDetailDrawer();
+      setTopLevelView("trade");
+      focusTradePreviewPanel();
+    }
   } catch (err) {
     alert(err.message || "Failed to quote trade");
   }
@@ -4621,9 +4650,11 @@ function renderTradeExecutionResult(html) {
 
 function bindTradeActionButtons() {
   document.querySelectorAll(".trade-action-btn").forEach((btn) => {
-    btn.onclick = () => {
-      handleQuoteTrade(btn.dataset.marketId, btn.dataset.side);
-      setTopLevelView("trade");
+    btn.onclick = async () => {
+      await handleQuoteTrade(btn.dataset.marketId, btn.dataset.side, {
+        focusPreview: true,
+        closeDrawer: Boolean(btn.closest("#marketDetailDrawer")),
+      });
     };
   });
 }
