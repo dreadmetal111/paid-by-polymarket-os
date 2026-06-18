@@ -977,27 +977,52 @@ function renderMetricBar(label, valueLabel, percent, className = "") {
   `;
 }
 
+function getMarketSignalScore(market) {
+  return Math.max(0, Math.min(100, Math.round(getDiscoveryRankScore(market))));
+}
+
+function renderSignalMeter(market) {
+  const score = getMarketSignalScore(market);
+  const activeSegments = Math.max(1, Math.min(5, Math.ceil(score / 20)));
+
+  return `
+    <div class="signal-meter" aria-label="Signal heat ${safeAttr(activeSegments)} of 5">
+      ${Array.from({ length: 5 })
+        .map((_, index) => `<span class="${index < activeSegments ? "active" : ""}"></span>`)
+        .join("")}
+      <strong>${safeText(score)}/100 signal heat</strong>
+    </div>
+  `;
+}
+
 function getWhyMarketIsInteresting(market) {
   const reasons = [];
   const movement = Math.abs(getMarketMovementValue(market));
   const volume = Number(market?.volume24hr || 0);
   const liquidity = Number(market?.liquidity || 0);
   const eventGroup = getMarketEventGroup(market);
+  const yesPrice = Number(market?.yesPriceLive);
 
   if (volume >= 250000) {
-    reasons.push("High volume means many traders are watching this market.");
+    reasons.push("High volume: many traders are watching this market.");
   }
   if (movement >= 0.04) {
-    reasons.push("Strong movement means odds recently shifted.");
+    reasons.push("Strong movement: odds recently shifted.");
   }
   if (liquidity >= 150000) {
-    reasons.push("High liquidity means the market may be easier to enter or exit.");
+    reasons.push("High liquidity: the market may be easier to enter or exit.");
+  }
+  if (Number.isFinite(yesPrice) && yesPrice >= 0.75) {
+    reasons.push("High YES probability: the market is pricing this outcome as more likely right now.");
+  }
+  if (Number.isFinite(yesPrice) && yesPrice > 0 && yesPrice <= 0.25) {
+    reasons.push("Low YES probability: the market is pricing this outcome as less likely right now.");
   }
   if (eventGroup) {
-    reasons.push("Related event markets can be compared in the event view.");
+    reasons.push("Related event: compare connected markets in the event view.");
   }
   if (market?.dataFreshness === "fresh" || market?.lastUpdated) {
-    reasons.push("Recent updates make this market worth a fresh look.");
+    reasons.push("New signal: recent updates make this market worth a fresh look.");
   }
 
   return reasons.length
@@ -1032,13 +1057,19 @@ function renderMarketDetailOverview(market) {
   const movementPercent = Math.max(4, Math.min(100, Math.abs(movement) * 1000));
 
   return `
-    <div class="market-detail-visual-stack">
-      ${renderMetricBar("YES probability", formatProbability(market.yesPriceLive), probabilityPercent, "probability")}
-      ${renderMetricBar("Volume strength", formatMoney(market.volume24hr), volumePercent, "volume")}
-      ${renderMetricBar("Liquidity strength", formatMoney(market.liquidity), liquidityPercent, "liquidity")}
-      ${movement
-        ? renderMetricBar("Recent movement", formatChangeAsProbability(movement), movementPercent, movement > 0 ? "moving-up" : "moving-down")
-        : `<p class="alert-time">Recent movement data is not available for this market yet.</p>`}
+    <div class="market-detail-snapshot-card">
+      <div class="market-detail-section-heading">
+        <p class="market-small">Signal snapshot</p>
+        <h3>Current market signals</h3>
+        <p class="alert-time">This is not price history. It is a CSS-only snapshot from current probability, movement, volume, and liquidity fields.</p>
+      </div>
+      ${renderSignalMeter(market)}
+      <div class="market-detail-visual-stack">
+        ${renderMetricBar("YES probability", formatProbability(market.yesPriceLive), probabilityPercent, "probability")}
+        ${renderMetricBar("Movement", movement ? formatChangeAsProbability(movement) : "--", movement ? movementPercent : 0, movement > 0 ? "moving-up" : movement < 0 ? "moving-down" : "")}
+        ${renderMetricBar("Volume", formatMoney(market.volume24hr), volumePercent, "volume")}
+        ${renderMetricBar("Liquidity", formatMoney(market.liquidity), liquidityPercent, "liquidity")}
+      </div>
     </div>
 
     <div class="market-detail-why">
@@ -1078,17 +1109,43 @@ function renderMarketDetailMarketTab(market) {
 
 function renderMarketDetailSocialTab(market) {
   const eventGroup = getMarketEventGroup(market);
+  const shortQuestion = getMarketOutcomeLabel(market) || market.question;
+  const detailParts = [
+    market.yesPriceLive ? `YES is around ${formatProbability(market.yesPriceLive)}` : "",
+    market.volume24hr ? `${formatMoney(market.volume24hr)} 24h volume` : "",
+    market.liquidity ? `${formatMoney(market.liquidity)} liquidity` : "",
+    getMarketMovementValue(market) ? `${formatChangeAsProbability(getMarketMovementValue(market))} recent movement` : "",
+  ].filter(Boolean);
+  const hook = "This prediction market is moving.";
+  const caption = [
+    `Watching this on House of Markets: "${market.question}"`,
+    detailParts.length ? detailParts.join(" with ") + "." : "",
+    "Not financial advice. Real market action happens on Polymarket.",
+  ].filter(Boolean).join("\n");
+  const storyCaption = `Market watch: ${shortQuestion} - see what is moving on House of Markets.`;
 
   return `
     <div class="market-detail-social-card">
-      <p class="market-small">Draft share angle</p>
-      <h3>This market is moving on House of Markets.</h3>
-      <p class="alert-time">
-        ${safeText(eventGroup ? `${eventGroup}: ` : "")}${safeText(market.question)}
-      </p>
-      <p class="alert-time">
-        Future: add charts, social context, and discussion tabs here. For v0, this is only a draft prompt.
-      </p>
+      <div class="market-detail-section-heading">
+        <p class="market-small">Share copy</p>
+        <h3>${safeText(hook)}</h3>
+        <p class="alert-time">${safeText(eventGroup ? `${eventGroup}: ` : "")}${safeText(shortQuestion)}</p>
+      </div>
+
+      <label class="market-detail-share-field">
+        <span class="meta-label">Ready-to-copy caption</span>
+        <textarea id="marketDetailShareText" rows="5" readonly>${safeText(caption)}</textarea>
+      </label>
+
+      <div class="market-detail-share-box">
+        <span class="meta-label">Story caption</span>
+        <p>${safeText(storyCaption)}</p>
+      </div>
+
+      <div class="market-footer market-detail-share-actions">
+        <button id="copyMarketShareTextBtn" type="button">Copy share text</button>
+        <span id="marketDetailCopyStatus" class="alert-time" aria-live="polite"></span>
+      </div>
     </div>
   `;
 }
@@ -1196,6 +1253,9 @@ function closeMarketDetailDrawer() {
 
 function bindMarketDetailControls() {
   const drawer = ensureMarketDetailDrawer();
+  const copyShareBtn = drawer.querySelector("#copyMarketShareTextBtn");
+  const shareText = drawer.querySelector("#marketDetailShareText");
+  const copyStatus = drawer.querySelector("#marketDetailCopyStatus");
 
   drawer.querySelectorAll("[data-market-detail-close]").forEach((element) => {
     element.onclick = closeMarketDetailDrawer;
@@ -1210,6 +1270,20 @@ function bindMarketDetailControls() {
       renderMarketDetailDrawer(market);
     };
   });
+
+  if (copyShareBtn && shareText) {
+    copyShareBtn.onclick = async () => {
+      const text = shareText.value || "";
+      try {
+        await navigator.clipboard.writeText(text);
+        if (copyStatus) copyStatus.textContent = "Copied.";
+      } catch {
+        shareText.focus();
+        shareText.select();
+        if (copyStatus) copyStatus.textContent = "Select the text above to copy.";
+      }
+    };
+  }
 }
 
 function bindMarketDetailOpeners() {

@@ -412,9 +412,54 @@ details summary {
   margin-top: 16px;
 }
 
+.market-detail-snapshot-card,
+.market-detail-social-card {
+  border: 1px solid rgba(56, 189, 248, 0.16);
+  border-radius: var(--radius-sm);
+  background:
+    linear-gradient(180deg, rgba(8, 47, 73, 0.18), rgba(2, 8, 23, 0.46));
+  padding: 14px;
+}
+
+.market-detail-section-heading {
+  display: grid;
+  gap: 5px;
+  margin-bottom: 14px;
+}
+
+.market-detail-section-heading h3 {
+  margin-bottom: 0;
+}
+
 .market-detail-visual-stack {
   display: grid;
   gap: 12px;
+}
+
+.signal-meter {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr)) auto;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 14px;
+}
+
+.signal-meter span {
+  height: 22px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.9);
+}
+
+.signal-meter span.active {
+  border-color: rgba(56, 189, 248, 0.34);
+  background: linear-gradient(90deg, rgba(56, 189, 248, 0.35), rgba(34, 197, 94, 0.28));
+}
+
+.signal-meter strong {
+  color: #bae6fd;
+  font-size: 0.78rem;
+  white-space: nowrap;
 }
 
 .market-detail-metric-bar {
@@ -464,16 +509,33 @@ details summary {
   background: var(--negative);
 }
 
-.market-detail-why,
-.market-detail-social-card {
+.market-detail-why {
   margin-top: 16px;
 }
 
-.market-detail-social-card {
+.market-detail-share-field {
+  display: grid;
+  gap: 8px;
+}
+
+.market-detail-share-field textarea {
+  min-height: 132px;
+  resize: vertical;
+}
+
+.market-detail-share-box {
+  display: grid;
+  gap: 7px;
+  margin-top: 12px;
   border: 1px solid rgba(148, 163, 184, 0.12);
   border-radius: var(--radius-sm);
-  background: rgba(2, 8, 23, 0.42);
-  padding: 14px;
+  background: rgba(2, 8, 23, 0.38);
+  padding: 12px;
+}
+
+.market-detail-share-actions {
+  align-items: center;
+  justify-content: flex-start;
 }
 
 .market-detail-meta-grid {
@@ -1600,6 +1662,14 @@ body.pbp-debug-mode .public-beta-internal-section {
   .market-detail-primary-stats,
   .market-detail-tabs {
     grid-template-columns: 1fr;
+  }
+
+  .signal-meter {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+
+  .signal-meter strong {
+    grid-column: 1 / -1;
   }
 
   .market-detail-actions {
