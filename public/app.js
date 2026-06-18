@@ -4,6 +4,7 @@ const POLYGON_HEX_CHAIN_ID = "0x89";
 const PBP_ALERTS_WAITLIST_STORAGE_KEY = "pbpAlertsWaitlistEmails";
 const HOM_WATCHLIST_STORAGE_KEY = "houseOfMarketsWatchedMarkets";
 const HOM_WATCHLIST_EMAIL_STORAGE_KEY = "houseOfMarketsWatchlistEmail";
+const HOM_MARKET_PAGE_MODE_STORAGE_KEY = "houseOfMarketsMarketPageMode";
 const PBP_LATEST_ALERT_SIGNALS_LIMIT = 3;
 const DISCOVER_RESULT_LIMIT = 8;
 const DISCOVER_CANDIDATE_LIMIT = 120;
@@ -92,6 +93,7 @@ let quickDiscoveryExpanded = false;
 let activeMarketDetailId = "";
 let activeMarketDetailTab = "overview";
 let currentMarketPageId = "";
+let currentMarketPageMode = getStoredMarketPageMode();
 let currentEventSlug = "";
 let currentEventSort = "volume";
 let currentTradeTicket = null;
@@ -4447,12 +4449,97 @@ function renderMarketPageRelatedCard(market) {
   `;
 }
 
+function getStoredMarketPageMode() {
+  try {
+    return window.localStorage?.getItem(HOM_MARKET_PAGE_MODE_STORAGE_KEY) === "advanced"
+      ? "advanced"
+      : "beginner";
+  } catch {
+    return "beginner";
+  }
+}
+
+function saveMarketPageMode(mode) {
+  currentMarketPageMode = mode === "advanced" ? "advanced" : "beginner";
+  try {
+    window.localStorage?.setItem(HOM_MARKET_PAGE_MODE_STORAGE_KEY, currentMarketPageMode);
+  } catch {}
+}
+
+function renderMarketPageModeToggle() {
+  const modes = [
+    { key: "beginner", label: "Beginner" },
+    { key: "advanced", label: "Advanced" },
+  ];
+
+  return `
+    <div class="market-page-mode-row" role="group" aria-label="Market detail mode">
+      ${modes
+        .map(
+          (mode) => `
+            <button
+              class="market-page-mode-pill ${currentMarketPageMode === mode.key ? "active" : ""}"
+              type="button"
+              data-market-page-mode="${safeAttr(mode.key)}"
+              aria-pressed="${currentMarketPageMode === mode.key ? "true" : "false"}"
+            >${safeText(mode.label)}</button>
+          `
+        )
+        .join("")}
+    </div>
+  `;
+}
+
 function getMarketPageUrl() {
   try {
     return window.location.href;
   } catch {
     return "";
   }
+}
+
+function renderMarketPageBeginnerRead(market) {
+  const probabilityMeta = getMarketProbabilityMeta(market.yesPriceLive);
+  const movementLabel = hasMarketMovementData(market)
+    ? formatChangeAsProbability(getMarketMovementValue(market))
+    : "No movement data yet";
+  const reasons = getWhyMarketIsInteresting(market).slice(0, 3);
+
+  return `
+    <div class="market-page-beginner-read">
+      <div class="market-page-simple-answer">
+        <p class="market-small">What this means</p>
+        <h3>People are pricing this YES outcome around ${safeText(probabilityMeta.label)}.</h3>
+        <p class="alert-time">YES means the market resolves in favor of this outcome. The percentage shows the current implied chance from the market.</p>
+      </div>
+
+      <div class="market-page-simple-stats">
+        <div class="meta-box"><span class="meta-label">YES probability</span><span class="meta-value">${safeText(probabilityMeta.label)}</span><small>${safeText(probabilityMeta.note)}</small></div>
+        <div class="meta-box"><span class="meta-label">Movement</span><span class="meta-value">${safeText(movementLabel)}</span><small>Recent change if available</small></div>
+        <div class="meta-box"><span class="meta-label">Updated</span><span class="meta-value">${safeText(formatTimestamp(market.lastUpdated))}</span><small>Live feed timestamp</small></div>
+      </div>
+
+      <div class="market-detail-why">
+        <h3>Why this is interesting</h3>
+        <div class="alerts-list">
+          ${reasons
+            .map(
+              (reason) => `
+                <div class="alert-item">
+                  <div class="alert-message">${safeText(reason)}</div>
+                </div>
+              `
+            )
+            .join("")}
+        </div>
+      </div>
+
+      <div class="alert-item market-page-preview-note">
+        <div class="alert-message">Preview is not a real trade.</div>
+        <div class="alert-time">Use Preview YES or Preview NO to fill the Trade Preview area. Use View on Polymarket when you want to open the real market.</div>
+      </div>
+    </div>
+  `;
 }
 
 function renderMarketPageView(marketId, options = {}) {
@@ -4495,8 +4582,11 @@ function renderMarketPageView(marketId, options = {}) {
   const movementLabel = hasMarketMovementData(market)
     ? formatChangeAsProbability(getMarketMovementValue(market))
     : "No movement data yet";
+  const isAdvancedMode = currentMarketPageMode === "advanced";
 
   section.classList.remove("market-page-hidden");
+  section.classList.toggle("market-page-beginner-mode", !isAdvancedMode);
+  section.classList.toggle("market-page-advanced-mode", isAdvancedMode);
   section.innerHTML = `
     <article class="market-card market-page-hero-card">
       <div class="market-page-topline">
@@ -4526,23 +4616,20 @@ function renderMarketPageView(marketId, options = {}) {
       </div>
     </article>
 
-    <div class="market-page-mode-row" aria-label="Market detail mode">
-      <span class="market-page-mode-pill active">Beginner</span>
-      <span class="market-page-mode-pill disabled" aria-disabled="true">Advanced coming soon</span>
-    </div>
+    ${renderMarketPageModeToggle()}
 
     <nav class="market-page-nav market-page-desktop-nav" aria-label="Market page sections">
       <a href="#marketPageOverview">Overview</a>
-      <a href="#marketPageSignals">Signals</a>
-      <a href="#marketPageRelated">Related</a>
-      <a href="#marketPageShare">Share</a>
+      ${isAdvancedMode ? `<a href="#marketPageSignals">Signals</a>` : ""}
+      ${isAdvancedMode ? `<a href="#marketPageRelated">Related</a>` : ""}
+      ${isAdvancedMode ? `<a href="#marketPageShare">Share</a>` : ""}
     </nav>
 
     <div class="market-page-mobile-tabs" role="tablist" aria-label="Market page mobile sections">
       <button class="active" type="button" role="tab" aria-selected="true" data-market-page-mobile-tab="read">Read</button>
       <button type="button" role="tab" aria-selected="false" data-market-page-mobile-tab="actions">Actions</button>
-      <button type="button" role="tab" aria-selected="false" data-market-page-mobile-tab="related">Related</button>
-      <button type="button" role="tab" aria-selected="false" data-market-page-mobile-tab="share">Share</button>
+      ${isAdvancedMode ? `<button type="button" role="tab" aria-selected="false" data-market-page-mobile-tab="related">Related</button>` : ""}
+      ${isAdvancedMode ? `<button type="button" role="tab" aria-selected="false" data-market-page-mobile-tab="share">Share</button>` : ""}
     </div>
 
     <div class="market-page-layout">
@@ -4550,53 +4637,59 @@ function renderMarketPageView(marketId, options = {}) {
         <div class="market-page-read-pane market-page-mobile-panel active" data-market-page-mobile-panel="read">
           <article id="marketPageOverview" class="market-card market-page-card">
             <div class="market-page-section-heading">
-              <p class="market-small">Market read</p>
-              <h3>What to notice first</h3>
-              <p class="alert-time">Start with the question, YES probability, movement, and why this market is interesting. Use the action pane when you are ready to preview interest or open Polymarket.</p>
+              <p class="market-small">${isAdvancedMode ? "Advanced read" : "Beginner read"}</p>
+              <h3>${isAdvancedMode ? "Signal snapshot" : "What to notice first"}</h3>
+              <p class="alert-time">${isAdvancedMode
+                ? "Use this deeper signal view to compare probability, movement, volume, liquidity, and related context."
+                : "Start with the question, YES probability, movement, and why this market is interesting. Use the action pane when you are ready to preview interest or open Polymarket."}</p>
             </div>
-            ${renderMarketDetailOverview(market)}
+            ${isAdvancedMode ? renderMarketDetailOverview(market) : renderMarketPageBeginnerRead(market)}
           </article>
 
-          <article id="marketPageSignals" class="market-card market-page-card">
-            <div class="market-page-section-heading">
-              <p class="market-small">Signals</p>
-              <h3>Market details</h3>
-              <p class="alert-time">Advanced fields stay here so the first read stays simple.</p>
-            </div>
-            ${renderMarketDetailMarketTab(market)}
-          </article>
+          ${isAdvancedMode ? `
+            <article id="marketPageSignals" class="market-card market-page-card">
+              <div class="market-page-section-heading">
+                <p class="market-small">Signals</p>
+                <h3>Structured market details</h3>
+                <p class="alert-time">These fields come from the current live market feed. This is not a historical chart.</p>
+              </div>
+              ${renderMarketDetailMarketTab(market)}
+            </article>
+          ` : ""}
         </div>
 
-        <article id="marketPageRelated" class="market-card market-page-card market-page-related-section market-page-mobile-panel" data-market-page-mobile-panel="related">
-          <div class="market-page-section-heading">
-            <p class="market-small">Related Markets</p>
-            <h3>${safeText(eventGroup || "Related markets")}</h3>
-            <p class="alert-time">Compare markets from the same event or family. Each card links to its own dedicated market page.</p>
-          </div>
-          <div class="market-grid market-page-related-grid" style="margin-top: 14px;">
-            ${relatedMarkets.length
-              ? relatedMarkets.map(renderMarketPageRelatedCard).join("")
-              : `<p class="empty">No related markets are available in the current live feed.</p>`}
-          </div>
-        </article>
+        ${isAdvancedMode ? `
+          <article id="marketPageRelated" class="market-card market-page-card market-page-related-section market-page-mobile-panel" data-market-page-mobile-panel="related">
+            <div class="market-page-section-heading">
+              <p class="market-small">Related Markets</p>
+              <h3>${safeText(eventGroup || "Related markets")}</h3>
+              <p class="alert-time">Compare markets from the same event or family. Each card links to its own dedicated market page.</p>
+            </div>
+            <div class="market-grid market-page-related-grid" style="margin-top: 14px;">
+              ${relatedMarkets.length
+                ? relatedMarkets.map(renderMarketPageRelatedCard).join("")
+                : `<p class="empty">No related markets are available in the current live feed.</p>`}
+            </div>
+          </article>
 
-        <article id="marketPageShare" class="market-card market-page-card market-page-mobile-panel" data-market-page-mobile-panel="share">
-          <div class="market-page-section-heading">
-            <p class="market-small">Share</p>
-            <h3>Share this market page</h3>
-            <p class="alert-time">Copy the page link or use the draft caption below. No social integrations are connected yet.</p>
-          </div>
-          <div class="market-footer market-page-action-row market-page-copy-link-row">
-            <input id="marketPageLinkInput" type="text" readonly value="${safeAttr(getMarketPageUrl())}" aria-label="Market page link" />
-            <button id="copyMarketPageLinkBtn" type="button">Copy market link</button>
-            <span id="marketPageLinkCopyStatus" class="alert-time" aria-live="polite"></span>
-          </div>
-          ${renderMarketSocialShareCard(market, {
-            textareaId: "marketPageShareText",
-            buttonId: "copyMarketPageShareTextBtn",
-            statusId: "marketPageCopyStatus",
-          })}
-        </article>
+          <article id="marketPageShare" class="market-card market-page-card market-page-mobile-panel" data-market-page-mobile-panel="share">
+            <div class="market-page-section-heading">
+              <p class="market-small">Share</p>
+              <h3>Share this market page</h3>
+              <p class="alert-time">Copy the page link or use the draft caption below. No social integrations are connected yet.</p>
+            </div>
+            <div class="market-footer market-page-action-row market-page-copy-link-row">
+              <input id="marketPageLinkInput" type="text" readonly value="${safeAttr(getMarketPageUrl())}" aria-label="Market page link" />
+              <button id="copyMarketPageLinkBtn" type="button">Copy market link</button>
+              <span id="marketPageLinkCopyStatus" class="alert-time" aria-live="polite"></span>
+            </div>
+            ${renderMarketSocialShareCard(market, {
+              textareaId: "marketPageShareText",
+              buttonId: "copyMarketPageShareTextBtn",
+              statusId: "marketPageCopyStatus",
+            })}
+          </article>
+        ` : ""}
       </div>
 
       <aside class="market-page-side-column market-page-mobile-panel" data-market-page-mobile-panel="actions">
@@ -4621,6 +4714,7 @@ function renderMarketPageView(marketId, options = {}) {
             <button class="trade-action-btn secondary-trade-btn" data-market-id="${safeAttr(market.id)}" data-side="BUY YES">Preview YES</button>
             <button class="trade-action-btn secondary-trade-btn" data-market-id="${safeAttr(market.id)}" data-side="BUY NO">Preview NO</button>
             ${renderWatchlistButton(market, "market-page")}
+            <input id="marketPageLinkInputSide" class="market-page-side-link-input" type="text" readonly value="${safeAttr(getMarketPageUrl())}" aria-label="Market page link" />
             <button id="copyMarketPageLinkBtnSide" type="button">Copy market link</button>
             <span id="marketPageLinkCopyStatusSide" class="alert-time" aria-live="polite"></span>
           </div>
@@ -4632,8 +4726,8 @@ function renderMarketPageView(marketId, options = {}) {
             <div class="meta-box"><span class="meta-label">YES</span><span class="meta-value">${safeText(probabilityMeta.label)}</span></div>
             <div class="meta-box"><span class="meta-label">Label</span><span class="meta-value">${safeText(probabilityMeta.note)}</span></div>
             <div class="meta-box"><span class="meta-label">Movement</span><span class="meta-value">${safeText(movementLabel)}</span></div>
-            <div class="meta-box"><span class="meta-label">Volume</span><span class="meta-value">${safeText(formatMoney(market.volume24hr, "Volume unavailable"))}</span></div>
-            <div class="meta-box"><span class="meta-label">Liquidity</span><span class="meta-value">${safeText(formatMoney(market.liquidity, "Liquidity unavailable"))}</span></div>
+            ${isAdvancedMode ? `<div class="meta-box"><span class="meta-label">Volume</span><span class="meta-value">${safeText(formatMoney(market.volume24hr, "Volume unavailable"))}</span></div>` : ""}
+            ${isAdvancedMode ? `<div class="meta-box"><span class="meta-label">Liquidity</span><span class="meta-value">${safeText(formatMoney(market.liquidity, "Liquidity unavailable"))}</span></div>` : ""}
             <div class="meta-box"><span class="meta-label">Updated</span><span class="meta-value">${safeText(formatTimestamp(market.lastUpdated))}</span></div>
           </div>
         </article>
@@ -4686,6 +4780,16 @@ function setMarketPageMobilePanel(panelName) {
   });
 }
 
+function setMarketPageMode(mode) {
+  const nextMode = mode === "advanced" ? "advanced" : "beginner";
+  if (currentMarketPageMode === nextMode) return;
+
+  saveMarketPageMode(nextMode);
+  if (currentMarketPageId) {
+    renderMarketPageView(currentMarketPageId, { updateUrl: false, scroll: false });
+  }
+}
+
 function bindMarketPageControls() {
   const backBtn = document.getElementById("marketPageBackBtn");
   const copyBtn = document.getElementById("copyMarketPageShareTextBtn");
@@ -4694,24 +4798,28 @@ function bindMarketPageControls() {
   const copyLinkBtn = document.getElementById("copyMarketPageLinkBtn");
   const copyLinkBtnSide = document.getElementById("copyMarketPageLinkBtnSide");
   const linkInput = document.getElementById("marketPageLinkInput");
+  const linkInputSide = document.getElementById("marketPageLinkInputSide");
   const linkStatus = document.getElementById("marketPageLinkCopyStatus");
   const linkStatusSide = document.getElementById("marketPageLinkCopyStatusSide");
 
-  const copyMarketPageLink = async (statusElement) => {
-    const text = linkInput?.value || getMarketPageUrl();
+  const copyMarketPageLink = async (statusElement, inputElement = linkInput) => {
+    const text = inputElement?.value || linkInput?.value || getMarketPageUrl();
     try {
       await navigator.clipboard.writeText(text);
       if (statusElement) statusElement.textContent = "Market link copied.";
     } catch {
-      linkInput?.focus();
-      linkInput?.select();
+      inputElement?.focus();
+      inputElement?.select();
       if (statusElement) statusElement.textContent = "Select the link to copy.";
     }
   };
 
   if (backBtn) backBtn.onclick = () => clearMarketPageView({ updateUrl: true });
   if (copyLinkBtn) copyLinkBtn.onclick = () => copyMarketPageLink(linkStatus);
-  if (copyLinkBtnSide) copyLinkBtnSide.onclick = () => copyMarketPageLink(linkStatusSide);
+  if (copyLinkBtnSide) copyLinkBtnSide.onclick = () => copyMarketPageLink(linkStatusSide, linkInputSide);
+  document.querySelectorAll("[data-market-page-mode]").forEach((button) => {
+    button.onclick = () => setMarketPageMode(button.dataset.marketPageMode || "beginner");
+  });
   document.querySelectorAll("[data-market-page-mobile-tab]").forEach((button) => {
     button.onclick = () => setMarketPageMobilePanel(button.dataset.marketPageMobileTab || "read");
   });
