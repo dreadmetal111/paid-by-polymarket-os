@@ -154,6 +154,103 @@ details summary {
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
+.watchlist-action-btn {
+  border-color: rgba(56, 189, 248, 0.36);
+  background: rgba(56, 189, 248, 0.1);
+  color: #dff6ff;
+}
+
+.watchlist-action-btn:hover,
+.watchlist-action-btn:focus-visible {
+  border-color: rgba(56, 189, 248, 0.66);
+  background: rgba(56, 189, 248, 0.18);
+}
+
+.watchlist-action-btn.is-watching {
+  border-color: rgba(34, 197, 94, 0.5);
+  background: rgba(34, 197, 94, 0.13);
+  color: #bbf7d0;
+}
+
+.watchlist-toast {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 95;
+  max-width: min(340px, calc(100vw - 36px));
+  padding: 12px 14px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: var(--radius-sm);
+  background: rgba(2, 8, 23, 0.96);
+  color: var(--text);
+  box-shadow: var(--shadow);
+  opacity: 0;
+  transform: translateY(10px);
+  pointer-events: none;
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+
+.watchlist-toast.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.watchlist-toast.success {
+  border-color: rgba(34, 197, 94, 0.42);
+}
+
+.watchlist-toast.error {
+  border-color: rgba(248, 113, 113, 0.48);
+}
+
+.watchlist-prompt-shell {
+  position: fixed;
+  inset: 0;
+  z-index: 110;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+}
+
+.watchlist-prompt-hidden {
+  display: none;
+}
+
+.watchlist-prompt-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(2, 8, 23, 0.72);
+  backdrop-filter: blur(10px);
+}
+
+.watchlist-prompt-card {
+  position: relative;
+  z-index: 1;
+  width: min(440px, 100%);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: var(--radius);
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0.98), rgba(2, 8, 23, 0.98));
+  box-shadow: var(--shadow);
+  padding: 20px;
+}
+
+.watchlist-prompt-card h2 {
+  margin: 4px 0 8px;
+}
+
+.watchlist-prompt-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  padding: 8px 10px;
+}
+
+.watchlist-prompt-form {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+}
+
 .public-top-tabs-card {
   display: grid;
   grid-template-columns: minmax(0, 0.85fr) minmax(360px, 1.15fr);

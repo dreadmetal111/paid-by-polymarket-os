@@ -12,3 +12,5 @@ data/outbound-click-events.json
 data/.outbound-click-events.*.tmp
 data/beta-feedback.json
 data/.beta-feedback.*.tmp
+data/watchlist-interest.json
+data/.watchlist-interest.*.tmp

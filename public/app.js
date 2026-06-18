@@ -2,6 +2,8 @@ const POLYMARKET_CLOB_HOST = "https://clob.polymarket.com";
 const POLYMARKET_CHAIN_ID = 137;
 const POLYGON_HEX_CHAIN_ID = "0x89";
 const PBP_ALERTS_WAITLIST_STORAGE_KEY = "pbpAlertsWaitlistEmails";
+const HOM_WATCHLIST_STORAGE_KEY = "houseOfMarketsWatchedMarkets";
+const HOM_WATCHLIST_EMAIL_STORAGE_KEY = "houseOfMarketsWatchlistEmail";
 const PBP_LATEST_ALERT_SIGNALS_LIMIT = 3;
 const DISCOVER_RESULT_LIMIT = 8;
 const DISCOVER_CANDIDATE_LIMIT = 120;
@@ -280,6 +282,8 @@ function sendOutboundMarketClick(payload) {
 }
 
 let outboundClickTrackingBound = false;
+let watchlistInterestTrackingBound = false;
+let pendingWatchlistInterest = null;
 
 function bindOutboundClickTracking() {
   if (outboundClickTrackingBound) return;
@@ -323,6 +327,194 @@ function storeAlertsWaitlistEmails(emails) {
   } catch {
     return false;
   }
+}
+
+function getStoredWatchlistEmail() {
+  try {
+    const email = String(window.localStorage?.getItem(HOM_WATCHLIST_EMAIL_STORAGE_KEY) || "").trim().toLowerCase();
+    return isValidEmail(email) ? email : "";
+  } catch {
+    return "";
+  }
+}
+
+function storeWatchlistEmail(email) {
+  const normalized = String(email || "").trim().toLowerCase();
+  if (!isValidEmail(normalized)) return false;
+
+  try {
+    window.localStorage?.setItem(HOM_WATCHLIST_EMAIL_STORAGE_KEY, normalized);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function getBestWatchlistEmail() {
+  const watchlistEmail = getStoredWatchlistEmail();
+  if (watchlistEmail) return watchlistEmail;
+
+  const waitlistEmails = getStoredAlertsWaitlistEmails();
+  return waitlistEmails[waitlistEmails.length - 1] || "";
+}
+
+function getStoredWatchedMarketKeys() {
+  try {
+    const raw = window.localStorage?.getItem(HOM_WATCHLIST_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed)
+      ? parsed.filter((item) => typeof item === "string" && item.trim())
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function storeWatchedMarketKey(key) {
+  const normalizedKey = String(key || "").trim();
+  if (!normalizedKey) return false;
+
+  try {
+    const keys = new Set(getStoredWatchedMarketKeys());
+    keys.add(normalizedKey);
+    window.localStorage?.setItem(HOM_WATCHLIST_STORAGE_KEY, JSON.stringify(Array.from(keys)));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function getWatchlistMarketKey(market) {
+  return String(
+    getMarketDetailId(market) ||
+      market?.marketFamilyKey ||
+      market?.slug ||
+      market?.question ||
+      ""
+  ).trim();
+}
+
+function isMarketWatched(marketOrKey) {
+  const key = typeof marketOrKey === "string" ? marketOrKey : getWatchlistMarketKey(marketOrKey);
+  return !!key && getStoredWatchedMarketKeys().includes(key);
+}
+
+function setWatchlistButtonStateForKey(key, status = "watching") {
+  const normalizedKey = String(key || "").trim();
+  if (!normalizedKey) return;
+
+  document.querySelectorAll(".watchlist-action-btn").forEach((button) => {
+    if (button.dataset.watchlistKey !== normalizedKey) return;
+    button.classList.toggle("is-watching", status === "watching");
+    button.textContent = status === "watching" ? "Watching" : "Notify me";
+    button.setAttribute("aria-label", status === "watching" ? "Already watching this market" : "Notify me about this market");
+  });
+}
+
+function showWatchlistStatus(message, type = "success") {
+  let toast = document.getElementById("watchlistInterestToast");
+  if (!toast) {
+    toast = document.createElement("div");
+    toast.id = "watchlistInterestToast";
+    toast.className = "watchlist-toast";
+    toast.setAttribute("aria-live", "polite");
+    document.body.appendChild(toast);
+  }
+
+  toast.classList.remove("success", "error");
+  toast.classList.add(type);
+  toast.textContent = message;
+  toast.classList.add("is-visible");
+
+  window.clearTimeout(showWatchlistStatus.timeoutId);
+  showWatchlistStatus.timeoutId = window.setTimeout(() => {
+    toast.classList.remove("is-visible");
+  }, 2600);
+}
+
+function ensureWatchlistEmailPrompt() {
+  let prompt = document.getElementById("watchlistEmailPrompt");
+  if (prompt) return prompt;
+
+  prompt = document.createElement("div");
+  prompt.id = "watchlistEmailPrompt";
+  prompt.className = "watchlist-prompt-shell watchlist-prompt-hidden";
+  prompt.setAttribute("aria-hidden", "true");
+  prompt.innerHTML = `
+    <div class="watchlist-prompt-backdrop" data-watchlist-prompt-close="true"></div>
+    <div class="watchlist-prompt-card" role="dialog" aria-modal="true" aria-labelledby="watchlistPromptTitle">
+      <button class="watchlist-prompt-close" type="button" data-watchlist-prompt-close="true" aria-label="Close watchlist prompt">Close</button>
+      <p class="market-small">Market alerts beta</p>
+      <h2 id="watchlistPromptTitle">Where should we send market alerts?</h2>
+      <p class="alert-time">Notify/Watchlist is alert interest only. It does not place a trade.</p>
+      <form id="watchlistEmailPromptForm" class="watchlist-prompt-form">
+        <label class="meta-label" for="watchlistPromptEmail">Email</label>
+        <input id="watchlistPromptEmail" type="email" autocomplete="email" inputmode="email" placeholder="you@example.com" required />
+        <button type="submit">Submit</button>
+      </form>
+      <p id="watchlistPromptStatus" class="pbp-alert-waitlist-status" aria-live="polite"></p>
+    </div>
+  `;
+  document.body.appendChild(prompt);
+
+  prompt.addEventListener("click", (event) => {
+    if (event.target?.closest?.("[data-watchlist-prompt-close='true']")) {
+      closeWatchlistEmailPrompt();
+    }
+  });
+
+  prompt.querySelector("#watchlistEmailPromptForm")?.addEventListener("submit", handleWatchlistEmailPromptSubmit);
+  return prompt;
+}
+
+function setWatchlistPromptStatus(type, message) {
+  const status = document.getElementById("watchlistPromptStatus");
+  if (!status) return;
+  status.classList.remove("success", "error");
+  if (type) status.classList.add(type);
+  status.textContent = message;
+}
+
+function openWatchlistEmailPrompt(request) {
+  pendingWatchlistInterest = request;
+  const prompt = ensureWatchlistEmailPrompt();
+  const input = document.getElementById("watchlistPromptEmail");
+  const storedEmail = getBestWatchlistEmail();
+
+  if (input) input.value = storedEmail;
+  setWatchlistPromptStatus("", "");
+  prompt.classList.remove("watchlist-prompt-hidden");
+  prompt.setAttribute("aria-hidden", "false");
+  window.setTimeout(() => input?.focus(), 50);
+}
+
+function closeWatchlistEmailPrompt() {
+  const prompt = document.getElementById("watchlistEmailPrompt");
+  if (!prompt) return;
+  prompt.classList.add("watchlist-prompt-hidden");
+  prompt.setAttribute("aria-hidden", "true");
+  pendingWatchlistInterest = null;
+}
+
+async function handleWatchlistEmailPromptSubmit(event) {
+  event.preventDefault();
+
+  const input = document.getElementById("watchlistPromptEmail");
+  const email = String(input?.value || "").trim().toLowerCase();
+  if (!isValidEmail(email)) {
+    setWatchlistPromptStatus("error", "Enter a valid email address.");
+    return;
+  }
+
+  if (!pendingWatchlistInterest) {
+    setWatchlistPromptStatus("error", "Choose a market first.");
+    return;
+  }
+
+  setWatchlistPromptStatus("", "Adding this market...");
+  await submitWatchlistInterest(pendingWatchlistInterest.market, pendingWatchlistInterest.source, email, {
+    closePrompt: true,
+  });
 }
 
 function setAlertsWaitlistStatus(type, message) {
@@ -999,6 +1191,111 @@ function getMarketDetailId(market) {
   ).trim();
 }
 
+function buildWatchlistInterestPayload(market, source, email) {
+  return {
+    email,
+    marketId: getWatchlistMarketKey(market),
+    marketQuestion: String(market?.question || ""),
+    eventTitle: getMarketEventGroup(market) || "",
+    category: getPublicCategoryLabel(market),
+    yesProbability: hasUsableProbability(market?.yesPriceLive) ? getFiniteNumber(market.yesPriceLive) : null,
+    volume: getNonNegativeNumber(market?.volume24hr),
+    liquidity: getNonNegativeNumber(market?.liquidity),
+    source,
+    timestamp: new Date().toISOString(),
+  };
+}
+
+async function submitWatchlistInterest(market, source, email, options = {}) {
+  const key = getWatchlistMarketKey(market);
+  if (!market || !key) {
+    showWatchlistStatus("Could not identify this market.", "error");
+    return;
+  }
+
+  if (isMarketWatched(key)) {
+    setWatchlistButtonStateForKey(key, "watching");
+    showWatchlistStatus("Already watching");
+    if (options.closePrompt) closeWatchlistEmailPrompt();
+    return;
+  }
+
+  if (!isValidEmail(email)) {
+    openWatchlistEmailPrompt({ market, source });
+    return;
+  }
+
+  try {
+    await postJson("/api/watchlist-interest", buildWatchlistInterestPayload(market, source, email));
+    storeWatchlistEmail(email);
+    storeWatchedMarketKey(key);
+    setWatchlistButtonStateForKey(key, "watching");
+    showWatchlistStatus("Added to watchlist");
+    if (options.closePrompt) closeWatchlistEmailPrompt();
+  } catch (error) {
+    const message = error.message || "Could not add this market yet.";
+    if (options.closePrompt) {
+      setWatchlistPromptStatus("error", message);
+    } else {
+      showWatchlistStatus(message, "error");
+    }
+  }
+}
+
+function renderWatchlistButton(market, source = "market-card") {
+  const key = getWatchlistMarketKey(market);
+  if (!key || !market?.question) return "";
+
+  const watching = isMarketWatched(key);
+  return `
+    <button
+      class="watchlist-action-btn ${watching ? "is-watching" : ""}"
+      type="button"
+      data-watchlist-key="${safeAttr(key)}"
+      data-market-detail-id="${safeAttr(getMarketDetailId(market))}"
+      data-watchlist-source="${safeAttr(source)}"
+      aria-label="${watching ? "Already watching this market" : "Notify me about this market"}"
+    >${watching ? "Watching" : "Notify me"}</button>
+  `;
+}
+
+function bindWatchlistInterestTracking() {
+  if (watchlistInterestTrackingBound) return;
+  watchlistInterestTrackingBound = true;
+
+  document.addEventListener("click", async (event) => {
+    const button = event.target?.closest?.(".watchlist-action-btn");
+    if (!button) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    const key = button.dataset.watchlistKey || button.dataset.marketDetailId || "";
+    const market = getMarketByDetailId(button.dataset.marketDetailId) ||
+      (Array.isArray(liveMarketsCache) ? liveMarketsCache : []).find((item) => getWatchlistMarketKey(item) === key);
+    const source = button.dataset.watchlistSource || "market-card";
+
+    if (!market) {
+      showWatchlistStatus("Could not identify this market.", "error");
+      return;
+    }
+
+    if (isMarketWatched(key)) {
+      setWatchlistButtonStateForKey(key, "watching");
+      showWatchlistStatus("Already watching");
+      return;
+    }
+
+    const email = getBestWatchlistEmail();
+    if (email) {
+      await submitWatchlistInterest(market, source, email);
+      return;
+    }
+
+    openWatchlistEmailPrompt({ market, source });
+  });
+}
+
 function getStrengthPercent(value, scale) {
   const numeric = getNonNegativeNumber(value);
   const safeScale = getFiniteNumber(scale);
@@ -1269,6 +1566,7 @@ function renderMarketDetailDrawer(market) {
         data-source-section="market-detail-drawer"
         data-cta="view-on-polymarket"
       >View on Polymarket</a>
+      ${renderWatchlistButton(market, "market-detail-drawer")}
       <button class="trade-action-btn secondary-trade-btn" data-market-id="${safeAttr(market.id)}" data-side="BUY YES">Preview YES</button>
       <button class="trade-action-btn secondary-trade-btn" data-market-id="${safeAttr(market.id)}" data-side="BUY NO">Preview NO</button>
     </div>
@@ -1521,6 +1819,7 @@ function renderCompactMarketActions(market, sourceSection) {
         data-source-section="${safeAttr(trackingSource)}"
         data-cta="view-on-polymarket"
       >View on Polymarket</a>
+      ${renderWatchlistButton(market, sourceSection)}
       <button class="trade-action-btn secondary-trade-btn" data-market-id="${safeAttr(market.id)}" data-side="BUY YES">Preview YES</button>
       <button class="trade-action-btn secondary-trade-btn" data-market-id="${safeAttr(market.id)}" data-side="BUY NO">Preview NO</button>
     </div>
@@ -3882,6 +4181,7 @@ function renderHotCard(market, sourceSection = currentDiscoverView) {
       <div class="market-footer" style="margin-top: 12px;">
         <button class="trade-action-btn secondary-trade-btn" data-market-id="${safeAttr(market.id)}" data-side="BUY YES">Preview YES</button>
         <button class="trade-action-btn secondary-trade-btn" data-market-id="${safeAttr(market.id)}" data-side="BUY NO">Preview NO</button>
+        ${renderWatchlistButton(market, sourceSection)}
       </div>
     </article>
   `;
@@ -3918,6 +4218,7 @@ function renderGroupedMarketChild(market, sourceSection, index) {
           data-source-section="${safeAttr(trackingSource)}"
           data-cta="view-on-polymarket"
         >View</a>
+        ${renderWatchlistButton(market, "grouped-event-child")}
         <button class="trade-action-btn secondary-trade-btn" data-market-id="${safeAttr(market.id)}" data-side="BUY YES">Preview YES</button>
         <button class="trade-action-btn secondary-trade-btn" data-market-id="${safeAttr(market.id)}" data-side="BUY NO">Preview NO</button>
       </div>
@@ -4052,6 +4353,7 @@ function renderEventMarketCard(market, sourceSection = "event-detail") {
         <span class="market-small">Safe preview only</span>
         <button class="trade-action-btn secondary-trade-btn" data-market-id="${safeAttr(market.id)}" data-side="BUY YES">Preview YES</button>
         <button class="trade-action-btn secondary-trade-btn" data-market-id="${safeAttr(market.id)}" data-side="BUY NO">Preview NO</button>
+        ${renderWatchlistButton(market, sourceSection)}
       </div>
     </article>
   `;
@@ -4268,6 +4570,7 @@ function renderMoverCard(market, sourceSection = "movers") {
       <div class="market-footer" style="margin-top: 12px;">
         <button class="trade-action-btn secondary-trade-btn" data-market-id="${safeAttr(market.id)}" data-side="BUY YES">Preview YES</button>
         <button class="trade-action-btn secondary-trade-btn" data-market-id="${safeAttr(market.id)}" data-side="BUY NO">Preview NO</button>
+        ${renderWatchlistButton(market, sourceSection)}
       </div>
     </article>
   `;
@@ -4940,6 +5243,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   bindAlertsWaitlistForm();
   bindBetaFeedbackForm();
   bindOutboundClickTracking();
+  bindWatchlistInterestTracking();
   bindPublicTopDiscoveryTabs();
   bindMarketDetailGlobalControls();
   ensureHomepageStrategyLayer();

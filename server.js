@@ -23,9 +23,14 @@ const BETA_FEEDBACK_DATA_FILE = path.resolve(
   process.env.PBP_BETA_FEEDBACK_DATA_FILE ||
     path.join(__dirname, "data", "beta-feedback.json")
 );
+const WATCHLIST_INTEREST_DATA_FILE = path.resolve(
+  process.env.PBP_WATCHLIST_INTEREST_DATA_FILE ||
+    path.join(__dirname, "data", "watchlist-interest.json")
+);
 const ALERT_SIGNALS_TABLE = "alert_signals";
 const OUTBOUND_CLICK_EVENTS_TABLE = "outbound_click_events";
 const BETA_FEEDBACK_TABLE = "beta_feedback";
+const WATCHLIST_INTEREST_TABLE = "watchlist_interest";
 const PUBLIC_ALERT_SIGNAL_LIMIT = 5;
 
 const GAMMA_BASE = "https://gamma-api.polymarket.com";
@@ -212,6 +217,7 @@ const signalLogByMarketId = new Map();
 let waitlistWriteQueue = Promise.resolve();
 let outboundClickWriteQueue = Promise.resolve();
 let betaFeedbackWriteQueue = Promise.resolve();
+let watchlistInterestWriteQueue = Promise.resolve();
 
 const demoState = {
   account: createInitialAccountState(),
@@ -483,6 +489,38 @@ function normalizeBetaFeedbackInput(body) {
   };
 }
 
+function normalizeWatchlistInterestNumber(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric >= 0 ? numeric : null;
+}
+
+function normalizeWatchlistInterestSource(value) {
+  return String(value || "public-beta")
+    .trim()
+    .replace(/[^\w .:/?#&=+-]/g, "")
+    .slice(0, 120) || "public-beta";
+}
+
+function normalizeWatchlistInterestInput(body) {
+  return {
+    email: normalizeBetaFeedbackEmail(body?.email),
+    marketId: sanitizeOutboundClickText(body?.marketId ?? body?.market_id, 180),
+    marketQuestion: sanitizeOutboundClickText(
+      body?.marketQuestion ?? body?.market_question,
+      320
+    ),
+    eventTitle: sanitizeOutboundClickText(body?.eventTitle ?? body?.event_title, 220) || null,
+    category: sanitizeOutboundClickText(body?.category, 120) || null,
+    yesProbability: normalizeWatchlistInterestNumber(
+      body?.yesProbability ?? body?.yes_probability
+    ),
+    volume: normalizeWatchlistInterestNumber(body?.volume),
+    liquidity: normalizeWatchlistInterestNumber(body?.liquidity),
+    source: normalizeWatchlistInterestSource(body?.source),
+  };
+}
+
 function toPublicAlertSignal(signal) {
   return {
     alertType: signal.alertType,
@@ -568,6 +606,27 @@ function normalizeBetaFeedbackData(raw) {
     version: 1,
     updatedAt: String(raw?.updatedAt || new Date().toISOString()),
     feedback: normalizedFeedback,
+  };
+}
+
+function normalizeWatchlistInterestData(raw) {
+  const interests = Array.isArray(raw?.interests) ? raw.interests : [];
+  const normalizedInterests = [];
+
+  for (const item of interests) {
+    const normalized = normalizeWatchlistInterestInput(item);
+    if (!isValidWaitlistEmail(normalized.email) || !normalized.marketQuestion) continue;
+
+    normalizedInterests.push({
+      ...normalized,
+      createdAt: String(item?.createdAt || new Date().toISOString()),
+    });
+  }
+
+  return {
+    version: 1,
+    updatedAt: String(raw?.updatedAt || new Date().toISOString()),
+    interests: normalizedInterests,
   };
 }
 
@@ -667,6 +726,38 @@ async function writeBetaFeedbackData(data) {
   await fs.rename(tempFile, BETA_FEEDBACK_DATA_FILE);
 }
 
+async function readWatchlistInterestData() {
+  try {
+    const rawJson = await fs.readFile(WATCHLIST_INTEREST_DATA_FILE, "utf8");
+    return normalizeWatchlistInterestData(JSON.parse(rawJson));
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return normalizeWatchlistInterestData({ interests: [] });
+    }
+    throw error;
+  }
+}
+
+async function writeWatchlistInterestData(data) {
+  const normalizedData = normalizeWatchlistInterestData({
+    ...data,
+    updatedAt: new Date().toISOString(),
+  });
+  const directory = path.dirname(WATCHLIST_INTEREST_DATA_FILE);
+  const tempFile = path.join(
+    directory,
+    `.watchlist-interest.${process.pid}.${Date.now()}.tmp`
+  );
+
+  await fs.mkdir(directory, { recursive: true });
+  await fs.writeFile(
+    tempFile,
+    `${JSON.stringify(normalizedData, null, 2)}\n`,
+    "utf8"
+  );
+  await fs.rename(tempFile, WATCHLIST_INTEREST_DATA_FILE);
+}
+
 function getSupabaseWaitlistConfig() {
   const supabaseUrl = envFirst("SUPABASE_URL").replace(/\/+$/, "");
   const serviceRoleKey = envFirst("SUPABASE_SERVICE_ROLE_KEY");
@@ -713,6 +804,18 @@ function getSupabaseBetaFeedbackConfig() {
     supabaseUrl,
     serviceRoleKey,
     table: BETA_FEEDBACK_TABLE,
+  };
+}
+
+function getSupabaseWatchlistInterestConfig() {
+  const supabaseUrl = envFirst("SUPABASE_URL").replace(/\/+$/, "");
+  const serviceRoleKey = envFirst("SUPABASE_SERVICE_ROLE_KEY");
+
+  return {
+    enabled: !!(supabaseUrl && serviceRoleKey),
+    supabaseUrl,
+    serviceRoleKey,
+    table: WATCHLIST_INTEREST_TABLE,
   };
 }
 
@@ -802,6 +905,21 @@ function logBetaFeedbackStorageMode(context) {
   console.log(`[beta-feedback] ${context}`, buildBetaFeedbackStorageLog());
 }
 
+function buildWatchlistInterestStorageLog(config = getSupabaseWatchlistInterestConfig()) {
+  return {
+    storageMode: config.enabled ? "supabase" : "json",
+    supabaseEnabled: config.enabled,
+    supabaseHost: getSupabaseHost(config.supabaseUrl) || "not-configured",
+    supabaseTable: config.table,
+    supabaseUrlConfigured: !!config.supabaseUrl,
+    supabaseServiceRoleKeyConfigured: !!config.serviceRoleKey,
+  };
+}
+
+function logWatchlistInterestStorageMode(context) {
+  console.log(`[watchlist-interest] ${context}`, buildWatchlistInterestStorageLog());
+}
+
 function getActiveWaitlistStorageProvider() {
   const config = getSupabaseWaitlistConfig();
 
@@ -831,6 +949,15 @@ function getActiveOutboundClickStorageProvider() {
 
 function getActiveBetaFeedbackStorageProvider() {
   const config = getSupabaseBetaFeedbackConfig();
+
+  return {
+    storageMode: config.enabled ? "supabase" : "json",
+    config,
+  };
+}
+
+function getActiveWatchlistInterestStorageProvider() {
+  const config = getSupabaseWatchlistInterestConfig();
 
   return {
     storageMode: config.enabled ? "supabase" : "json",
@@ -1587,6 +1714,188 @@ async function readBetaFeedbackStatusSummary() {
         latestFeedbackAt: null,
       },
       feedbackStorage: "error",
+    };
+  }
+}
+
+function mapSupabaseWatchlistInterestRow(row) {
+  return {
+    email: normalizeBetaFeedbackEmail(row?.email),
+    marketId: sanitizeOutboundClickText(row?.market_id ?? row?.marketId, 180),
+    marketQuestion: sanitizeOutboundClickText(
+      row?.market_question ?? row?.marketQuestion,
+      320
+    ),
+    eventTitle: sanitizeOutboundClickText(row?.event_title ?? row?.eventTitle, 220) || null,
+    category: sanitizeOutboundClickText(row?.category, 120) || null,
+    yesProbability: normalizeWatchlistInterestNumber(row?.yes_probability ?? row?.yesProbability),
+    volume: normalizeWatchlistInterestNumber(row?.volume),
+    liquidity: normalizeWatchlistInterestNumber(row?.liquidity),
+    source: normalizeWatchlistInterestSource(row?.source),
+    createdAt: String(row?.created_at || row?.createdAt || new Date().toISOString()),
+  };
+}
+
+async function addSupabaseWatchlistInterest({
+  interest,
+  config = getSupabaseWatchlistInterestConfig(),
+}) {
+  const url = buildSupabaseTableUrl(config);
+
+  const rows = await fetchSupabaseJson(url, {
+    method: "POST",
+    headers: getSupabaseHeaders(config, {
+      "Content-Type": "application/json",
+      Prefer: "return=representation",
+    }),
+    body: JSON.stringify({
+      email: interest.email,
+      market_id: interest.marketId || null,
+      market_question: interest.marketQuestion,
+      event_title: interest.eventTitle,
+      category: interest.category,
+      yes_probability: interest.yesProbability,
+      volume: interest.volume,
+      liquidity: interest.liquidity,
+      source: interest.source,
+    }),
+    logLabel: "watchlist-interest",
+    errorLabel: "watchlist interest",
+  });
+
+  return Array.isArray(rows) && rows[0]
+    ? mapSupabaseWatchlistInterestRow(rows[0])
+    : {
+        ...interest,
+        createdAt: new Date().toISOString(),
+      };
+}
+
+async function addJsonWatchlistInterest(interest) {
+  const task = async () => {
+    const data = await readWatchlistInterestData();
+    const item = {
+      ...normalizeWatchlistInterestInput(interest),
+      createdAt: new Date().toISOString(),
+    };
+
+    data.interests.push(item);
+    await writeWatchlistInterestData(data);
+
+    return {
+      interest: item,
+      count: data.interests.length,
+    };
+  };
+
+  watchlistInterestWriteQueue = watchlistInterestWriteQueue.then(task, task);
+  return watchlistInterestWriteQueue;
+}
+
+async function addWatchlistInterest(interest) {
+  const provider = getActiveWatchlistInterestStorageProvider();
+
+  if (provider.storageMode === "supabase") {
+    try {
+      const inserted = await addSupabaseWatchlistInterest({
+        interest,
+        config: provider.config,
+      });
+
+      return {
+        interest: inserted,
+        count: null,
+        storageMode: provider.storageMode,
+      };
+    } catch (error) {
+      console.error("[watchlist-interest] Supabase save failed; falling back to JSON:", error.message);
+    }
+  }
+
+  const result = await addJsonWatchlistInterest(interest);
+  return {
+    ...result,
+    storageMode: "json",
+  };
+}
+
+function getLatestWatchlistInterestAt(interests) {
+  let latestTimestamp = 0;
+
+  for (const item of Array.isArray(interests) ? interests : []) {
+    const timestamp = Date.parse(item?.createdAt);
+    if (Number.isFinite(timestamp) && timestamp > latestTimestamp) {
+      latestTimestamp = timestamp;
+    }
+  }
+
+  return latestTimestamp ? new Date(latestTimestamp).toISOString() : null;
+}
+
+async function readJsonWatchlistInterestStatusSummary() {
+  const data = await readWatchlistInterestData();
+  const interests = Array.isArray(data.interests) ? data.interests : [];
+
+  return {
+    watchlistInterest: {
+      count: interests.length,
+      latestWatchlistAt: getLatestWatchlistInterestAt(interests),
+    },
+    watchlistInterestStorage: "ok",
+  };
+}
+
+async function readSupabaseWatchlistInterestStatusSummary(config) {
+  const url = buildSupabaseTableUrl(config);
+  url.searchParams.set("select", "created_at");
+  url.searchParams.set("order", "created_at.desc");
+
+  const rows = await fetchSupabaseJson(url, {
+    headers: getSupabaseHeaders(config),
+    logLabel: "watchlist-interest",
+    errorLabel: "watchlist interest",
+  });
+
+  const interests = (Array.isArray(rows) ? rows : []).map(mapSupabaseWatchlistInterestRow);
+
+  return {
+    watchlistInterest: {
+      count: interests.length,
+      latestWatchlistAt: getLatestWatchlistInterestAt(interests),
+    },
+    watchlistInterestStorage: "ok",
+  };
+}
+
+async function readWatchlistInterestStatusSummary() {
+  const provider = getActiveWatchlistInterestStorageProvider();
+
+  try {
+    if (provider.storageMode === "supabase") {
+      return await readSupabaseWatchlistInterestStatusSummary(provider.config);
+    }
+
+    return await readJsonWatchlistInterestStatusSummary();
+  } catch (error) {
+    console.error("[watchlist-interest] Status read failed:", error.message);
+    if (provider.storageMode === "supabase") {
+      try {
+        const fallbackSummary = await readJsonWatchlistInterestStatusSummary();
+        return {
+          watchlistInterest: fallbackSummary.watchlistInterest,
+          watchlistInterestStorage: "json_fallback",
+        };
+      } catch (fallbackError) {
+        console.error("[watchlist-interest] JSON fallback status read failed:", fallbackError.message);
+      }
+    }
+
+    return {
+      watchlistInterest: {
+        count: 0,
+        latestWatchlistAt: null,
+      },
+      watchlistInterestStorage: "error",
     };
   }
 }
@@ -4172,6 +4481,42 @@ app.post("/api/feedback", async (req, res) => {
   }
 });
 
+app.post("/api/watchlist-interest", async (req, res) => {
+  try {
+    const interest = normalizeWatchlistInterestInput(req.body);
+
+    if (!isValidWaitlistEmail(interest.email)) {
+      return res.status(400).json({
+        ok: false,
+        error: "Enter a valid email address.",
+      });
+    }
+
+    if (!interest.marketQuestion) {
+      return res.status(400).json({
+        ok: false,
+        error: "Market question is required.",
+      });
+    }
+
+    logWatchlistInterestStorageMode("save start");
+    const result = await addWatchlistInterest(interest);
+
+    return res.status(201).json({
+      ok: true,
+      status: "created",
+      storageMode: result.storageMode,
+      message: "Added to watchlist.",
+    });
+  } catch (error) {
+    console.error("[watchlist-interest] Save failed:", error.message);
+    return res.status(500).json({
+      ok: false,
+      error: "Failed to save watchlist interest.",
+    });
+  }
+});
+
 app.post("/api/waitlist", async (req, res) => {
   try {
     const email = normalizeWaitlistEmail(req.body?.email);
@@ -4243,17 +4588,20 @@ app.get("/api/admin/status", async (req, res) => {
     logAlertSignalStorageMode("admin status start");
     logOutboundClickStorageMode("admin status start");
     logBetaFeedbackStorageMode("admin status start");
-    const [waitlistSummary, alertSignalSummary, outboundClickSummary, feedbackSummary] = await Promise.all([
+    logWatchlistInterestStorageMode("admin status start");
+    const [waitlistSummary, alertSignalSummary, outboundClickSummary, feedbackSummary, watchlistInterestSummary] = await Promise.all([
       readWaitlistStatusSummary(),
       readAlertSignalStatusSummary(),
       readOutboundClickStatusSummary(),
       readBetaFeedbackStatusSummary(),
+      readWatchlistInterestStatusSummary(),
     ]);
     const checks = {
       waitlistStorage: "ok",
       alertStorage: alertSignalSummary.alertStorage,
       outboundClickStorage: outboundClickSummary.outboundClickStorage,
       feedbackStorage: feedbackSummary.feedbackStorage,
+      watchlistInterestStorage: watchlistInterestSummary.watchlistInterestStorage,
       adminAuth: "ok",
     };
     const statusOk = Object.values(checks).every((value) => value === "ok");
@@ -4266,6 +4614,7 @@ app.get("/api/admin/status", async (req, res) => {
       alertSignals: alertSignalSummary.alertSignals,
       outboundClicks: outboundClickSummary.outboundClicks,
       feedback: feedbackSummary.feedback,
+      watchlistInterest: watchlistInterestSummary.watchlistInterest,
       app: {
         name: "Paid by Polymarket OS",
         feature: "PBP Alerts",
