@@ -91,6 +91,7 @@ let activeTopDiscoveryTab = "trending";
 let quickDiscoveryExpanded = false;
 let activeMarketDetailId = "";
 let activeMarketDetailTab = "overview";
+let currentMarketPageId = "";
 let currentEventSlug = "";
 let currentEventSort = "volume";
 let currentTradeTicket = null;
@@ -102,6 +103,7 @@ let currentUserAuthUiState = createEmptyUserAuthUiState();
 let walletConnectionSource = "NONE";
 let browserWalletEventsBound = false;
 let marketDetailOpenersBound = false;
+let marketPageLinksBound = false;
 let polymarketBrowserModulesPromise = null;
 let latestAlertSignalsFallbackHtml = "";
 let latestAlertSignalTimestamp = "";
@@ -1454,7 +1456,7 @@ function renderMarketDetailMarketTab(market) {
   `;
 }
 
-function renderMarketDetailSocialTab(market) {
+function getMarketShareCopy(market) {
   const eventGroup = getMarketEventGroup(market);
   const shortQuestion = getMarketOutcomeLabel(market) || market.question;
   const movement = getMarketMovementValue(market);
@@ -1472,30 +1474,49 @@ function renderMarketDetailSocialTab(market) {
   ].filter(Boolean).join("\n");
   const storyCaption = `Market watch: ${shortQuestion} - see what is moving on House of Markets.`;
 
+  return {
+    eventGroup,
+    shortQuestion,
+    hook,
+    caption,
+    storyCaption,
+  };
+}
+
+function renderMarketSocialShareCard(market, ids = {}) {
+  const share = getMarketShareCopy(market);
+  const textareaId = ids.textareaId || "marketDetailShareText";
+  const buttonId = ids.buttonId || "copyMarketShareTextBtn";
+  const statusId = ids.statusId || "marketDetailCopyStatus";
+
   return `
     <div class="market-detail-social-card">
       <div class="market-detail-section-heading">
         <p class="market-small">Share copy</p>
-        <h3>${safeText(hook)}</h3>
-        <p class="alert-time">${safeText(eventGroup ? `${eventGroup}: ` : "")}${safeText(shortQuestion)}</p>
+        <h3>${safeText(share.hook)}</h3>
+        <p class="alert-time">${safeText(share.eventGroup ? `${share.eventGroup}: ` : "")}${safeText(share.shortQuestion)}</p>
       </div>
 
       <label class="market-detail-share-field">
         <span class="meta-label">Ready-to-copy caption</span>
-        <textarea id="marketDetailShareText" rows="5" readonly>${safeText(caption)}</textarea>
+        <textarea id="${safeAttr(textareaId)}" rows="5" readonly>${safeText(share.caption)}</textarea>
       </label>
 
       <div class="market-detail-share-box">
         <span class="meta-label">Story caption</span>
-        <p>${safeText(storyCaption)}</p>
+        <p>${safeText(share.storyCaption)}</p>
       </div>
 
       <div class="market-footer market-detail-share-actions">
-        <button id="copyMarketShareTextBtn" type="button">Copy share text</button>
-        <span id="marketDetailCopyStatus" class="alert-time" aria-live="polite"></span>
+        <button id="${safeAttr(buttonId)}" type="button">Copy share text</button>
+        <span id="${safeAttr(statusId)}" class="alert-time" aria-live="polite"></span>
       </div>
     </div>
   `;
+}
+
+function renderMarketDetailSocialTab(market) {
+  return renderMarketSocialShareCard(market);
 }
 
 function renderMarketDetailTabContent(market) {
@@ -1566,6 +1587,7 @@ function renderMarketDetailDrawer(market) {
         data-source-section="market-detail-drawer"
         data-cta="view-on-polymarket"
       >View on Polymarket</a>
+      ${renderMarketPageLink(market)}
       ${renderWatchlistButton(market, "market-detail-drawer")}
       <button class="trade-action-btn secondary-trade-btn" data-market-id="${safeAttr(market.id)}" data-side="BUY YES">Preview YES</button>
       <button class="trade-action-btn secondary-trade-btn" data-market-id="${safeAttr(market.id)}" data-side="BUY NO">Preview NO</button>
@@ -1819,6 +1841,7 @@ function renderCompactMarketActions(market, sourceSection) {
         data-source-section="${safeAttr(trackingSource)}"
         data-cta="view-on-polymarket"
       >View on Polymarket</a>
+      ${renderMarketPageLink(market)}
       ${renderWatchlistButton(market, sourceSection)}
       <button class="trade-action-btn secondary-trade-btn" data-market-id="${safeAttr(market.id)}" data-side="BUY YES">Preview YES</button>
       <button class="trade-action-btn secondary-trade-btn" data-market-id="${safeAttr(market.id)}" data-side="BUY NO">Preview NO</button>
@@ -2160,12 +2183,59 @@ function setEventUrlParam(eventSlug, options = {}) {
     const url = new URL(window.location.href);
     if (eventSlug) {
       url.searchParams.set("event", eventSlug);
+      url.searchParams.delete("market");
     } else {
       url.searchParams.delete("event");
     }
     const method = options.replace ? "replaceState" : "pushState";
     window.history[method]({}, "", url);
   } catch {}
+}
+
+function getRequestedMarketId() {
+  try {
+    return String(new URLSearchParams(window.location.search).get("market") || "").trim();
+  } catch {
+    return "";
+  }
+}
+
+function getMarketPageHref(market) {
+  try {
+    const url = new URL(window.location.href);
+    url.searchParams.set("market", getMarketDetailId(market));
+    url.searchParams.delete("event");
+    return url.pathname + url.search + url.hash;
+  } catch {
+    return `?market=${encodeURIComponent(getMarketDetailId(market))}`;
+  }
+}
+
+function setMarketUrlParam(marketId, options = {}) {
+  try {
+    const url = new URL(window.location.href);
+    if (marketId) {
+      url.searchParams.set("market", marketId);
+      url.searchParams.delete("event");
+    } else {
+      url.searchParams.delete("market");
+    }
+    const method = options.replace ? "replaceState" : "pushState";
+    window.history[method]({}, "", url);
+  } catch {}
+}
+
+function renderMarketPageLink(market, label = "Open full market page") {
+  const marketId = getMarketDetailId(market);
+  if (!marketId) return "";
+
+  return `
+    <a
+      class="market-link market-page-link"
+      href="${safeUrl(getMarketPageHref(market))}"
+      data-market-page-id="${safeAttr(marketId)}"
+    >${safeText(label)}</a>
+  `;
 }
 
 function getEventMarkets(eventSlugOrFamilyKey) {
@@ -2847,7 +2917,8 @@ async function loadHomepageDiscoveryData() {
       renderDiscoverPrimaryView();
     }
 
-    renderRequestedEventFromUrl({ scroll: false });
+    const renderedMarket = renderRequestedMarketFromUrl({ scroll: false });
+    if (!renderedMarket) renderRequestedEventFromUrl({ scroll: false });
     if (activeMarketDetailId) {
       const activeMarket = getMarketByDetailId(activeMarketDetailId);
       if (activeMarket) renderMarketDetailDrawer(activeMarket);
@@ -4179,6 +4250,7 @@ function renderHotCard(market, sourceSection = currentDiscoverView) {
       </div>
 
       <div class="market-footer" style="margin-top: 12px;">
+        ${renderMarketPageLink(market)}
         <button class="trade-action-btn secondary-trade-btn" data-market-id="${safeAttr(market.id)}" data-side="BUY YES">Preview YES</button>
         <button class="trade-action-btn secondary-trade-btn" data-market-id="${safeAttr(market.id)}" data-side="BUY NO">Preview NO</button>
         ${renderWatchlistButton(market, sourceSection)}
@@ -4218,6 +4290,7 @@ function renderGroupedMarketChild(market, sourceSection, index) {
           data-source-section="${safeAttr(trackingSource)}"
           data-cta="view-on-polymarket"
         >View</a>
+        ${renderMarketPageLink(market, "Full page")}
         ${renderWatchlistButton(market, "grouped-event-child")}
         <button class="trade-action-btn secondary-trade-btn" data-market-id="${safeAttr(market.id)}" data-side="BUY YES">Preview YES</button>
         <button class="trade-action-btn secondary-trade-btn" data-market-id="${safeAttr(market.id)}" data-side="BUY NO">Preview NO</button>
@@ -4301,6 +4374,278 @@ function ensureEventDetailSection() {
   return section;
 }
 
+function ensureMarketPageSection() {
+  let section = document.getElementById("marketPageView");
+  if (section) return section;
+
+  section = document.createElement("section");
+  section.id = "marketPageView";
+  section.className = "market-page-section market-page-hidden";
+
+  const eventSection = document.getElementById("eventDetailView") || ensureEventDetailSection();
+  if (eventSection?.parentElement) {
+    eventSection.parentElement.insertBefore(section, eventSection);
+    return section;
+  }
+
+  document.querySelector("main")?.prepend(section);
+  return section;
+}
+
+function getRelatedMarketsForMarket(market) {
+  const marketId = getMarketDetailId(market);
+  const familyKey = getMarketFamilyKey(market);
+  const eventSlug = getMarketEventSlug(market);
+  const candidates = familyKey ? getEventMarkets(familyKey) : eventSlug ? getEventMarkets(eventSlug) : [];
+
+  return candidates
+    .filter((candidate) => getMarketDetailId(candidate) !== marketId)
+    .sort((a, b) => getDiscoveryRankScore(b) - getDiscoveryRankScore(a))
+    .slice(0, 8);
+}
+
+function renderMarketPageRelatedCard(market) {
+  const eventGroup = getMarketEventGroup(market);
+
+  return `
+    <article class="market-card market-page-related-card">
+      <div class="market-context-row">
+        <span>${safeText(getPublicCategoryLabel(market))}</span>
+        ${eventGroup ? `<span>${safeText(eventGroup)}</span>` : ""}
+      </div>
+      <p class="market-small">${safeText(getMarketOutcomeLabel(market))}</p>
+      <h3>${safeText(market.question)}</h3>
+      ${renderHeatBadges(getMarketHeatBadges(market))}
+      ${renderMovementVisual(market)}
+      <div class="market-meta">
+        <div class="meta-box"><span class="meta-label">YES</span><span class="meta-value">${safeText(formatProbability(market.yesPriceLive))}</span></div>
+        <div class="meta-box"><span class="meta-label">Volume</span><span class="meta-value">${safeText(formatMoney(market.volume24hr, "Volume unavailable"))}</span></div>
+        <div class="meta-box"><span class="meta-label">Liquidity</span><span class="meta-value">${safeText(formatMoney(market.liquidity, "Liquidity unavailable"))}</span></div>
+      </div>
+      <div class="market-footer market-page-action-row">
+        ${renderMarketPageLink(market, "Open market page")}
+        <a
+          class="market-link market-link-primary"
+          href="${safeUrl(market.url)}"
+          target="_blank"
+          rel="noopener noreferrer"
+          data-outbound-click="polymarket"
+          data-market-id="${safeAttr(getMarketTrackingId(market))}"
+          data-market-slug="${safeAttr(market.slug)}"
+          data-market-question="${safeAttr(market.question)}"
+          data-market-url="${safeAttr(market.url)}"
+          data-source-section="market-page-related"
+          data-cta="view-on-polymarket"
+        >View on Polymarket</a>
+      </div>
+      <div class="market-footer market-page-action-row" style="margin-top: 12px;">
+        <button class="trade-action-btn secondary-trade-btn" data-market-id="${safeAttr(market.id)}" data-side="BUY YES">Preview YES</button>
+        <button class="trade-action-btn secondary-trade-btn" data-market-id="${safeAttr(market.id)}" data-side="BUY NO">Preview NO</button>
+        ${renderWatchlistButton(market, "market-page-related")}
+      </div>
+    </article>
+  `;
+}
+
+function renderMarketPageView(marketId, options = {}) {
+  const section = ensureMarketPageSection();
+  const requestedId = String(marketId || "").trim();
+  currentMarketPageId = requestedId;
+  closeMarketDetailDrawer();
+
+  if (!requestedId) {
+    section.classList.add("market-page-hidden");
+    section.innerHTML = "";
+    return;
+  }
+
+  if (currentEventSlug) clearEventDetailView({ updateUrl: false, scroll: false });
+
+  const market = getMarketByDetailId(requestedId);
+  if (!market) {
+    section.classList.remove("market-page-hidden");
+    section.innerHTML = `
+      <div class="market-grid">
+        <article class="market-card market-page-card">
+          <p class="market-small">Market page</p>
+          <h2>Market not found</h2>
+          <p class="alert-time">This market is not available in the current live market feed. It may have moved, closed, or fallen out of the active filter.</p>
+          <div class="market-footer market-page-action-row">
+            <button id="marketPageBackBtn" type="button">Back to live markets</button>
+          </div>
+        </article>
+      </div>
+    `;
+    bindMarketPageControls();
+    if (options.scroll !== false) section.scrollIntoView({ behavior: "smooth", block: "start" });
+    return;
+  }
+
+  const probabilityMeta = getMarketProbabilityMeta(market.yesPriceLive);
+  const eventGroup = getMarketEventGroup(market);
+  const relatedMarkets = getRelatedMarketsForMarket(market);
+
+  section.classList.remove("market-page-hidden");
+  section.innerHTML = `
+    <article class="market-card market-page-hero-card">
+      <div class="market-page-topline">
+        <div>
+          <p class="market-small">Dedicated market page</p>
+          <h2>${safeText(market.question)}</h2>
+          <p class="alert-time">House of Markets is an independent discovery and alerts project. This is not financial advice, and real market action happens on Polymarket.</p>
+        </div>
+        <button id="marketPageBackBtn" type="button">Back to live markets</button>
+      </div>
+
+      <div class="market-context-row market-page-context">
+        <span>${safeText(getPublicCategoryLabel(market))}</span>
+        ${eventGroup ? `<span>${safeText(eventGroup)}</span>` : ""}
+      </div>
+
+      ${renderHeatBadges(getMarketHeatBadges(market))}
+      ${renderMovementVisual(market)}
+
+      <div class="market-detail-primary-stats market-page-primary-stats">
+        <span><strong>${safeText(probabilityMeta.label)}</strong><small>${safeText(probabilityMeta.note)}</small></span>
+        <span><strong>${safeText(formatMoney(market.volume24hr, "Volume unavailable"))}</strong><small>24h vol</small></span>
+        <span><strong>${safeText(formatMoney(market.liquidity, "Liquidity unavailable"))}</strong><small>liquidity</small></span>
+        <span><strong>${safeText(hasMarketMovementData(market) ? formatChangeAsProbability(getMarketMovementValue(market)) : "No movement data yet")}</strong><small>movement</small></span>
+      </div>
+
+      <div class="market-footer market-page-action-row">
+        <a
+          class="market-link market-link-primary"
+          href="${safeUrl(market.url)}"
+          target="_blank"
+          rel="noopener noreferrer"
+          data-outbound-click="polymarket"
+          data-market-id="${safeAttr(getMarketTrackingId(market))}"
+          data-market-slug="${safeAttr(market.slug)}"
+          data-market-question="${safeAttr(market.question)}"
+          data-market-url="${safeAttr(market.url)}"
+          data-source-section="market-page"
+          data-cta="view-on-polymarket"
+        >View on Polymarket</a>
+        <button class="trade-action-btn secondary-trade-btn" data-market-id="${safeAttr(market.id)}" data-side="BUY YES">Preview YES</button>
+        <button class="trade-action-btn secondary-trade-btn" data-market-id="${safeAttr(market.id)}" data-side="BUY NO">Preview NO</button>
+        ${renderWatchlistButton(market, "market-page")}
+      </div>
+    </article>
+
+    <div class="market-page-section-grid">
+      <article class="market-card market-page-card">
+        <p class="market-small">Overview</p>
+        ${renderMarketDetailOverview(market)}
+      </article>
+
+      <article class="market-card market-page-card">
+        <p class="market-small">Market</p>
+        <h3>Structured details</h3>
+        ${renderMarketDetailMarketTab(market)}
+      </article>
+
+      <article class="market-card market-page-card">
+        <p class="market-small">Social</p>
+        ${renderMarketSocialShareCard(market, {
+          textareaId: "marketPageShareText",
+          buttonId: "copyMarketPageShareTextBtn",
+          statusId: "marketPageCopyStatus",
+        })}
+      </article>
+
+      <article class="market-card market-page-card market-page-related-section">
+        <p class="market-small">Related Markets</p>
+        <h3>${safeText(eventGroup || "Related markets")}</h3>
+        <p class="alert-time">Compare markets from the same event or family, then open the exact market page you want to share.</p>
+        <div class="market-grid market-page-related-grid" style="margin-top: 14px;">
+          ${relatedMarkets.length
+            ? relatedMarkets.map(renderMarketPageRelatedCard).join("")
+            : `<p class="empty">No related markets are available in the current live feed.</p>`}
+        </div>
+      </article>
+    </div>
+  `;
+
+  bindMarketPageControls();
+  bindTradeActionButtons();
+
+  if (options.updateUrl) {
+    setMarketUrlParam(getMarketDetailId(market));
+  }
+
+  if (options.scroll !== false) {
+    section.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+}
+
+function clearMarketPageView(options = {}) {
+  currentMarketPageId = "";
+  const section = document.getElementById("marketPageView");
+  if (section) {
+    section.classList.add("market-page-hidden");
+    section.innerHTML = "";
+  }
+
+  if (options.updateUrl !== false) {
+    setMarketUrlParam("", { replace: true });
+  }
+
+  if (options.scroll !== false) {
+    document.getElementById("homepageQuickDiscovery")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+}
+
+function bindMarketPageControls() {
+  const backBtn = document.getElementById("marketPageBackBtn");
+  const copyBtn = document.getElementById("copyMarketPageShareTextBtn");
+  const shareText = document.getElementById("marketPageShareText");
+  const copyStatus = document.getElementById("marketPageCopyStatus");
+
+  if (backBtn) backBtn.onclick = () => clearMarketPageView({ updateUrl: true });
+  if (copyBtn && shareText) {
+    copyBtn.onclick = async () => {
+      const text = shareText.value || "";
+      try {
+        await navigator.clipboard.writeText(text);
+        if (copyStatus) copyStatus.textContent = "Copied.";
+      } catch {
+        shareText.focus();
+        shareText.select();
+        if (copyStatus) copyStatus.textContent = "Select the text above to copy.";
+      }
+    };
+  }
+}
+
+function bindMarketPageLinks() {
+  if (marketPageLinksBound) return;
+  marketPageLinksBound = true;
+
+  document.addEventListener("click", (event) => {
+    const link = event.target?.closest?.(".market-page-link");
+    if (!link) return;
+    if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+
+    event.preventDefault();
+    const marketId = link.dataset.marketPageId || "";
+    renderMarketPageView(marketId, { updateUrl: true, scroll: true });
+  });
+}
+
+function renderRequestedMarketFromUrl(options = {}) {
+  const requestedMarketId = getRequestedMarketId();
+  if (!requestedMarketId) {
+    if (currentMarketPageId) clearMarketPageView({ updateUrl: false, scroll: false });
+    return false;
+  }
+
+  renderMarketPageView(requestedMarketId, {
+    updateUrl: false,
+    scroll: options.scroll !== false,
+  });
+  return true;
+}
+
 function renderEventMarketCard(market, sourceSection = "event-detail") {
   const trackingSource = normalizeOutboundSourceSection(sourceSection);
   const movementValue = getMarketMovementValue(market);
@@ -4351,6 +4696,7 @@ function renderEventMarketCard(market, sourceSection = "event-detail") {
 
       <div class="market-footer" style="margin-top: 12px;">
         <span class="market-small">Safe preview only</span>
+        ${renderMarketPageLink(market)}
         <button class="trade-action-btn secondary-trade-btn" data-market-id="${safeAttr(market.id)}" data-side="BUY YES">Preview YES</button>
         <button class="trade-action-btn secondary-trade-btn" data-market-id="${safeAttr(market.id)}" data-side="BUY NO">Preview NO</button>
         ${renderWatchlistButton(market, sourceSection)}
@@ -4364,6 +4710,8 @@ function renderEventDetailView(eventSlugOrFamilyKey, options = {}) {
   const eventSlug = slugifyEventValue(eventSlugOrFamilyKey);
   const markets = getEventMarkets(eventSlugOrFamilyKey);
   currentEventSlug = eventSlug;
+
+  if (eventSlug && currentMarketPageId) clearMarketPageView({ updateUrl: false, scroll: false });
 
   if (!eventSlug) {
     section.classList.add("event-detail-hidden");
@@ -4568,6 +4916,7 @@ function renderMoverCard(market, sourceSection = "movers") {
       </div>
 
       <div class="market-footer" style="margin-top: 12px;">
+        ${renderMarketPageLink(market)}
         <button class="trade-action-btn secondary-trade-btn" data-market-id="${safeAttr(market.id)}" data-side="BUY YES">Preview YES</button>
         <button class="trade-action-btn secondary-trade-btn" data-market-id="${safeAttr(market.id)}" data-side="BUY NO">Preview NO</button>
         ${renderWatchlistButton(market, sourceSection)}
@@ -5244,6 +5593,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   bindBetaFeedbackForm();
   bindOutboundClickTracking();
   bindWatchlistInterestTracking();
+  bindMarketPageLinks();
   bindPublicTopDiscoveryTabs();
   bindMarketDetailGlobalControls();
   ensureHomepageStrategyLayer();
@@ -5264,7 +5614,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   setupBrowserWalletEventSync();
 
   window.addEventListener("popstate", () => {
-    renderRequestedEventFromUrl({ scroll: true });
+    const renderedMarket = renderRequestedMarketFromUrl({ scroll: true });
+    if (!renderedMarket) renderRequestedEventFromUrl({ scroll: true });
   });
 
   await beginCleanPublicLoad();
@@ -5279,7 +5630,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   await loadAlerts();
   await loadHomepageDiscoveryData(true);
   await loadBiggestMovers();
-  renderRequestedEventFromUrl({ scroll: !!getRequestedEventSlug() });
+  const renderedMarket = renderRequestedMarketFromUrl({ scroll: !!getRequestedMarketId() });
+  if (!renderedMarket) renderRequestedEventFromUrl({ scroll: !!getRequestedEventSlug() });
   if (PBP_PUBLIC_BETA_DEBUG_MODE) {
     await loadAccountState();
     await loadPerformanceStats();

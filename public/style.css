@@ -1422,6 +1422,76 @@ details summary {
   margin-top: 12px;
 }
 
+.market-page-section {
+  margin-bottom: 22px;
+  scroll-margin-top: 18px;
+}
+
+.market-page-hidden {
+  display: none;
+}
+
+.market-page-hero-card {
+  border-color: rgba(56, 189, 248, 0.24);
+  background:
+    radial-gradient(circle at top left, rgba(56, 189, 248, 0.12), transparent 34%),
+    linear-gradient(180deg, rgba(15, 23, 42, 0.98), rgba(2, 8, 23, 0.97));
+}
+
+.market-page-topline,
+.market-page-action-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.market-page-topline h2 {
+  max-width: 980px;
+  margin: 4px 0 8px;
+  line-height: 1.08;
+}
+
+.market-page-context,
+.market-page-primary-stats {
+  margin-top: 14px;
+}
+
+.market-page-section-grid {
+  display: grid;
+  gap: 18px;
+  margin-top: 18px;
+}
+
+.market-page-card {
+  overflow: hidden;
+}
+
+.market-page-related-section {
+  grid-column: 1 / -1;
+}
+
+.market-page-related-grid {
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+
+.market-page-related-card h3 {
+  font-size: 1rem;
+  line-height: 1.25;
+}
+
+.market-page-link {
+  border-color: rgba(148, 163, 184, 0.28);
+  background: rgba(148, 163, 184, 0.08);
+}
+
+.market-page-link:hover,
+.market-page-link:focus-visible {
+  border-color: rgba(56, 189, 248, 0.42);
+  background: rgba(56, 189, 248, 0.12);
+}
+
 .event-detail-hidden {
   display: none;
 }
@@ -1706,6 +1776,16 @@ body.pbp-debug-mode .public-beta-internal-section {
   .grouped-market-child-actions {
     justify-content: flex-start;
   }
+
+  .market-page-topline {
+    flex-direction: column;
+  }
+
+  .market-page-topline button,
+  .market-page-action-row .market-link,
+  .market-page-action-row button {
+    width: 100%;
+  }
 }
 
 @media (max-width: 640px) {
@@ -1795,6 +1875,19 @@ body.pbp-debug-mode .public-beta-internal-section {
   .market-detail-actions .market-link,
   .market-detail-actions button {
     width: 100%;
+  }
+
+  .market-page-primary-stats {
+    grid-template-columns: 1fr;
+  }
+
+  .market-page-action-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .market-page-related-grid {
+    grid-template-columns: 1fr;
   }
 
   .market-intelligence-metric {
