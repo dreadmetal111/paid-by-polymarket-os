@@ -126,40 +126,77 @@ function createEmptyUserAuthUiState() {
   };
 }
 
-function formatProbability(value) {
-  if (value === null || value === undefined || Number.isNaN(value)) return "—";
-  return `${(value * 100).toFixed(1)}%`;
+function getFiniteNumber(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
 }
 
-function formatChangeAsProbability(value) {
-  if (value === null || value === undefined || Number.isNaN(value)) return "—";
-  const pct = value * 100;
+function getNonNegativeNumber(value) {
+  const numeric = getFiniteNumber(value);
+  return numeric !== null && numeric >= 0 ? numeric : null;
+}
+
+function hasUsableProbability(value) {
+  const numeric = getFiniteNumber(value);
+  return numeric !== null && numeric >= 0 && numeric <= 1;
+}
+
+function getMarketProbabilityMeta(value) {
+  const numeric = getFiniteNumber(value);
+  if (numeric === null || numeric < 0 || numeric > 1) {
+    return { label: "Probability unavailable", note: "YES" };
+  }
+
+  const precision = numeric > 0 && numeric < 0.01 ? 2 : 1;
+  return {
+    label: `${(numeric * 100).toFixed(precision)}%`,
+    note: numeric <= 0.01 ? "Long shot" : "YES",
+  };
+}
+
+// Missing values use explicit fallbacks so market windows never show NaN,
+// undefined, null, impossible percentages, or broken bar labels.
+function formatProbability(value, fallback = "Probability unavailable") {
+  const numeric = getFiniteNumber(value);
+  if (numeric === null || numeric < 0 || numeric > 1) return fallback;
+  return getMarketProbabilityMeta(numeric).label;
+}
+
+function formatChangeAsProbability(value, fallback = "No movement data yet") {
+  const numeric = getFiniteNumber(value);
+  if (numeric === null) return fallback;
+  const pct = numeric * 100;
   return `${pct >= 0 ? "+" : ""}${pct.toFixed(2)} pts`;
 }
 
-function formatPercentChange(value) {
-  if (value === null || value === undefined || Number.isNaN(value)) return "—";
-  const pct = value * 100;
+function formatPercentChange(value, fallback = "No movement data yet") {
+  const numeric = getFiniteNumber(value);
+  if (numeric === null) return fallback;
+  const pct = numeric * 100;
   return `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`;
 }
 
-function formatMoney(value) {
-  if (value === null || value === undefined || Number.isNaN(value)) return "—";
+function formatMoney(value, fallback = "Unavailable") {
+  const numeric = getNonNegativeNumber(value);
+  if (numeric === null) return fallback;
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: "USD",
     maximumFractionDigits: 0,
-  }).format(value);
+  }).format(numeric);
 }
 
-function formatTimestamp(value) {
-  if (!value) return "—";
-  return new Date(value).toLocaleString();
+function formatTimestamp(value, fallback = "Updated recently") {
+  if (!value) return fallback;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return fallback;
+  return date.toLocaleString();
 }
 
-function formatPoints(value) {
-  if (value === null || value === undefined || Number.isNaN(value)) return "—";
-  const pts = value * 100;
+function formatPoints(value, fallback = "No movement data yet") {
+  const numeric = getFiniteNumber(value);
+  if (numeric === null) return fallback;
+  const pts = numeric * 100;
   return `${pts >= 0 ? "+" : ""}${pts.toFixed(2)} pts`;
 }
 
@@ -815,6 +852,11 @@ function getMarketOpportunityScore(market) {
   return Number.isFinite(Number(score)) ? Number(score) : null;
 }
 
+function formatActivityScore(market) {
+  const score = getMarketOpportunityScore(market);
+  return score === null ? "Activity unavailable" : `${score}/100`;
+}
+
 function getMarketFreshnessLabel(market) {
   if (market?.dataFreshness === "fresh") return "Fresh";
   if (market?.dataFreshness === "stale") return "Limited";
@@ -853,11 +895,11 @@ function updateMarketIntelligenceStrip() {
 
 function getMarketHeatBadges(market) {
   const badges = [];
-  const volume = Number(market?.volume24hr || 0);
-  const liquidity = Number(market?.liquidity || 0);
-  const movement = Math.abs(getMarketMovementValue(market));
+  const volume = getNonNegativeNumber(market?.volume24hr) ?? 0;
+  const liquidity = getNonNegativeNumber(market?.liquidity) ?? 0;
+  const movement = hasMarketMovementData(market) ? Math.abs(getMarketMovementValue(market)) : 0;
   const opportunityScore = getMarketOpportunityScore(market) || 0;
-  const hotScore = Number(market?.hotScore || 0);
+  const hotScore = getNonNegativeNumber(market?.hotScore) ?? 0;
 
   if (hotScore > 800000 || opportunityScore >= 80) badges.push({ label: "Hot", type: "hot" });
   if (movement >= 0.04) badges.push({ label: "Moving", type: "moving" });
@@ -870,14 +912,14 @@ function getMarketHeatBadges(market) {
 
 function getGroupHeatBadges(group) {
   const children = Array.isArray(group?.children) ? group.children : [];
-  const totalVolume = children.reduce((sum, market) => sum + Number(market.volume24hr || 0), 0);
-  const totalLiquidity = children.reduce((sum, market) => sum + Number(market.liquidity || 0), 0);
+  const totalVolume = children.reduce((sum, market) => sum + (getNonNegativeNumber(market.volume24hr) ?? 0), 0);
+  const totalLiquidity = children.reduce((sum, market) => sum + (getNonNegativeNumber(market.liquidity) ?? 0), 0);
   const maxMovement = children.reduce(
-    (best, market) => Math.max(best, Math.abs(getMarketMovementValue(market))),
+    (best, market) => Math.max(best, hasMarketMovementData(market) ? Math.abs(getMarketMovementValue(market)) : 0),
     0
   );
   const maxScore = children.reduce(
-    (best, market) => Math.max(best, getMarketOpportunityScore(market) || 0, Number(market.hotScore || 0) / 10000),
+    (best, market) => Math.max(best, getMarketOpportunityScore(market) || 0, (getNonNegativeNumber(market.hotScore) ?? 0) / 10000),
     0
   );
   const badges = [];
@@ -914,7 +956,7 @@ function renderHeatBadges(badges = []) {
 
 function renderMovementVisual(market) {
   const movement = getMarketMovementValue(market);
-  if (!movement) return "";
+  if (!hasMarketMovementData(market) || !movement) return "";
 
   const direction = movement > 0 ? "up" : "down";
   const width = Math.max(8, Math.min(100, Math.abs(movement) * 1000));
@@ -958,20 +1000,23 @@ function getMarketDetailId(market) {
 }
 
 function getStrengthPercent(value, scale) {
-  const numeric = Number(value || 0);
-  if (!Number.isFinite(numeric) || numeric <= 0) return 0;
-  return Math.max(4, Math.min(100, (numeric / scale) * 100));
+  const numeric = getNonNegativeNumber(value);
+  const safeScale = getFiniteNumber(scale);
+  if (numeric === null || numeric <= 0 || safeScale === null || safeScale <= 0) return 0;
+  return Math.max(4, Math.min(100, (numeric / safeScale) * 100));
 }
 
 function renderMetricBar(label, valueLabel, percent, className = "") {
+  const safePercent = Math.max(0, Math.min(100, getFiniteNumber(percent) ?? 0));
+
   return `
-    <div class="market-detail-metric-bar ${safeAttr(className)}">
+    <div class="market-detail-metric-bar ${safeAttr(className)} ${safePercent <= 0 ? "is-empty" : ""}">
       <div class="market-detail-metric-bar-top">
         <span>${safeText(label)}</span>
         <strong>${safeText(valueLabel)}</strong>
       </div>
       <div class="market-detail-bar-track">
-        <span style="width:${safeAttr(Math.max(0, Math.min(100, percent)))}%;"></span>
+        <span style="width:${safeAttr(safePercent)}%;"></span>
       </div>
     </div>
   `;
@@ -997,11 +1042,11 @@ function renderSignalMeter(market) {
 
 function getWhyMarketIsInteresting(market) {
   const reasons = [];
-  const movement = Math.abs(getMarketMovementValue(market));
-  const volume = Number(market?.volume24hr || 0);
-  const liquidity = Number(market?.liquidity || 0);
+  const movement = hasMarketMovementData(market) ? Math.abs(getMarketMovementValue(market)) : 0;
+  const volume = getNonNegativeNumber(market?.volume24hr) ?? 0;
+  const liquidity = getNonNegativeNumber(market?.liquidity) ?? 0;
   const eventGroup = getMarketEventGroup(market);
-  const yesPrice = Number(market?.yesPriceLive);
+  const yesPrice = getFiniteNumber(market?.yesPriceLive);
 
   if (volume >= 250000) {
     reasons.push("High volume: many traders are watching this market.");
@@ -1012,10 +1057,10 @@ function getWhyMarketIsInteresting(market) {
   if (liquidity >= 150000) {
     reasons.push("High liquidity: the market may be easier to enter or exit.");
   }
-  if (Number.isFinite(yesPrice) && yesPrice >= 0.75) {
+  if (yesPrice !== null && yesPrice >= 0.75 && yesPrice <= 1) {
     reasons.push("High YES probability: the market is pricing this outcome as more likely right now.");
   }
-  if (Number.isFinite(yesPrice) && yesPrice > 0 && yesPrice <= 0.25) {
+  if (yesPrice !== null && yesPrice >= 0 && yesPrice <= 0.25) {
     reasons.push("Low YES probability: the market is pricing this outcome as less likely right now.");
   }
   if (eventGroup) {
@@ -1048,13 +1093,17 @@ function ensureMarketDetailDrawer() {
   return drawer;
 }
 
+// The drawer snapshot is a current-signal meter, not a fake price-history chart.
 function renderMarketDetailOverview(market) {
-  const probability = Number(market?.yesPriceLive || 0);
-  const probabilityPercent = Number.isFinite(probability) ? Math.max(0, Math.min(100, probability * 100)) : 0;
+  const probability = hasUsableProbability(market?.yesPriceLive) ? getFiniteNumber(market.yesPriceLive) : null;
+  const probabilityPercent = probability !== null ? Math.max(0, Math.min(100, probability * 100)) : 0;
   const volumePercent = getStrengthPercent(market?.volume24hr, 1000000);
   const liquidityPercent = getStrengthPercent(market?.liquidity, 500000);
   const movement = getMarketMovementValue(market);
-  const movementPercent = Math.max(4, Math.min(100, Math.abs(movement) * 1000));
+  const hasMovement = hasMarketMovementData(market);
+  const movementPercent = hasMovement && movement
+    ? Math.max(4, Math.min(100, Math.abs(movement) * 1000))
+    : 0;
 
   return `
     <div class="market-detail-snapshot-card">
@@ -1066,9 +1115,9 @@ function renderMarketDetailOverview(market) {
       ${renderSignalMeter(market)}
       <div class="market-detail-visual-stack">
         ${renderMetricBar("YES probability", formatProbability(market.yesPriceLive), probabilityPercent, "probability")}
-        ${renderMetricBar("Movement", movement ? formatChangeAsProbability(movement) : "--", movement ? movementPercent : 0, movement > 0 ? "moving-up" : movement < 0 ? "moving-down" : "")}
-        ${renderMetricBar("Volume", formatMoney(market.volume24hr), volumePercent, "volume")}
-        ${renderMetricBar("Liquidity", formatMoney(market.liquidity), liquidityPercent, "liquidity")}
+        ${renderMetricBar("Movement", hasMovement ? formatChangeAsProbability(movement) : "No movement data yet", movementPercent, movement > 0 ? "moving-up" : movement < 0 ? "moving-down" : "")}
+        ${renderMetricBar("Volume", formatMoney(market.volume24hr, "Volume unavailable"), volumePercent, "volume")}
+        ${renderMetricBar("Liquidity", formatMoney(market.liquidity, "Liquidity unavailable"), liquidityPercent, "liquidity")}
       </div>
     </div>
 
@@ -1092,17 +1141,18 @@ function renderMarketDetailOverview(market) {
 function renderMarketDetailMarketTab(market) {
   const eventGroup = getMarketEventGroup(market);
   const movement = getMarketMovementValue(market);
+  const hasMovement = hasMarketMovementData(market);
 
   return `
     <div class="market-meta market-detail-meta-grid">
       <div class="meta-box"><span class="meta-label">Full Question</span><span class="meta-value">${safeText(market.question)}</span></div>
-      <div class="meta-box"><span class="meta-label">Event / Group</span><span class="meta-value">${safeText(eventGroup || "Ungrouped market")}</span></div>
+      <div class="meta-box"><span class="meta-label">Event / Group</span><span class="meta-value">${safeText(eventGroup || "Event unavailable")}</span></div>
       <div class="meta-box"><span class="meta-label">Category</span><span class="meta-value">${safeText(getPublicCategoryLabel(market))}</span></div>
       <div class="meta-box"><span class="meta-label">YES Probability</span><span class="meta-value">${safeText(formatProbability(market.yesPriceLive))}</span></div>
-      <div class="meta-box"><span class="meta-label">24h Volume</span><span class="meta-value">${safeText(formatMoney(market.volume24hr))}</span></div>
-      <div class="meta-box"><span class="meta-label">Liquidity</span><span class="meta-value">${safeText(formatMoney(market.liquidity))}</span></div>
-      <div class="meta-box"><span class="meta-label">Movement</span><span class="meta-value">${safeText(movement ? formatChangeAsProbability(movement) : "--")}</span></div>
-      <div class="meta-box"><span class="meta-label">Updated</span><span class="meta-value">${safeText(market.lastUpdated ? formatTimestamp(market.lastUpdated) : "--")}</span></div>
+      <div class="meta-box"><span class="meta-label">24h Volume</span><span class="meta-value">${safeText(formatMoney(market.volume24hr, "Volume unavailable"))}</span></div>
+      <div class="meta-box"><span class="meta-label">Liquidity</span><span class="meta-value">${safeText(formatMoney(market.liquidity, "Liquidity unavailable"))}</span></div>
+      <div class="meta-box"><span class="meta-label">Movement</span><span class="meta-value">${safeText(hasMovement ? formatChangeAsProbability(movement) : "No movement data yet")}</span></div>
+      <div class="meta-box"><span class="meta-label">Updated</span><span class="meta-value">${safeText(formatTimestamp(market.lastUpdated))}</span></div>
     </div>
   `;
 }
@@ -1110,11 +1160,12 @@ function renderMarketDetailMarketTab(market) {
 function renderMarketDetailSocialTab(market) {
   const eventGroup = getMarketEventGroup(market);
   const shortQuestion = getMarketOutcomeLabel(market) || market.question;
+  const movement = getMarketMovementValue(market);
   const detailParts = [
-    market.yesPriceLive ? `YES is around ${formatProbability(market.yesPriceLive)}` : "",
-    market.volume24hr ? `${formatMoney(market.volume24hr)} 24h volume` : "",
-    market.liquidity ? `${formatMoney(market.liquidity)} liquidity` : "",
-    getMarketMovementValue(market) ? `${formatChangeAsProbability(getMarketMovementValue(market))} recent movement` : "",
+    hasUsableProbability(market.yesPriceLive) ? `YES is around ${formatProbability(market.yesPriceLive)}` : "",
+    getNonNegativeNumber(market.volume24hr) !== null ? `${formatMoney(market.volume24hr)} 24h volume` : "",
+    getNonNegativeNumber(market.liquidity) !== null ? `${formatMoney(market.liquidity)} liquidity` : "",
+    hasMarketMovementData(market) ? `${formatChangeAsProbability(movement)} recent movement` : "",
   ].filter(Boolean);
   const hook = "This prediction market is moving.";
   const caption = [
@@ -1160,6 +1211,7 @@ function renderMarketDetailDrawer(market) {
   const eventGroup = getMarketEventGroup(market);
   const content = document.getElementById("marketDetailContent");
   if (!content) return;
+  const probabilityMeta = getMarketProbabilityMeta(market.yesPriceLive);
 
   content.innerHTML = `
     <div class="market-detail-header">
@@ -1178,9 +1230,9 @@ function renderMarketDetailDrawer(market) {
     ${renderMovementVisual(market)}
 
     <div class="market-detail-primary-stats">
-      <span><strong>${safeText(formatProbability(market.yesPriceLive))}</strong><small>YES</small></span>
-      <span><strong>${safeText(formatMoney(market.volume24hr))}</strong><small>24h vol</small></span>
-      <span><strong>${safeText(formatMoney(market.liquidity))}</strong><small>liquidity</small></span>
+      <span><strong>${safeText(probabilityMeta.label)}</strong><small>${safeText(probabilityMeta.note)}</small></span>
+      <span><strong>${safeText(formatMoney(market.volume24hr, "Volume unavailable"))}</strong><small>24h vol</small></span>
+      <span><strong>${safeText(formatMoney(market.liquidity, "Liquidity unavailable"))}</strong><small>liquidity</small></span>
     </div>
 
     <div class="market-detail-tabs" role="tablist" aria-label="Market detail tabs">
@@ -1377,14 +1429,71 @@ function getQuickDiscoveryMarkets() {
     .slice(0, DISCOVER_CANDIDATE_LIMIT);
 }
 
+function getQuestionClarityScore(market) {
+  const question = String(market?.question || "").trim();
+  if (!question) return -80;
+
+  let score = 0;
+  if (question.length >= 35 && question.length <= 150) score += 18;
+  if (question.length > 190) score -= 24;
+  if (question.length > 240) score -= 40;
+  if ((question.match(/[?,;:]/g) || []).length > 5) score -= 10;
+  if (/^(will|who|which|what|when|how)\b/i.test(question)) score += 8;
+  return score;
+}
+
+function isWeakFeaturedCandidate(market) {
+  const probability = getFiniteNumber(market?.yesPriceLive);
+  const volume = getNonNegativeNumber(market?.volume24hr);
+  const liquidity = getNonNegativeNumber(market?.liquidity);
+  const question = String(market?.question || "").trim();
+
+  return (
+    !hasUsableProbability(probability) ||
+    probability <= 0.01 ||
+    volume === null ||
+    liquidity === null ||
+    question.length > 220 ||
+    (market?.dataFreshness === "stale" && (volume || 0) < 250000 && (liquidity || 0) < 100000)
+  );
+}
+
+function getFeaturedMarketScore(market) {
+  const probability = hasUsableProbability(market?.yesPriceLive) ? getFiniteNumber(market.yesPriceLive) : null;
+  const volume = getNonNegativeNumber(market?.volume24hr) ?? 0;
+  const liquidity = getNonNegativeNumber(market?.liquidity) ?? 0;
+  const movement = hasMarketMovementData(market) ? Math.abs(getMarketMovementValue(market)) : 0;
+  const probabilityFit = probability === null
+    ? -35
+    : Math.max(0, 28 - Math.abs(probability - 0.5) * 56);
+
+  return (
+    getDiscoveryRankScore(market) +
+    getQuestionClarityScore(market) +
+    Math.log10(volume + 1) * 6 +
+    Math.log10(liquidity + 1) * 6 +
+    movement * 220 +
+    probabilityFit +
+    (getMarketEventGroup(market) ? 12 : 0) +
+    (market?.dataFreshness === "fresh" ? 8 : 0) -
+    (isWeakFeaturedCandidate(market) ? 80 : 0)
+  );
+}
+
 function getFeaturedMarket() {
-  return getQuickDiscoveryMarkets()[0] || null;
+  const markets = getQuickDiscoveryMarkets();
+  const strongMarkets = markets.filter((market) => !isWeakFeaturedCandidate(market));
+  const source = strongMarkets.length ? strongMarkets : markets;
+
+  // Featured Market is the first impression, so it avoids weak or awkward
+  // long-shot cards when there are stronger, clearer markets available.
+  return [...source].sort((a, b) => getFeaturedMarketScore(b) - getFeaturedMarketScore(a))[0] || null;
 }
 
 function getPlayfulDiscoveryLabel(market) {
-  const movement = Math.abs(getMarketMovementValue(market));
-  const volume = Number(market?.volume24hr || 0);
-  const liquidity = Number(market?.liquidity || 0);
+  const movement = hasMarketMovementData(market) ? Math.abs(getMarketMovementValue(market)) : 0;
+  const volume = getNonNegativeNumber(market?.volume24hr) ?? 0;
+  const liquidity = getNonNegativeNumber(market?.liquidity) ?? 0;
 
   if (movement >= 0.05) return "Big mover";
   if (volume >= 500000) return "High-volume event";
@@ -1424,6 +1533,7 @@ function renderFeaturedMarketPanel(market) {
   }
 
   const eventGroup = getMarketEventGroup(market);
+  const probabilityMeta = getMarketProbabilityMeta(market.yesPriceLive);
 
   return `
     <div
@@ -1442,9 +1552,9 @@ function renderFeaturedMarketPanel(market) {
       ${renderHeatBadges(getMarketHeatBadges(market))}
       ${renderMovementVisual(market)}
       <div class="quick-market-stat-row">
-        <span><strong>${safeText(formatProbability(market.yesPriceLive))}</strong><small>YES</small></span>
-        <span><strong>${safeText(formatMoney(market.volume24hr))}</strong><small>24h vol</small></span>
-        <span><strong>${safeText(formatMoney(market.liquidity))}</strong><small>liquidity</small></span>
+        <span><strong>${safeText(probabilityMeta.label)}</strong><small>${safeText(probabilityMeta.note)}</small></span>
+        <span><strong>${safeText(formatMoney(market.volume24hr, "Volume unavailable"))}</strong><small>24h vol</small></span>
+        <span><strong>${safeText(formatMoney(market.liquidity, "Liquidity unavailable"))}</strong><small>liquidity</small></span>
       </div>
       ${renderCompactMarketActions(market, "featured-market")}
     </div>
@@ -1453,6 +1563,7 @@ function renderFeaturedMarketPanel(market) {
 
 function renderQuickDiscoveryCard(market) {
   const eventGroup = getMarketEventGroup(market);
+  const probabilityMeta = getMarketProbabilityMeta(market.yesPriceLive);
 
   return `
     <article
@@ -1472,8 +1583,8 @@ function renderQuickDiscoveryCard(market) {
       </div>
       ${renderMovementVisual(market)}
       <div class="quick-market-stat-row">
-        <span><strong>${safeText(formatProbability(market.yesPriceLive))}</strong><small>YES</small></span>
-        <span><strong>${safeText(formatMoney(market.volume24hr))}</strong><small>vol</small></span>
+        <span><strong>${safeText(probabilityMeta.label)}</strong><small>${safeText(probabilityMeta.note)}</small></span>
+        <span><strong>${safeText(formatMoney(market.volume24hr, "Volume unavailable"))}</strong><small>vol</small></span>
       </div>
       ${renderCompactMarketActions(market, "trending-now")}
     </article>
@@ -1549,9 +1660,9 @@ function bindPublicTopDiscoveryTabs() {
 
 function getDiscoveryRankScore(market) {
   const opportunityScore = getMarketOpportunityScore(market) || 0;
-  const volumeScore = Math.log10((market?.volume24hr || 0) + 1) * 8;
-  const liquidityScore = Math.log10((market?.liquidity || 0) + 1) * 7;
-  const moveScore = Math.abs(market?.oneDayPriceChange || market?.priceChange || 0) * 180;
+  const volumeScore = Math.log10((getNonNegativeNumber(market?.volume24hr) ?? 0) + 1) * 8;
+  const liquidityScore = Math.log10((getNonNegativeNumber(market?.liquidity) ?? 0) + 1) * 7;
+  const moveScore = Math.abs(getMarketMovementValue(market)) * 180;
   const freshnessBoost = market?.dataFreshness === "fresh" ? 8 : market?.dataFreshness === "stale" ? -14 : 0;
   return opportunityScore + volumeScore + liquidityScore + moveScore + freshnessBoost;
 }
@@ -1560,7 +1671,7 @@ function isDiscoveryQualityMarket(market) {
   if (!market || market.active === false || market.closed || market.archived || market.resolved || market.ended) {
     return false;
   }
-  if (market.dataFreshness === "stale" && (market.volume24hr || 0) < 100000 && (market.liquidity || 0) < 100000) {
+  if (market.dataFreshness === "stale" && (getNonNegativeNumber(market.volume24hr) ?? 0) < 100000 && (getNonNegativeNumber(market.liquidity) ?? 0) < 100000) {
     return false;
   }
   return true;
@@ -1786,8 +1897,8 @@ function getEventSummary(markets) {
     category: getPublicCategoryLabel(first),
     reason: getMarketFamilyReason(eventGroup),
     count: children.length,
-    totalVolume: children.reduce((sum, market) => sum + Number(market.volume24hr || 0), 0),
-    totalLiquidity: children.reduce((sum, market) => sum + Number(market.liquidity || 0), 0),
+    totalVolume: children.reduce((sum, market) => sum + (getNonNegativeNumber(market.volume24hr) ?? 0), 0),
+    totalLiquidity: children.reduce((sum, market) => sum + (getNonNegativeNumber(market.liquidity) ?? 0), 0),
   };
 }
 
@@ -1797,15 +1908,23 @@ function getMarketMovementValue(market) {
     market?.oneDayPriceChange,
     market?.percentChange,
   ]
-    .map(Number)
-    .filter(Number.isFinite);
+    .map(getFiniteNumber)
+    .filter((value) => value !== null);
 
   return values.length ? values[0] : 0;
 }
 
+function hasMarketMovementData(market) {
+  return [
+    market?.priceChange,
+    market?.oneDayPriceChange,
+    market?.percentChange,
+  ].some((value) => getFiniteNumber(value) !== null);
+}
+
 function getMarketMovementLabel(market) {
   const movement = getMarketMovementValue(market);
-  if (!movement) return "Movement: --";
+  if (!hasMarketMovementData(market)) return "Movement: No movement data yet";
   return `Movement: ${formatChangeAsProbability(movement)}`;
 }
 
@@ -1813,11 +1932,11 @@ function getSortedEventMarkets(markets, sortKey = currentEventSort) {
   const source = [...(Array.isArray(markets) ? markets : [])];
 
   return source.sort((a, b) => {
-    if (sortKey === "liquidity") return (b.liquidity || 0) - (a.liquidity || 0);
+    if (sortKey === "liquidity") return (getNonNegativeNumber(b.liquidity) ?? 0) - (getNonNegativeNumber(a.liquidity) ?? 0);
     if (sortKey === "movement") return Math.abs(getMarketMovementValue(b)) - Math.abs(getMarketMovementValue(a));
-    if (sortKey === "highProbability") return (b.yesPriceLive || 0) - (a.yesPriceLive || 0);
-    if (sortKey === "lowProbability") return (a.yesPriceLive || 0) - (b.yesPriceLive || 0);
-    return (b.volume24hr || 0) - (a.volume24hr || 0);
+    if (sortKey === "highProbability") return (getFiniteNumber(b.yesPriceLive) ?? -1) - (getFiniteNumber(a.yesPriceLive) ?? -1);
+    if (sortKey === "lowProbability") return (getFiniteNumber(a.yesPriceLive) ?? 2) - (getFiniteNumber(b.yesPriceLive) ?? 2);
+    return (getNonNegativeNumber(b.volume24hr) ?? 0) - (getNonNegativeNumber(a.volume24hr) ?? 0);
   });
 }
 
@@ -3734,9 +3853,9 @@ function renderHotCard(market, sourceSection = currentDiscoverView) {
 
       <div class="market-meta">
         <div class="meta-box"><span class="meta-label">Yes Price</span><span class="meta-value">${safeText(formatProbability(market.yesPriceLive))}</span></div>
-        <div class="meta-box"><span class="meta-label">24h Volume</span><span class="meta-value">${safeText(formatMoney(market.volume24hr))}</span></div>
-        <div class="meta-box"><span class="meta-label">Liquidity</span><span class="meta-value">${safeText(formatMoney(market.liquidity))}</span></div>
-        <div class="meta-box"><span class="meta-label">Activity</span><span class="meta-value">${safeText(getMarketOpportunityScore(market) ?? "—")}/100</span></div>
+        <div class="meta-box"><span class="meta-label">24h Volume</span><span class="meta-value">${safeText(formatMoney(market.volume24hr, "Volume unavailable"))}</span></div>
+        <div class="meta-box"><span class="meta-label">Liquidity</span><span class="meta-value">${safeText(formatMoney(market.liquidity, "Liquidity unavailable"))}</span></div>
+        <div class="meta-box"><span class="meta-label">Activity</span><span class="meta-value">${safeText(formatActivityScore(market))}</span></div>
         <div class="meta-box"><span class="meta-label">Category</span><span class="meta-value">${safeText(publicCategory)}</span></div>
         ${eventGroup ? `<div class="meta-box"><span class="meta-label">Event / group</span><span class="meta-value">${safeText(eventGroup)}</span></div>` : ""}
         <div class="meta-box"><span class="meta-label">Freshness</span><span class="meta-value">${safeText(getMarketFreshnessLabel(market))}</span></div>
@@ -3744,7 +3863,7 @@ function renderHotCard(market, sourceSection = currentDiscoverView) {
       </div>
 
       <div class="market-footer">
-        <span class="market-small">${safeText(market.slug)} • Updated ${safeText(market.lastUpdated ? formatTimestamp(market.lastUpdated) : "—")}</span>
+        <span class="market-small">${safeText(market.slug || "Market")} • Updated ${safeText(formatTimestamp(market.lastUpdated))}</span>
         <a
           class="market-link market-link-primary"
           href="${safeUrl(market.url)}"
@@ -3782,8 +3901,8 @@ function renderGroupedMarketChild(market, sourceSection, index) {
       </div>
       <div class="grouped-market-child-meta">
         <span>${safeText(formatProbability(market.yesPriceLive))}</span>
-        <span>${safeText(formatMoney(market.volume24hr))} vol</span>
-        <span>${safeText(formatMoney(market.liquidity))} liq</span>
+        <span>${safeText(formatMoney(market.volume24hr, "Volume unavailable"))} vol</span>
+        <span>${safeText(formatMoney(market.liquidity, "Liquidity unavailable"))} liq</span>
       </div>
       <div class="grouped-market-child-actions">
         <a
@@ -3906,14 +4025,14 @@ function renderEventMarketCard(market, sourceSection = "event-detail") {
 
       <div class="market-meta">
         <div class="meta-box"><span class="meta-label">YES Price</span><span class="meta-value">${safeText(formatProbability(market.yesPriceLive))}</span></div>
-        <div class="meta-box"><span class="meta-label">24h Volume</span><span class="meta-value">${safeText(formatMoney(market.volume24hr))}</span></div>
-        <div class="meta-box"><span class="meta-label">Liquidity</span><span class="meta-value">${safeText(formatMoney(market.liquidity))}</span></div>
+        <div class="meta-box"><span class="meta-label">24h Volume</span><span class="meta-value">${safeText(formatMoney(market.volume24hr, "Volume unavailable"))}</span></div>
+        <div class="meta-box"><span class="meta-label">Liquidity</span><span class="meta-value">${safeText(formatMoney(market.liquidity, "Liquidity unavailable"))}</span></div>
         <div class="meta-box"><span class="meta-label">Recent Movement</span><span class="meta-value ${movementClass}">${safeText(getMarketMovementLabel(market))}</span></div>
         <div class="meta-box"><span class="meta-label">Why it matters</span><span class="meta-value">${safeText(getMarketDisplayReason(market))}</span></div>
       </div>
 
       <div class="market-footer">
-        <span class="market-small">Updated ${safeText(market.lastUpdated ? formatTimestamp(market.lastUpdated) : "--")}</span>
+        <span class="market-small">Updated ${safeText(formatTimestamp(market.lastUpdated))}</span>
         <a
           class="market-link market-link-primary"
           href="${safeUrl(market.url)}"
@@ -4098,7 +4217,11 @@ function renderRequestedEventFromUrl(options = {}) {
 }
 
 function renderMoverCard(market, sourceSection = "movers") {
-  const changeClass = market.percentChange >= 0 ? "positive" : "negative";
+  const priceChange = getFiniteNumber(market.priceChange);
+  const percentChange = getFiniteNumber(market.percentChange);
+  const hasChange = priceChange !== null || percentChange !== null;
+  const changeDirection = priceChange ?? percentChange ?? 0;
+  const changeClass = !hasChange ? "" : changeDirection >= 0 ? "positive" : "negative";
   const trackingSource = normalizeOutboundSourceSection(sourceSection);
   const publicCategory = getPublicCategoryLabel(market);
   const eventGroup = getMarketEventGroup(market);
@@ -4118,15 +4241,15 @@ function renderMoverCard(market, sourceSection = "movers") {
       <div class="market-meta">
         <div class="meta-box"><span class="meta-label">Current Price</span><span class="meta-value">${safeText(formatProbability(market.yesPriceLive))}</span></div>
         <div class="meta-box"><span class="meta-label">Recent Price</span><span class="meta-value">${safeText(formatProbability(market.pastPrice))}</span></div>
-        <div class="meta-box"><span class="meta-label">Price Change</span><span class="meta-value ${changeClass}">${safeText(formatChangeAsProbability(market.priceChange))}</span></div>
-        <div class="meta-box"><span class="meta-label">Percent Change</span><span class="meta-value ${changeClass}">${safeText(formatPercentChange(market.percentChange))}</span></div>
+        <div class="meta-box"><span class="meta-label">Price Change</span><span class="meta-value ${changeClass}">${safeText(formatChangeAsProbability(priceChange))}</span></div>
+        <div class="meta-box"><span class="meta-label">Percent Change</span><span class="meta-value ${changeClass}">${safeText(formatPercentChange(percentChange))}</span></div>
         <div class="meta-box"><span class="meta-label">Category</span><span class="meta-value">${safeText(publicCategory)}</span></div>
         ${eventGroup ? `<div class="meta-box"><span class="meta-label">Event / group</span><span class="meta-value">${safeText(eventGroup)}</span></div>` : ""}
         <div class="meta-box"><span class="meta-label">Why it matters</span><span class="meta-value">${safeText(getMarketDisplayReason(market))}</span></div>
       </div>
 
       <div class="market-footer">
-        <span class="market-small">24h Vol: ${safeText(formatMoney(market.volume24hr))}</span>
+        <span class="market-small">24h Vol: ${safeText(formatMoney(market.volume24hr, "Volume unavailable"))}</span>
         <a
           class="market-link market-link-primary"
           href="${safeUrl(market.url)}"

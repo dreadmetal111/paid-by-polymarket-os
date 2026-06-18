@@ -509,6 +509,17 @@ details summary {
   background: var(--negative);
 }
 
+.market-detail-metric-bar.is-empty .market-detail-bar-track span {
+  width: 100% !important;
+  background: repeating-linear-gradient(
+    90deg,
+    rgba(148, 163, 184, 0.18) 0,
+    rgba(148, 163, 184, 0.18) 6px,
+    transparent 6px,
+    transparent 12px
+  );
+}
+
 .market-detail-why {
   margin-top: 16px;
 }
