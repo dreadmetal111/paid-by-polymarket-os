@@ -4526,33 +4526,48 @@ function renderMarketPageView(marketId, options = {}) {
       </div>
     </article>
 
-    <nav class="market-page-nav" aria-label="Market page sections">
+    <div class="market-page-mode-row" aria-label="Market detail mode">
+      <span class="market-page-mode-pill active">Beginner</span>
+      <span class="market-page-mode-pill disabled" aria-disabled="true">Advanced coming soon</span>
+    </div>
+
+    <nav class="market-page-nav market-page-desktop-nav" aria-label="Market page sections">
       <a href="#marketPageOverview">Overview</a>
       <a href="#marketPageSignals">Signals</a>
       <a href="#marketPageRelated">Related</a>
       <a href="#marketPageShare">Share</a>
     </nav>
 
+    <div class="market-page-mobile-tabs" role="tablist" aria-label="Market page mobile sections">
+      <button class="active" type="button" role="tab" aria-selected="true" data-market-page-mobile-tab="read">Read</button>
+      <button type="button" role="tab" aria-selected="false" data-market-page-mobile-tab="actions">Actions</button>
+      <button type="button" role="tab" aria-selected="false" data-market-page-mobile-tab="related">Related</button>
+      <button type="button" role="tab" aria-selected="false" data-market-page-mobile-tab="share">Share</button>
+    </div>
+
     <div class="market-page-layout">
       <div class="market-page-main-column">
-        <article id="marketPageOverview" class="market-card market-page-card">
-          <div class="market-page-section-heading">
-            <p class="market-small">Overview</p>
-            <h3>Market read</h3>
-            <p class="alert-time">Scan the current market state, then use the action card when you are ready to preview interest or open Polymarket.</p>
-          </div>
-          ${renderMarketDetailOverview(market)}
-        </article>
+        <div class="market-page-read-pane market-page-mobile-panel active" data-market-page-mobile-panel="read">
+          <article id="marketPageOverview" class="market-card market-page-card">
+            <div class="market-page-section-heading">
+              <p class="market-small">Market read</p>
+              <h3>What to notice first</h3>
+              <p class="alert-time">Start with the question, YES probability, movement, and why this market is interesting. Use the action pane when you are ready to preview interest or open Polymarket.</p>
+            </div>
+            ${renderMarketDetailOverview(market)}
+          </article>
 
-        <article id="marketPageSignals" class="market-card market-page-card">
-          <div class="market-page-section-heading">
-            <p class="market-small">Signals</p>
-            <h3>Structured market details</h3>
-          </div>
-          ${renderMarketDetailMarketTab(market)}
-        </article>
+          <article id="marketPageSignals" class="market-card market-page-card">
+            <div class="market-page-section-heading">
+              <p class="market-small">Signals</p>
+              <h3>Market details</h3>
+              <p class="alert-time">Advanced fields stay here so the first read stays simple.</p>
+            </div>
+            ${renderMarketDetailMarketTab(market)}
+          </article>
+        </div>
 
-        <article id="marketPageRelated" class="market-card market-page-card market-page-related-section">
+        <article id="marketPageRelated" class="market-card market-page-card market-page-related-section market-page-mobile-panel" data-market-page-mobile-panel="related">
           <div class="market-page-section-heading">
             <p class="market-small">Related Markets</p>
             <h3>${safeText(eventGroup || "Related markets")}</h3>
@@ -4565,7 +4580,7 @@ function renderMarketPageView(marketId, options = {}) {
           </div>
         </article>
 
-        <article id="marketPageShare" class="market-card market-page-card">
+        <article id="marketPageShare" class="market-card market-page-card market-page-mobile-panel" data-market-page-mobile-panel="share">
           <div class="market-page-section-heading">
             <p class="market-small">Share</p>
             <h3>Share this market page</h3>
@@ -4584,11 +4599,11 @@ function renderMarketPageView(marketId, options = {}) {
         </article>
       </div>
 
-      <aside class="market-page-side-column">
+      <aside class="market-page-side-column market-page-mobile-panel" data-market-page-mobile-panel="actions">
         <article class="market-card market-page-action-card">
           <p class="market-small">Market actions</p>
-          <h3>Open or preview</h3>
-          <p class="alert-time">Preview buttons stay on House of Markets. View on Polymarket is the real market action.</p>
+          <h3>Open or preview this market</h3>
+          <p class="alert-time">View on Polymarket is the real market action. Preview and Notify stay on House of Markets.</p>
           <div class="market-page-action-stack">
             <a
               class="market-link market-link-primary"
@@ -4655,6 +4670,22 @@ function clearMarketPageView(options = {}) {
   }
 }
 
+function setMarketPageMobilePanel(panelName) {
+  const section = document.getElementById("marketPageView");
+  const nextPanel = String(panelName || "read").trim() || "read";
+  if (!section) return;
+
+  section.querySelectorAll("[data-market-page-mobile-tab]").forEach((button) => {
+    const active = button.dataset.marketPageMobileTab === nextPanel;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", active ? "true" : "false");
+  });
+
+  section.querySelectorAll("[data-market-page-mobile-panel]").forEach((panel) => {
+    panel.classList.toggle("active", panel.dataset.marketPageMobilePanel === nextPanel);
+  });
+}
+
 function bindMarketPageControls() {
   const backBtn = document.getElementById("marketPageBackBtn");
   const copyBtn = document.getElementById("copyMarketPageShareTextBtn");
@@ -4681,6 +4712,9 @@ function bindMarketPageControls() {
   if (backBtn) backBtn.onclick = () => clearMarketPageView({ updateUrl: true });
   if (copyLinkBtn) copyLinkBtn.onclick = () => copyMarketPageLink(linkStatus);
   if (copyLinkBtnSide) copyLinkBtnSide.onclick = () => copyMarketPageLink(linkStatusSide);
+  document.querySelectorAll("[data-market-page-mobile-tab]").forEach((button) => {
+    button.onclick = () => setMarketPageMobilePanel(button.dataset.marketPageMobileTab || "read");
+  });
   if (copyBtn && shareText) {
     copyBtn.onclick = async () => {
       const text = shareText.value || "";

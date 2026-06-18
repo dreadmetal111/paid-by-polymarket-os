@@ -767,6 +767,11 @@ details summary {
   font-weight: 600;
 }
 
+.market-link,
+button {
+  touch-action: manipulation;
+}
+
 .market-link-primary {
   display: inline-flex;
   align-items: center;
@@ -1486,6 +1491,36 @@ details summary {
   grid-template-columns: repeat(5, minmax(0, 1fr));
 }
 
+.market-page-mode-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 14px 0 4px;
+}
+
+.market-page-mode-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.7);
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 900;
+  padding: 7px 11px;
+}
+
+.market-page-mode-pill.active {
+  border-color: rgba(34, 197, 94, 0.38);
+  background: rgba(34, 197, 94, 0.12);
+  color: #bbf7d0;
+}
+
+.market-page-mode-pill.disabled {
+  opacity: 0.68;
+}
+
 .market-page-nav {
   display: flex;
   gap: 10px;
@@ -1512,16 +1547,26 @@ details summary {
   background: rgba(56, 189, 248, 0.12);
 }
 
+.market-page-mobile-tabs {
+  display: none;
+}
+
 .market-page-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1.7fr) minmax(300px, 0.78fr);
+  grid-template-columns: minmax(0, 1.55fr) minmax(320px, 0.85fr);
   align-items: start;
-  gap: 18px;
+  gap: 22px;
   margin-top: 18px;
 }
 
 .market-page-main-column,
 .market-page-side-column {
+  display: grid;
+  gap: 18px;
+  min-width: 0;
+}
+
+.market-page-read-pane {
   display: grid;
   gap: 18px;
   min-width: 0;
@@ -1561,8 +1606,12 @@ details summary {
 .market-page-action-card {
   border-color: rgba(250, 204, 21, 0.24);
   background:
-    radial-gradient(circle at top, rgba(250, 204, 21, 0.08), transparent 38%),
+    radial-gradient(circle at top, rgba(250, 204, 21, 0.12), transparent 38%),
     linear-gradient(180deg, rgba(15, 23, 42, 0.98), rgba(2, 8, 23, 0.98));
+}
+
+.market-page-action-card h3 {
+  font-size: 1.25rem;
 }
 
 .market-page-action-stack {
@@ -1592,14 +1641,32 @@ details summary {
 }
 
 .market-page-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
   border-color: rgba(148, 163, 184, 0.28);
-  background: rgba(148, 163, 184, 0.08);
+  border-radius: 12px;
+  background: rgba(148, 163, 184, 0.1);
+  color: #dbeafe;
+  padding: 9px 13px;
+  text-decoration: none;
 }
 
 .market-page-link:hover,
 .market-page-link:focus-visible {
   border-color: rgba(56, 189, 248, 0.42);
   background: rgba(56, 189, 248, 0.12);
+}
+
+@media (min-width: 901px) {
+  .market-page-main-column,
+  .market-page-side-column {
+    max-height: calc(100vh - 118px);
+    overflow-y: auto;
+    padding-right: 4px;
+    scrollbar-width: thin;
+  }
 }
 
 .event-detail-hidden {
@@ -1891,13 +1958,61 @@ body.pbp-debug-mode .public-beta-internal-section {
     flex-direction: column;
   }
 
+  .market-page-desktop-nav {
+    display: none;
+  }
+
+  .market-page-mobile-tabs {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 8px;
+    margin: 14px 0;
+    border: 1px solid rgba(148, 163, 184, 0.14);
+    border-radius: var(--radius-sm);
+    background: rgba(2, 8, 23, 0.88);
+    padding: 8px;
+    backdrop-filter: blur(10px);
+  }
+
+  .market-page-mobile-tabs button {
+    min-height: 40px;
+    border-radius: 999px;
+    color: var(--muted);
+    font-size: 0.82rem;
+    font-weight: 900;
+    padding: 8px 10px;
+  }
+
+  .market-page-mobile-tabs button.active {
+    border-color: rgba(56, 189, 248, 0.48);
+    background: rgba(56, 189, 248, 0.14);
+    color: #e0f2fe;
+  }
+
   .market-page-layout {
     grid-template-columns: 1fr;
+    gap: 14px;
   }
 
   .market-page-side-column {
     position: static;
     order: -1;
+  }
+
+  .market-page-main-column {
+    display: block;
+  }
+
+  .market-page-mobile-panel {
+    display: none;
+  }
+
+  .market-page-mobile-panel.active {
+    display: grid;
+    gap: 14px;
   }
 
   .market-page-topline button,
@@ -2000,9 +2115,21 @@ body.pbp-debug-mode .public-beta-internal-section {
     grid-template-columns: 1fr;
   }
 
+  .market-page-topline h2 {
+    font-size: clamp(1.7rem, 10vw, 2.4rem);
+  }
+
+  .market-page-mode-row {
+    margin-top: 12px;
+  }
+
   .market-page-nav {
     margin-left: -2px;
     margin-right: -2px;
+  }
+
+  .market-page-mobile-tabs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .market-page-action-row {
