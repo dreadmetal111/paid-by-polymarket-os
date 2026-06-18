@@ -1832,6 +1832,62 @@ function getLatestWatchlistInterestAt(interests) {
   return latestTimestamp ? new Date(latestTimestamp).toISOString() : null;
 }
 
+function buildWatchlistInsights(interests) {
+  const marketsByKey = new Map();
+  const categoriesByKey = new Map();
+
+  for (const item of Array.isArray(interests) ? interests : []) {
+    const marketQuestion = sanitizeOutboundClickText(item?.marketQuestion, 320);
+    if (!marketQuestion) continue;
+
+    const marketId = sanitizeOutboundClickText(item?.marketId, 180) || null;
+    const eventTitle = sanitizeOutboundClickText(item?.eventTitle, 220) || null;
+    const category = sanitizeOutboundClickText(item?.category, 120) || "Other";
+    const createdAt = String(item?.createdAt || "");
+    const latestTimestamp = Date.parse(createdAt);
+    const marketKey = `${marketId || "no-id"}::${marketQuestion}`;
+    const existingMarket = marketsByKey.get(marketKey) || {
+      marketId,
+      marketQuestion,
+      eventTitle,
+      category,
+      watchCount: 0,
+      latestWatchlistAt: null,
+      latestTimestamp: 0,
+    };
+
+    existingMarket.watchCount += 1;
+    if (Number.isFinite(latestTimestamp) && latestTimestamp > existingMarket.latestTimestamp) {
+      existingMarket.latestTimestamp = latestTimestamp;
+      existingMarket.latestWatchlistAt = new Date(latestTimestamp).toISOString();
+    }
+    marketsByKey.set(marketKey, existingMarket);
+
+    const existingCategory = categoriesByKey.get(category) || {
+      category,
+      watchCount: 0,
+    };
+    existingCategory.watchCount += 1;
+    categoriesByKey.set(category, existingCategory);
+  }
+
+  return {
+    topMarkets: Array.from(marketsByKey.values())
+      .sort((a, b) => {
+        if (b.watchCount !== a.watchCount) return b.watchCount - a.watchCount;
+        return b.latestTimestamp - a.latestTimestamp;
+      })
+      .slice(0, 5)
+      .map(({ latestTimestamp, ...market }) => market),
+    topCategories: Array.from(categoriesByKey.values())
+      .sort((a, b) => {
+        if (b.watchCount !== a.watchCount) return b.watchCount - a.watchCount;
+        return a.category.localeCompare(b.category);
+      })
+      .slice(0, 5),
+  };
+}
+
 async function readJsonWatchlistInterestStatusSummary() {
   const data = await readWatchlistInterestData();
   const interests = Array.isArray(data.interests) ? data.interests : [];
@@ -1841,13 +1897,14 @@ async function readJsonWatchlistInterestStatusSummary() {
       count: interests.length,
       latestWatchlistAt: getLatestWatchlistInterestAt(interests),
     },
+    watchlistInsights: buildWatchlistInsights(interests),
     watchlistInterestStorage: "ok",
   };
 }
 
 async function readSupabaseWatchlistInterestStatusSummary(config) {
   const url = buildSupabaseTableUrl(config);
-  url.searchParams.set("select", "created_at");
+  url.searchParams.set("select", "market_id,market_question,event_title,category,created_at");
   url.searchParams.set("order", "created_at.desc");
 
   const rows = await fetchSupabaseJson(url, {
@@ -1863,6 +1920,7 @@ async function readSupabaseWatchlistInterestStatusSummary(config) {
       count: interests.length,
       latestWatchlistAt: getLatestWatchlistInterestAt(interests),
     },
+    watchlistInsights: buildWatchlistInsights(interests),
     watchlistInterestStorage: "ok",
   };
 }
@@ -1883,7 +1941,8 @@ async function readWatchlistInterestStatusSummary() {
         const fallbackSummary = await readJsonWatchlistInterestStatusSummary();
         return {
           watchlistInterest: fallbackSummary.watchlistInterest,
-          watchlistInterestStorage: "json_fallback",
+          watchlistInsights: fallbackSummary.watchlistInsights,
+          watchlistInterestStorage: fallbackSummary.watchlistInterestStorage,
         };
       } catch (fallbackError) {
         console.error("[watchlist-interest] JSON fallback status read failed:", fallbackError.message);
@@ -1894,6 +1953,10 @@ async function readWatchlistInterestStatusSummary() {
       watchlistInterest: {
         count: 0,
         latestWatchlistAt: null,
+      },
+      watchlistInsights: {
+        topMarkets: [],
+        topCategories: [],
       },
       watchlistInterestStorage: "error",
     };
@@ -4615,6 +4678,10 @@ app.get("/api/admin/status", async (req, res) => {
       outboundClicks: outboundClickSummary.outboundClicks,
       feedback: feedbackSummary.feedback,
       watchlistInterest: watchlistInterestSummary.watchlistInterest,
+      watchlistInsights: watchlistInterestSummary.watchlistInsights || {
+        topMarkets: [],
+        topCategories: [],
+      },
       app: {
         name: "Paid by Polymarket OS",
         feature: "PBP Alerts",

@@ -34,6 +34,8 @@ try {
     $WatchlistInterestCount = $null
     $LatestWatchlistAt = $null
     $WatchlistInterestStorageCheck = $null
+    $WatchlistTopMarkets = @()
+    $WatchlistTopCategories = @()
 
     if ($null -ne $Response.alertSignals) {
         $AlertSignalCount = $Response.alertSignals.count
@@ -53,6 +55,30 @@ try {
     if ($null -ne $Response.watchlistInterest) {
         $WatchlistInterestCount = $Response.watchlistInterest.count
         $LatestWatchlistAt = $Response.watchlistInterest.latestWatchlistAt
+    }
+
+    if ($null -ne $Response.watchlistInsights) {
+        if ($null -ne $Response.watchlistInsights.topMarkets) {
+            $WatchlistTopMarkets = @($Response.watchlistInsights.topMarkets) | ForEach-Object {
+                [ordered]@{
+                    marketId = $_.marketId
+                    marketQuestion = $_.marketQuestion
+                    eventTitle = $_.eventTitle
+                    category = $_.category
+                    watchCount = $_.watchCount
+                    latestWatchlistAt = $_.latestWatchlistAt
+                }
+            }
+        }
+
+        if ($null -ne $Response.watchlistInsights.topCategories) {
+            $WatchlistTopCategories = @($Response.watchlistInsights.topCategories) | ForEach-Object {
+                [ordered]@{
+                    category = $_.category
+                    watchCount = $_.watchCount
+                }
+            }
+        }
     }
 
     if ($null -ne $Response.checks) {
@@ -85,6 +111,10 @@ try {
             count = $WatchlistInterestCount
             latestWatchlistAt = $LatestWatchlistAt
         }
+        watchlistInsights = [ordered]@{
+            topMarkets = $WatchlistTopMarkets
+            topCategories = $WatchlistTopCategories
+        }
         checks = [ordered]@{
             waitlistStorage = $Response.checks.waitlistStorage
             alertStorage = $AlertStorageCheck
@@ -95,7 +125,7 @@ try {
         generatedAt = $Response.generatedAt
     }
 
-    $SafeSummary | ConvertTo-Json -Depth 4
+    $SafeSummary | ConvertTo-Json -Depth 6
 } catch {
     $StatusCode = $null
 
