@@ -4447,6 +4447,14 @@ function renderMarketPageRelatedCard(market) {
   `;
 }
 
+function getMarketPageUrl() {
+  try {
+    return window.location.href;
+  } catch {
+    return "";
+  }
+}
+
 function renderMarketPageView(marketId, options = {}) {
   const section = ensureMarketPageSection();
   const requestedId = String(marketId || "").trim();
@@ -4484,22 +4492,26 @@ function renderMarketPageView(marketId, options = {}) {
   const probabilityMeta = getMarketProbabilityMeta(market.yesPriceLive);
   const eventGroup = getMarketEventGroup(market);
   const relatedMarkets = getRelatedMarketsForMarket(market);
+  const movementLabel = hasMarketMovementData(market)
+    ? formatChangeAsProbability(getMarketMovementValue(market))
+    : "No movement data yet";
 
   section.classList.remove("market-page-hidden");
   section.innerHTML = `
     <article class="market-card market-page-hero-card">
       <div class="market-page-topline">
         <div>
-          <p class="market-small">Dedicated market page</p>
+          <p class="market-page-kicker">Dedicated market page</p>
           <h2>${safeText(market.question)}</h2>
-          <p class="alert-time">House of Markets is an independent discovery and alerts project. This is not financial advice, and real market action happens on Polymarket.</p>
+          <p class="market-page-safety-copy">House of Markets is an independent discovery and alerts project. This is not financial advice, and real market action happens on Polymarket.</p>
         </div>
         <button id="marketPageBackBtn" type="button">Back to live markets</button>
       </div>
 
-      <div class="market-context-row market-page-context">
+      <div class="market-context-row market-page-context market-page-pill-row">
         <span>${safeText(getPublicCategoryLabel(market))}</span>
         ${eventGroup ? `<span>${safeText(eventGroup)}</span>` : ""}
+        <span>${safeText(formatTimestamp(market.lastUpdated))}</span>
       </div>
 
       ${renderHeatBadges(getMarketHeatBadges(market))}
@@ -4509,60 +4521,108 @@ function renderMarketPageView(marketId, options = {}) {
         <span><strong>${safeText(probabilityMeta.label)}</strong><small>${safeText(probabilityMeta.note)}</small></span>
         <span><strong>${safeText(formatMoney(market.volume24hr, "Volume unavailable"))}</strong><small>24h vol</small></span>
         <span><strong>${safeText(formatMoney(market.liquidity, "Liquidity unavailable"))}</strong><small>liquidity</small></span>
-        <span><strong>${safeText(hasMarketMovementData(market) ? formatChangeAsProbability(getMarketMovementValue(market)) : "No movement data yet")}</strong><small>movement</small></span>
-      </div>
-
-      <div class="market-footer market-page-action-row">
-        <a
-          class="market-link market-link-primary"
-          href="${safeUrl(market.url)}"
-          target="_blank"
-          rel="noopener noreferrer"
-          data-outbound-click="polymarket"
-          data-market-id="${safeAttr(getMarketTrackingId(market))}"
-          data-market-slug="${safeAttr(market.slug)}"
-          data-market-question="${safeAttr(market.question)}"
-          data-market-url="${safeAttr(market.url)}"
-          data-source-section="market-page"
-          data-cta="view-on-polymarket"
-        >View on Polymarket</a>
-        <button class="trade-action-btn secondary-trade-btn" data-market-id="${safeAttr(market.id)}" data-side="BUY YES">Preview YES</button>
-        <button class="trade-action-btn secondary-trade-btn" data-market-id="${safeAttr(market.id)}" data-side="BUY NO">Preview NO</button>
-        ${renderWatchlistButton(market, "market-page")}
+        <span><strong>${safeText(movementLabel)}</strong><small>movement</small></span>
+        <span><strong>${safeText(formatTimestamp(market.lastUpdated))}</strong><small>updated</small></span>
       </div>
     </article>
 
-    <div class="market-page-section-grid">
-      <article class="market-card market-page-card">
-        <p class="market-small">Overview</p>
-        ${renderMarketDetailOverview(market)}
-      </article>
+    <nav class="market-page-nav" aria-label="Market page sections">
+      <a href="#marketPageOverview">Overview</a>
+      <a href="#marketPageSignals">Signals</a>
+      <a href="#marketPageRelated">Related</a>
+      <a href="#marketPageShare">Share</a>
+    </nav>
 
-      <article class="market-card market-page-card">
-        <p class="market-small">Market</p>
-        <h3>Structured details</h3>
-        ${renderMarketDetailMarketTab(market)}
-      </article>
+    <div class="market-page-layout">
+      <div class="market-page-main-column">
+        <article id="marketPageOverview" class="market-card market-page-card">
+          <div class="market-page-section-heading">
+            <p class="market-small">Overview</p>
+            <h3>Market read</h3>
+            <p class="alert-time">Scan the current market state, then use the action card when you are ready to preview interest or open Polymarket.</p>
+          </div>
+          ${renderMarketDetailOverview(market)}
+        </article>
 
-      <article class="market-card market-page-card">
-        <p class="market-small">Social</p>
-        ${renderMarketSocialShareCard(market, {
-          textareaId: "marketPageShareText",
-          buttonId: "copyMarketPageShareTextBtn",
-          statusId: "marketPageCopyStatus",
-        })}
-      </article>
+        <article id="marketPageSignals" class="market-card market-page-card">
+          <div class="market-page-section-heading">
+            <p class="market-small">Signals</p>
+            <h3>Structured market details</h3>
+          </div>
+          ${renderMarketDetailMarketTab(market)}
+        </article>
 
-      <article class="market-card market-page-card market-page-related-section">
-        <p class="market-small">Related Markets</p>
-        <h3>${safeText(eventGroup || "Related markets")}</h3>
-        <p class="alert-time">Compare markets from the same event or family, then open the exact market page you want to share.</p>
-        <div class="market-grid market-page-related-grid" style="margin-top: 14px;">
-          ${relatedMarkets.length
-            ? relatedMarkets.map(renderMarketPageRelatedCard).join("")
-            : `<p class="empty">No related markets are available in the current live feed.</p>`}
-        </div>
-      </article>
+        <article id="marketPageRelated" class="market-card market-page-card market-page-related-section">
+          <div class="market-page-section-heading">
+            <p class="market-small">Related Markets</p>
+            <h3>${safeText(eventGroup || "Related markets")}</h3>
+            <p class="alert-time">Compare markets from the same event or family. Each card links to its own dedicated market page.</p>
+          </div>
+          <div class="market-grid market-page-related-grid" style="margin-top: 14px;">
+            ${relatedMarkets.length
+              ? relatedMarkets.map(renderMarketPageRelatedCard).join("")
+              : `<p class="empty">No related markets are available in the current live feed.</p>`}
+          </div>
+        </article>
+
+        <article id="marketPageShare" class="market-card market-page-card">
+          <div class="market-page-section-heading">
+            <p class="market-small">Share</p>
+            <h3>Share this market page</h3>
+            <p class="alert-time">Copy the page link or use the draft caption below. No social integrations are connected yet.</p>
+          </div>
+          <div class="market-footer market-page-action-row market-page-copy-link-row">
+            <input id="marketPageLinkInput" type="text" readonly value="${safeAttr(getMarketPageUrl())}" aria-label="Market page link" />
+            <button id="copyMarketPageLinkBtn" type="button">Copy market link</button>
+            <span id="marketPageLinkCopyStatus" class="alert-time" aria-live="polite"></span>
+          </div>
+          ${renderMarketSocialShareCard(market, {
+            textareaId: "marketPageShareText",
+            buttonId: "copyMarketPageShareTextBtn",
+            statusId: "marketPageCopyStatus",
+          })}
+        </article>
+      </div>
+
+      <aside class="market-page-side-column">
+        <article class="market-card market-page-action-card">
+          <p class="market-small">Market actions</p>
+          <h3>Open or preview</h3>
+          <p class="alert-time">Preview buttons stay on House of Markets. View on Polymarket is the real market action.</p>
+          <div class="market-page-action-stack">
+            <a
+              class="market-link market-link-primary"
+              href="${safeUrl(market.url)}"
+              target="_blank"
+              rel="noopener noreferrer"
+              data-outbound-click="polymarket"
+              data-market-id="${safeAttr(getMarketTrackingId(market))}"
+              data-market-slug="${safeAttr(market.slug)}"
+              data-market-question="${safeAttr(market.question)}"
+              data-market-url="${safeAttr(market.url)}"
+              data-source-section="market-page"
+              data-cta="view-on-polymarket"
+            >View on Polymarket</a>
+            <button class="trade-action-btn secondary-trade-btn" data-market-id="${safeAttr(market.id)}" data-side="BUY YES">Preview YES</button>
+            <button class="trade-action-btn secondary-trade-btn" data-market-id="${safeAttr(market.id)}" data-side="BUY NO">Preview NO</button>
+            ${renderWatchlistButton(market, "market-page")}
+            <button id="copyMarketPageLinkBtnSide" type="button">Copy market link</button>
+            <span id="marketPageLinkCopyStatusSide" class="alert-time" aria-live="polite"></span>
+          </div>
+        </article>
+
+        <article class="market-card market-page-action-card market-page-mini-facts">
+          <p class="market-small">At a glance</p>
+          <div class="market-meta">
+            <div class="meta-box"><span class="meta-label">YES</span><span class="meta-value">${safeText(probabilityMeta.label)}</span></div>
+            <div class="meta-box"><span class="meta-label">Label</span><span class="meta-value">${safeText(probabilityMeta.note)}</span></div>
+            <div class="meta-box"><span class="meta-label">Movement</span><span class="meta-value">${safeText(movementLabel)}</span></div>
+            <div class="meta-box"><span class="meta-label">Volume</span><span class="meta-value">${safeText(formatMoney(market.volume24hr, "Volume unavailable"))}</span></div>
+            <div class="meta-box"><span class="meta-label">Liquidity</span><span class="meta-value">${safeText(formatMoney(market.liquidity, "Liquidity unavailable"))}</span></div>
+            <div class="meta-box"><span class="meta-label">Updated</span><span class="meta-value">${safeText(formatTimestamp(market.lastUpdated))}</span></div>
+          </div>
+        </article>
+      </aside>
     </div>
   `;
 
@@ -4600,8 +4660,27 @@ function bindMarketPageControls() {
   const copyBtn = document.getElementById("copyMarketPageShareTextBtn");
   const shareText = document.getElementById("marketPageShareText");
   const copyStatus = document.getElementById("marketPageCopyStatus");
+  const copyLinkBtn = document.getElementById("copyMarketPageLinkBtn");
+  const copyLinkBtnSide = document.getElementById("copyMarketPageLinkBtnSide");
+  const linkInput = document.getElementById("marketPageLinkInput");
+  const linkStatus = document.getElementById("marketPageLinkCopyStatus");
+  const linkStatusSide = document.getElementById("marketPageLinkCopyStatusSide");
+
+  const copyMarketPageLink = async (statusElement) => {
+    const text = linkInput?.value || getMarketPageUrl();
+    try {
+      await navigator.clipboard.writeText(text);
+      if (statusElement) statusElement.textContent = "Market link copied.";
+    } catch {
+      linkInput?.focus();
+      linkInput?.select();
+      if (statusElement) statusElement.textContent = "Select the link to copy.";
+    }
+  };
 
   if (backBtn) backBtn.onclick = () => clearMarketPageView({ updateUrl: true });
+  if (copyLinkBtn) copyLinkBtn.onclick = () => copyMarketPageLink(linkStatus);
+  if (copyLinkBtnSide) copyLinkBtnSide.onclick = () => copyMarketPageLink(linkStatusSide);
   if (copyBtn && shareText) {
     copyBtn.onclick = async () => {
       const text = shareText.value || "";
