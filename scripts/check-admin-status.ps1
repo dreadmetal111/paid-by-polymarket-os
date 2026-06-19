@@ -39,6 +39,13 @@ try {
     $MarketSnapshotCount = $null
     $LatestSnapshotAt = $null
     $MarketSnapshotStorageCheck = $null
+    $StartFunnelStorageCheck = $null
+    $StartFunnelPageViews = $null
+    $StartFunnelLeadSubmits = $null
+    $StartFunnelLeadSuccesses = $null
+    $StartFunnelExistingLeads = $null
+    $StartFunnelLiveBoardClicks = $null
+    $StartFunnelLatestEventAt = $null
 
     if ($null -ne $Response.alertSignals) {
         $AlertSignalCount = $Response.alertSignals.count
@@ -63,6 +70,15 @@ try {
     if ($null -ne $Response.marketSnapshots) {
         $MarketSnapshotCount = $Response.marketSnapshots.count
         $LatestSnapshotAt = $Response.marketSnapshots.latestSnapshotAt
+    }
+
+    if ($null -ne $Response.startFunnel) {
+        $StartFunnelPageViews = $Response.startFunnel.pageViews
+        $StartFunnelLeadSubmits = $Response.startFunnel.leadSubmits
+        $StartFunnelLeadSuccesses = $Response.startFunnel.leadSuccesses
+        $StartFunnelExistingLeads = $Response.startFunnel.existingLeads
+        $StartFunnelLiveBoardClicks = $Response.startFunnel.liveBoardClicks
+        $StartFunnelLatestEventAt = $Response.startFunnel.latestEventAt
     }
 
     if ($null -ne $Response.watchlistInsights) {
@@ -95,6 +111,7 @@ try {
         $FeedbackStorageCheck = $Response.checks.feedbackStorage
         $WatchlistInterestStorageCheck = $Response.checks.watchlistInterestStorage
         $MarketSnapshotStorageCheck = $Response.checks.marketSnapshotStorage
+        $StartFunnelStorageCheck = $Response.checks.startFunnelStorage
     }
 
     $SafeSummary = [ordered]@{
@@ -124,6 +141,14 @@ try {
             count = $MarketSnapshotCount
             latestSnapshotAt = $LatestSnapshotAt
         }
+        startFunnel = [ordered]@{
+            pageViews = $StartFunnelPageViews
+            leadSubmits = $StartFunnelLeadSubmits
+            leadSuccesses = $StartFunnelLeadSuccesses
+            existingLeads = $StartFunnelExistingLeads
+            liveBoardClicks = $StartFunnelLiveBoardClicks
+            latestEventAt = $StartFunnelLatestEventAt
+        }
         watchlistInsights = [ordered]@{
             topMarkets = $WatchlistTopMarkets
             topCategories = $WatchlistTopCategories
@@ -135,6 +160,7 @@ try {
             feedbackStorage = $FeedbackStorageCheck
             watchlistInterestStorage = $WatchlistInterestStorageCheck
             marketSnapshotStorage = $MarketSnapshotStorageCheck
+            startFunnelStorage = $StartFunnelStorageCheck
         }
         generatedAt = $Response.generatedAt
     }

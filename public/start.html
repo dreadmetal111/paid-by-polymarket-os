@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Free Market Scan | House of Markets</title>
+    <meta
+      name="description"
+      content="Get a free five-minute prediction market scan from House of Markets. Learn how to check probability, movement, volume, liquidity, and related markets before opening Polymarket."
+    />
+    <link rel="stylesheet" href="/start.css?v=hom-start-1" />
+  </head>
+  <body>
+    <main class="start-page">
+      <section class="start-hero" aria-labelledby="startHeroTitle">
+        <div class="start-brand-row">
+          <a class="start-brand" href="/" aria-label="House of Markets home">
+            <span class="start-brand-mark">H</span>
+            <span>House of Markets</span>
+          </a>
+          <span class="start-pill">Free beta</span>
+        </div>
+
+        <div class="start-hero-copy">
+          <p class="start-eyebrow">Five-minute prediction market scan</p>
+          <h1 id="startHeroTitle">Stop scrolling. Start scanning prediction markets.</h1>
+          <p class="start-subcopy">
+            Get a simple research checklist for reading active markets: probability,
+            movement, volume, liquidity, and related markets before you open Polymarket.
+          </p>
+        </div>
+
+        <div class="start-cta-row">
+          <a class="start-button start-button-primary" href="#freeScanForm">
+            Get the free market scan
+          </a>
+          <a class="start-button start-button-secondary" href="/" data-start-live-board>
+            Explore the live market board
+          </a>
+        </div>
+
+        <p class="start-disclaimer">
+          Independent project. Not financial advice. Not an official Polymarket product or partnership.
+        </p>
+      </section>
+
+      <section class="start-scan-card" aria-labelledby="scanChecklistTitle">
+        <p class="start-eyebrow">What the scan checks</p>
+        <h2 id="scanChecklistTitle">A faster way to read a market.</h2>
+
+        <div class="start-check-grid">
+          <article>
+            <span class="start-check-icon">%</span>
+            <h3>Probability</h3>
+            <p>Read the implied YES chance without treating it as a guarantee.</p>
+          </article>
+          <article>
+            <span class="start-check-icon">↕</span>
+            <h3>Movement</h3>
+            <p>Look for odds that recently shifted and may deserve a closer read.</p>
+          </article>
+          <article>
+            <span class="start-check-icon">$</span>
+            <h3>Volume</h3>
+            <p>Spot markets with more visible trading activity and attention.</p>
+          </article>
+          <article>
+            <span class="start-check-icon">≈</span>
+            <h3>Liquidity</h3>
+            <p>Check whether the market has enough depth to compare more cleanly.</p>
+          </article>
+          <article>
+            <span class="start-check-icon">⧉</span>
+            <h3>Related markets</h3>
+            <p>Compare markets from the same event instead of reading repeated cards.</p>
+          </article>
+          <article>
+            <span class="start-check-icon">✓</span>
+            <h3>Research checklist</h3>
+            <p>Use a simple routine before deciding whether to open the real market.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="start-form-section" aria-labelledby="freeScanTitle">
+        <div class="start-form-card">
+          <div>
+            <p class="start-eyebrow">Free market scan</p>
+            <h2 id="freeScanTitle">Get the free market scan.</h2>
+            <p class="start-form-copy">
+              Enter your email to save your request. The free scan will be available
+              here shortly during the House of Markets beta.
+            </p>
+          </div>
+
+          <form id="freeScanForm" class="start-form" novalidate>
+            <label for="startEmail">Email address</label>
+            <div class="start-form-row">
+              <input
+                id="startEmail"
+                name="email"
+                type="email"
+                inputmode="email"
+                autocomplete="email"
+                placeholder="you@example.com"
+                required
+              />
+              <button id="startSubmitButton" class="start-button start-button-primary" type="submit">
+                Get the free market scan
+              </button>
+            </div>
+            <p class="start-consent">
+              By submitting, you agree to receive House of Markets beta updates about
+              the free scan and alerts beta. No trading happens here.
+            </p>
+            <p id="startFormStatus" class="start-form-status" aria-live="polite"></p>
+          </form>
+        </div>
+      </section>
+
+      <section class="start-bottom-card" aria-labelledby="startNextTitle">
+        <p class="start-eyebrow">What happens next</p>
+        <h2 id="startNextTitle">Start with the checklist, then browse live markets.</h2>
+        <p>
+          House of Markets helps you discover grouped prediction-market events,
+          compare related markets, and open real markets on Polymarket when you are ready.
+        </p>
+        <a class="start-button start-button-secondary" href="/" data-start-live-board>
+          Explore the live market board
+        </a>
+      </section>
+    </main>
+
+    <script src="/start.js?v=hom-start-1"></script>
+  </body>
+</html>

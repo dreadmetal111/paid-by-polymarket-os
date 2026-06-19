@@ -16,4 +16,6 @@ data/watchlist-interest.json
 data/.watchlist-interest.*.tmp
 data/market-snapshots.json
 data/.market-snapshots.*.tmp
+data/start-funnel-events.json
+data/.start-funnel-events.*.tmp
 pbp-snapshot-capture/snapshot-capture.env

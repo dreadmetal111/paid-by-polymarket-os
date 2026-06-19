@@ -31,11 +31,16 @@ const MARKET_SNAPSHOTS_DATA_FILE = path.resolve(
   process.env.PBP_MARKET_SNAPSHOTS_DATA_FILE ||
     path.join(__dirname, "data", "market-snapshots.json")
 );
+const START_FUNNEL_DATA_FILE = path.resolve(
+  process.env.PBP_START_FUNNEL_DATA_FILE ||
+    path.join(__dirname, "data", "start-funnel-events.json")
+);
 const ALERT_SIGNALS_TABLE = "alert_signals";
 const OUTBOUND_CLICK_EVENTS_TABLE = "outbound_click_events";
 const BETA_FEEDBACK_TABLE = "beta_feedback";
 const WATCHLIST_INTEREST_TABLE = "watchlist_interest";
 const MARKET_SNAPSHOTS_TABLE = "market_snapshots";
+const START_FUNNEL_EVENTS_TABLE = "start_funnel_events";
 const PUBLIC_ALERT_SIGNAL_LIMIT = 5;
 const MARKET_SNAPSHOT_CAPTURE_LIMIT = 75;
 const MARKET_SNAPSHOT_MAX_HISTORY_HOURS = 720;
@@ -229,6 +234,7 @@ let outboundClickWriteQueue = Promise.resolve();
 let betaFeedbackWriteQueue = Promise.resolve();
 let watchlistInterestWriteQueue = Promise.resolve();
 let marketSnapshotWriteQueue = Promise.resolve();
+let startFunnelWriteQueue = Promise.resolve();
 
 const demoState = {
   account: createInitialAccountState(),
@@ -532,6 +538,45 @@ function normalizeWatchlistInterestInput(body) {
   };
 }
 
+const START_FUNNEL_EVENT_NAMES = new Set([
+  "start_page_view",
+  "start_lead_submit",
+  "start_lead_success",
+  "start_lead_existing",
+  "start_live_board_click",
+]);
+
+function normalizeStartFunnelEventName(value) {
+  const eventName = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 80);
+
+  return START_FUNNEL_EVENT_NAMES.has(eventName) ? eventName : "";
+}
+
+function sanitizeStartAttributionValue(value, fallback = "direct", maxLength = 120) {
+  const sanitized = redactSensitivePublicText(value)
+    .replace(/https?:\/\/\S+/gi, "")
+    .replace(/[^\w .:/?#&=+-]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, maxLength);
+
+  return sanitized || fallback;
+}
+
+function normalizeStartFunnelInput(body) {
+  return {
+    eventName: normalizeStartFunnelEventName(body?.eventName ?? body?.event_name),
+    source: sanitizeStartAttributionValue(body?.source, "direct", 120),
+    campaign: sanitizeStartAttributionValue(body?.campaign, "none", 120),
+    content: sanitizeStartAttributionValue(body?.content, "none", 120),
+  };
+}
+
 function toPublicAlertSignal(signal) {
   return {
     alertType: signal.alertType,
@@ -713,6 +758,33 @@ function normalizeMarketSnapshotData(raw) {
   };
 }
 
+function normalizeStartFunnelData(raw) {
+  const events = Array.isArray(raw?.events) ? raw.events : [];
+  const normalizedEvents = [];
+
+  for (const event of events) {
+    const normalized = normalizeStartFunnelInput({
+      eventName: event?.eventName,
+      source: event?.source,
+      campaign: event?.campaign,
+      content: event?.content,
+    });
+
+    if (!normalized.eventName) continue;
+
+    normalizedEvents.push({
+      ...normalized,
+      createdAt: String(event?.createdAt || new Date().toISOString()),
+    });
+  }
+
+  return {
+    version: 1,
+    updatedAt: String(raw?.updatedAt || new Date().toISOString()),
+    events: normalizedEvents,
+  };
+}
+
 async function readWaitlistData() {
   try {
     const rawJson = await fs.readFile(WAITLIST_DATA_FILE, "utf8");
@@ -873,6 +945,38 @@ async function writeMarketSnapshotData(data) {
   await fs.rename(tempFile, MARKET_SNAPSHOTS_DATA_FILE);
 }
 
+async function readStartFunnelData() {
+  try {
+    const rawJson = await fs.readFile(START_FUNNEL_DATA_FILE, "utf8");
+    return normalizeStartFunnelData(JSON.parse(rawJson));
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return normalizeStartFunnelData({ events: [] });
+    }
+    throw error;
+  }
+}
+
+async function writeStartFunnelData(data) {
+  const normalizedData = normalizeStartFunnelData({
+    ...data,
+    updatedAt: new Date().toISOString(),
+  });
+  const directory = path.dirname(START_FUNNEL_DATA_FILE);
+  const tempFile = path.join(
+    directory,
+    `.start-funnel-events.${process.pid}.${Date.now()}.tmp`
+  );
+
+  await fs.mkdir(directory, { recursive: true });
+  await fs.writeFile(
+    tempFile,
+    `${JSON.stringify(normalizedData, null, 2)}\n`,
+    "utf8"
+  );
+  await fs.rename(tempFile, START_FUNNEL_DATA_FILE);
+}
+
 function getSupabaseWaitlistConfig() {
   const supabaseUrl = envFirst("SUPABASE_URL").replace(/\/+$/, "");
   const serviceRoleKey = envFirst("SUPABASE_SERVICE_ROLE_KEY");
@@ -943,6 +1047,18 @@ function getSupabaseMarketSnapshotConfig() {
     supabaseUrl,
     serviceRoleKey,
     table: MARKET_SNAPSHOTS_TABLE,
+  };
+}
+
+function getSupabaseStartFunnelConfig() {
+  const supabaseUrl = envFirst("SUPABASE_URL").replace(/\/+$/, "");
+  const serviceRoleKey = envFirst("SUPABASE_SERVICE_ROLE_KEY");
+
+  return {
+    enabled: !!(supabaseUrl && serviceRoleKey),
+    supabaseUrl,
+    serviceRoleKey,
+    table: START_FUNNEL_EVENTS_TABLE,
   };
 }
 
@@ -1062,6 +1178,21 @@ function logMarketSnapshotStorageMode(context) {
   console.log(`[market-snapshots] ${context}`, buildMarketSnapshotStorageLog());
 }
 
+function buildStartFunnelStorageLog(config = getSupabaseStartFunnelConfig()) {
+  return {
+    storageMode: config.enabled ? "supabase" : "json",
+    supabaseEnabled: config.enabled,
+    supabaseHost: getSupabaseHost(config.supabaseUrl) || "not-configured",
+    supabaseTable: config.table,
+    supabaseUrlConfigured: !!config.supabaseUrl,
+    supabaseServiceRoleKeyConfigured: !!config.serviceRoleKey,
+  };
+}
+
+function logStartFunnelStorageMode(context) {
+  console.log(`[start-funnel] ${context}`, buildStartFunnelStorageLog());
+}
+
 function getActiveWaitlistStorageProvider() {
   const config = getSupabaseWaitlistConfig();
 
@@ -1109,6 +1240,15 @@ function getActiveWatchlistInterestStorageProvider() {
 
 function getActiveMarketSnapshotStorageProvider() {
   const config = getSupabaseMarketSnapshotConfig();
+
+  return {
+    storageMode: config.enabled ? "supabase" : "json",
+    config,
+  };
+}
+
+function getActiveStartFunnelStorageProvider() {
+  const config = getSupabaseStartFunnelConfig();
 
   return {
     storageMode: config.enabled ? "supabase" : "json",
@@ -2527,6 +2667,205 @@ async function readMarketSnapshotStatusSummary() {
         latestSnapshotAt: null,
       },
       marketSnapshotStorage: "error",
+    };
+  }
+}
+
+function mapSupabaseStartFunnelRow(row) {
+  return {
+    eventName: normalizeStartFunnelEventName(row?.event_name ?? row?.eventName),
+    source: sanitizeStartAttributionValue(row?.source, "direct", 120),
+    campaign: sanitizeStartAttributionValue(row?.campaign, "none", 120),
+    content: sanitizeStartAttributionValue(row?.content, "none", 120),
+    createdAt: String(row?.created_at || row?.createdAt || new Date().toISOString()),
+  };
+}
+
+async function addSupabaseStartFunnelEvent({
+  event,
+  config = getSupabaseStartFunnelConfig(),
+}) {
+  const url = buildSupabaseTableUrl(config);
+
+  const rows = await fetchSupabaseJson(url, {
+    method: "POST",
+    headers: getSupabaseHeaders(config, {
+      "Content-Type": "application/json",
+      Prefer: "return=representation",
+    }),
+    body: JSON.stringify({
+      event_name: event.eventName,
+      source: event.source,
+      campaign: event.campaign,
+      content: event.content,
+    }),
+    logLabel: "start-funnel",
+    errorLabel: "start funnel event",
+  });
+
+  return Array.isArray(rows) && rows[0]
+    ? mapSupabaseStartFunnelRow(rows[0])
+    : {
+        ...event,
+        createdAt: new Date().toISOString(),
+      };
+}
+
+async function addJsonStartFunnelEvent(eventInput) {
+  const task = async () => {
+    const data = await readStartFunnelData();
+    const event = {
+      ...normalizeStartFunnelInput(eventInput),
+      createdAt: new Date().toISOString(),
+    };
+
+    if (!event.eventName) {
+      throw new Error("Invalid start funnel event.");
+    }
+
+    data.events.push(event);
+    await writeStartFunnelData(data);
+
+    return {
+      event,
+      count: data.events.length,
+    };
+  };
+
+  startFunnelWriteQueue = startFunnelWriteQueue.then(task, task);
+  return startFunnelWriteQueue;
+}
+
+async function addStartFunnelEvent(eventInput) {
+  const provider = getActiveStartFunnelStorageProvider();
+  const event = normalizeStartFunnelInput(eventInput);
+
+  if (!event.eventName) {
+    const error = new Error("Invalid start funnel event.");
+    error.status = 400;
+    throw error;
+  }
+
+  try {
+    const result =
+      provider.storageMode === "supabase"
+        ? {
+            event: await addSupabaseStartFunnelEvent({
+              event,
+              config: provider.config,
+            }),
+            count: null,
+          }
+        : await addJsonStartFunnelEvent(event);
+
+    return {
+      ...result,
+      storageMode: provider.storageMode,
+    };
+  } catch (error) {
+    if (provider.storageMode === "supabase") {
+      console.error("[start-funnel] Supabase save failed; falling back to JSON:", error.message);
+      const fallbackResult = await addJsonStartFunnelEvent(event);
+      return {
+        ...fallbackResult,
+        storageMode: "json_fallback",
+      };
+    }
+
+    throw error;
+  }
+}
+
+function buildStartFunnelStatus(events) {
+  const counts = {
+    pageViews: 0,
+    leadSubmits: 0,
+    leadSuccesses: 0,
+    existingLeads: 0,
+    liveBoardClicks: 0,
+  };
+  let latestTimestamp = 0;
+
+  for (const event of Array.isArray(events) ? events : []) {
+    const eventName = normalizeStartFunnelEventName(event?.eventName);
+    if (eventName === "start_page_view") counts.pageViews += 1;
+    if (eventName === "start_lead_submit") counts.leadSubmits += 1;
+    if (eventName === "start_lead_success") counts.leadSuccesses += 1;
+    if (eventName === "start_lead_existing") counts.existingLeads += 1;
+    if (eventName === "start_live_board_click") counts.liveBoardClicks += 1;
+
+    const timestamp = Date.parse(event?.createdAt);
+    if (Number.isFinite(timestamp) && timestamp > latestTimestamp) {
+      latestTimestamp = timestamp;
+    }
+  }
+
+  return {
+    ...counts,
+    latestEventAt: latestTimestamp ? new Date(latestTimestamp).toISOString() : null,
+  };
+}
+
+async function readJsonStartFunnelStatusSummary() {
+  const data = await readStartFunnelData();
+  const events = Array.isArray(data.events) ? data.events : [];
+
+  return {
+    startFunnel: buildStartFunnelStatus(events),
+    startFunnelStorage: "ok",
+  };
+}
+
+async function readSupabaseStartFunnelStatusSummary(config) {
+  const url = buildSupabaseTableUrl(config);
+  url.searchParams.set("select", "event_name,source,campaign,content,created_at");
+  url.searchParams.set("order", "created_at.desc");
+
+  const rows = await fetchSupabaseJson(url, {
+    headers: getSupabaseHeaders(config),
+    logLabel: "start-funnel",
+    errorLabel: "start funnel events",
+  });
+
+  const events = (Array.isArray(rows) ? rows : []).map(mapSupabaseStartFunnelRow);
+
+  return {
+    startFunnel: buildStartFunnelStatus(events),
+    startFunnelStorage: "ok",
+  };
+}
+
+async function readStartFunnelStatusSummary() {
+  const provider = getActiveStartFunnelStorageProvider();
+
+  try {
+    if (provider.storageMode === "supabase") {
+      return await readSupabaseStartFunnelStatusSummary(provider.config);
+    }
+    return await readJsonStartFunnelStatusSummary();
+  } catch (error) {
+    console.error("[start-funnel] Status read failed:", error.message);
+    if (provider.storageMode === "supabase") {
+      try {
+        const fallbackSummary = await readJsonStartFunnelStatusSummary();
+        return {
+          startFunnel: fallbackSummary.startFunnel,
+          startFunnelStorage: "ok",
+        };
+      } catch (fallbackError) {
+        console.error("[start-funnel] JSON fallback status read failed:", fallbackError.message);
+      }
+    }
+    return {
+      startFunnel: {
+        pageViews: 0,
+        leadSubmits: 0,
+        leadSuccesses: 0,
+        existingLeads: 0,
+        liveBoardClicks: 0,
+        latestEventAt: null,
+      },
+      startFunnelStorage: "error",
     };
   }
 }
@@ -4996,6 +5335,14 @@ app.post("/api/internal/alerts", async (req, res) => {
   }
 });
 
+app.get("/start", (req, res) => {
+  res.sendFile(path.join(PUBLIC_DIR, "start.html"));
+});
+
+app.get("/start/", (req, res) => {
+  res.sendFile(path.join(PUBLIC_DIR, "start.html"));
+});
+
 app.get("/api/public-config", (req, res) => {
   res.set("Cache-Control", "no-store");
   return res.json(buildPublicConfig());
@@ -5070,6 +5417,35 @@ app.get("/api/market-history", async (req, res) => {
     rangeHours,
     points,
   });
+});
+
+app.post("/api/events/start-funnel", async (req, res) => {
+  try {
+    const event = normalizeStartFunnelInput(req.body);
+
+    if (!event.eventName) {
+      return res.status(400).json({
+        ok: false,
+        error: "Invalid funnel event.",
+      });
+    }
+
+    logStartFunnelStorageMode("event save start");
+    const result = await addStartFunnelEvent(event);
+
+    return res.status(201).json({
+      ok: true,
+      status: "created",
+      storageMode: result.storageMode,
+      message: "Funnel event recorded.",
+    });
+  } catch (error) {
+    console.error("[start-funnel] Save failed:", error.message);
+    return res.status(error.status || 500).json({
+      ok: false,
+      error: "Failed to record funnel event.",
+    });
+  }
 });
 
 app.post("/api/events/outbound-click", async (req, res) => {
@@ -5273,13 +5649,15 @@ app.get("/api/admin/status", async (req, res) => {
     logBetaFeedbackStorageMode("admin status start");
     logWatchlistInterestStorageMode("admin status start");
     logMarketSnapshotStorageMode("admin status start");
-    const [waitlistSummary, alertSignalSummary, outboundClickSummary, feedbackSummary, watchlistInterestSummary, marketSnapshotSummary] = await Promise.all([
+    logStartFunnelStorageMode("admin status start");
+    const [waitlistSummary, alertSignalSummary, outboundClickSummary, feedbackSummary, watchlistInterestSummary, marketSnapshotSummary, startFunnelSummary] = await Promise.all([
       readWaitlistStatusSummary(),
       readAlertSignalStatusSummary(),
       readOutboundClickStatusSummary(),
       readBetaFeedbackStatusSummary(),
       readWatchlistInterestStatusSummary(),
       readMarketSnapshotStatusSummary(),
+      readStartFunnelStatusSummary(),
     ]);
     const checks = {
       waitlistStorage: "ok",
@@ -5288,6 +5666,7 @@ app.get("/api/admin/status", async (req, res) => {
       feedbackStorage: feedbackSummary.feedbackStorage,
       watchlistInterestStorage: watchlistInterestSummary.watchlistInterestStorage,
       marketSnapshotStorage: marketSnapshotSummary.marketSnapshotStorage,
+      startFunnelStorage: startFunnelSummary.startFunnelStorage,
       adminAuth: "ok",
     };
     const statusOk = Object.values(checks).every((value) => value === "ok");
@@ -5302,6 +5681,7 @@ app.get("/api/admin/status", async (req, res) => {
       feedback: feedbackSummary.feedback,
       watchlistInterest: watchlistInterestSummary.watchlistInterest,
       marketSnapshots: marketSnapshotSummary.marketSnapshots,
+      startFunnel: startFunnelSummary.startFunnel,
       watchlistInsights: watchlistInterestSummary.watchlistInsights || {
         topMarkets: [],
         topCategories: [],
