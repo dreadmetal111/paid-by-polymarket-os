@@ -155,11 +155,26 @@ details summary {
 }
 
 .watchlist-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
   min-height: 42px;
   border-color: rgba(34, 197, 94, 0.38);
   background: rgba(20, 83, 45, 0.16);
   color: #dcfce7;
   font-weight: 800;
+}
+
+.watchlist-action-btn::before {
+  content: "◴";
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: rgba(34, 197, 94, 0.16);
+  font-size: 0.76rem;
 }
 
 .watchlist-action-btn:hover,
@@ -172,6 +187,12 @@ details summary {
   border-color: rgba(74, 222, 128, 0.62);
   background: rgba(34, 197, 94, 0.24);
   color: #f0fdf4;
+  box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.1) inset;
+}
+
+.watchlist-action-btn.is-watching::before {
+  content: "✓";
+  background: rgba(34, 197, 94, 0.24);
 }
 
 .watchlist-toast {
@@ -774,10 +795,33 @@ button {
   touch-action: manipulation;
 }
 
+.market-link,
+button,
+.watchlist-action-btn,
+.secondary-trade-btn {
+  transition:
+    border-color 0.16s ease,
+    background 0.16s ease,
+    color 0.16s ease,
+    transform 0.12s ease,
+    box-shadow 0.16s ease;
+}
+
+.market-link:hover,
+button:hover {
+  transform: translateY(-1px);
+}
+
+.market-link:active,
+button:active {
+  transform: translateY(0);
+}
+
 .market-link-primary {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: 8px;
   min-height: 44px;
   border: 1px solid rgba(56, 189, 248, 0.62);
   border-radius: 12px;
@@ -786,14 +830,77 @@ button {
   font-weight: 900;
   padding: 10px 14px;
   text-decoration: none;
+  box-shadow: 0 10px 24px rgba(14, 165, 233, 0.12);
+}
+
+.market-link-primary::before {
+  content: "↗";
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  background: rgba(240, 249, 255, 0.14);
+  font-size: 0.82rem;
+}
+
+.market-link-primary:hover,
+.market-link-primary:focus-visible {
+  border-color: rgba(125, 211, 252, 0.84);
+  background: linear-gradient(180deg, rgba(56, 189, 248, 0.36), rgba(14, 165, 233, 0.22));
+  box-shadow:
+    0 0 0 3px rgba(56, 189, 248, 0.14),
+    0 12px 28px rgba(14, 165, 233, 0.18);
 }
 
 .secondary-trade-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
   min-height: 42px;
   border-color: rgba(148, 163, 184, 0.24);
   background: rgba(15, 23, 42, 0.82);
   color: #cbd5e1;
   font-weight: 800;
+}
+
+.secondary-trade-btn::before {
+  content: "◌";
+  font-size: 0.82rem;
+}
+
+.secondary-trade-btn::after {
+  content: "Preview only";
+  margin-left: 2px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.12);
+  color: #94a3b8;
+  font-size: 0.64rem;
+  font-weight: 900;
+  line-height: 1;
+  padding: 4px 6px;
+  text-transform: uppercase;
+}
+
+.secondary-trade-btn[data-side="BUY YES"] {
+  border-color: rgba(34, 197, 94, 0.34);
+  background: rgba(20, 83, 45, 0.18);
+  color: #bbf7d0;
+}
+
+.secondary-trade-btn[data-side="BUY YES"]::before {
+  content: "+";
+}
+
+.secondary-trade-btn[data-side="BUY NO"] {
+  border-color: rgba(248, 113, 113, 0.34);
+  background: rgba(127, 29, 29, 0.16);
+  color: #fecaca;
+}
+
+.secondary-trade-btn[data-side="BUY NO"]::before {
+  content: "-";
 }
 
 .advanced-demo-card {
@@ -1844,13 +1951,37 @@ button {
   width: 100%;
 }
 
+.market-page-action-stack .secondary-trade-btn {
+  margin-top: 4px;
+}
+
+.market-page-action-stack .secondary-trade-btn + .secondary-trade-btn {
+  margin-top: -6px;
+}
+
+.market-page-action-stack .watchlist-action-btn {
+  margin-top: 8px;
+}
+
 .market-page-action-stack #copyMarketPageLinkBtnSide,
 .market-page-copy-link-row button,
 .market-detail-share-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 42px;
   border-color: rgba(148, 163, 184, 0.24);
   background: rgba(30, 41, 59, 0.58);
   color: #e2e8f0;
   font-weight: 800;
+}
+
+.market-page-action-stack #copyMarketPageLinkBtnSide::before,
+.market-page-copy-link-row button::before,
+.market-detail-share-actions button::before {
+  content: "⧉";
+  font-size: 0.82rem;
 }
 
 .market-page-side-link-input {
@@ -1877,20 +2008,26 @@ button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: 8px;
   min-height: 42px;
   border: 1px solid rgba(148, 163, 184, 0.34);
   border-radius: 12px;
-  background: rgba(30, 41, 59, 0.55);
-  color: #dbeafe;
+  background: linear-gradient(180deg, rgba(99, 102, 241, 0.22), rgba(79, 70, 229, 0.13));
+  color: #e0e7ff;
   font-weight: 850;
   padding: 10px 14px;
   text-decoration: none;
 }
 
+.market-page-link::before {
+  content: "➜";
+  font-size: 0.86rem;
+}
+
 .market-page-link:hover,
 .market-page-link:focus-visible {
-  border-color: rgba(56, 189, 248, 0.42);
-  background: rgba(56, 189, 248, 0.12);
+  border-color: rgba(129, 140, 248, 0.58);
+  background: linear-gradient(180deg, rgba(99, 102, 241, 0.3), rgba(79, 70, 229, 0.18));
 }
 
 .market-detail-actions .market-page-link {
@@ -1903,6 +2040,10 @@ button {
 
 .market-detail-actions .secondary-trade-btn {
   order: 4;
+}
+
+.market-detail-actions .market-link-primary {
+  order: 1;
 }
 
 @media (min-width: 901px) {
@@ -2301,10 +2442,12 @@ body.pbp-debug-mode .public-beta-internal-section {
   .quick-market-actions {
     align-items: stretch;
     flex-direction: column;
+    gap: 10px;
   }
 
   .quick-market-actions .market-link,
   .quick-market-actions button {
+    min-height: 48px;
     width: 100%;
   }
 
@@ -2354,10 +2497,12 @@ body.pbp-debug-mode .public-beta-internal-section {
 
   .market-detail-actions {
     flex-direction: column;
+    gap: 10px;
   }
 
   .market-detail-actions .market-link,
   .market-detail-actions button {
+    min-height: 48px;
     width: 100%;
   }
 
@@ -2449,7 +2594,21 @@ body.pbp-debug-mode .public-beta-internal-section {
   .market-page-related-card .watchlist-action-btn,
   .market-page-related-card .secondary-trade-btn {
     width: 100%;
-    min-height: 46px;
+    min-height: 50px;
+  }
+
+  .market-link-primary {
+    min-height: 52px;
+    font-size: 0.96rem;
+  }
+
+  .market-page-link,
+  .watchlist-action-btn,
+  .secondary-trade-btn,
+  .market-page-action-stack #copyMarketPageLinkBtnSide,
+  .market-page-copy-link-row button,
+  .market-detail-share-actions button {
+    min-height: 48px;
   }
 
   .market-intelligence-metric {
