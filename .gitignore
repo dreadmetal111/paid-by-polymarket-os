@@ -14,3 +14,5 @@ data/beta-feedback.json
 data/.beta-feedback.*.tmp
 data/watchlist-interest.json
 data/.watchlist-interest.*.tmp
+data/market-snapshots.json
+data/.market-snapshots.*.tmp

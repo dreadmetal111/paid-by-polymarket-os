@@ -27,11 +27,21 @@ const WATCHLIST_INTEREST_DATA_FILE = path.resolve(
   process.env.PBP_WATCHLIST_INTEREST_DATA_FILE ||
     path.join(__dirname, "data", "watchlist-interest.json")
 );
+const MARKET_SNAPSHOTS_DATA_FILE = path.resolve(
+  process.env.PBP_MARKET_SNAPSHOTS_DATA_FILE ||
+    path.join(__dirname, "data", "market-snapshots.json")
+);
 const ALERT_SIGNALS_TABLE = "alert_signals";
 const OUTBOUND_CLICK_EVENTS_TABLE = "outbound_click_events";
 const BETA_FEEDBACK_TABLE = "beta_feedback";
 const WATCHLIST_INTEREST_TABLE = "watchlist_interest";
+const MARKET_SNAPSHOTS_TABLE = "market_snapshots";
 const PUBLIC_ALERT_SIGNAL_LIMIT = 5;
+const MARKET_SNAPSHOT_CAPTURE_LIMIT = 75;
+const MARKET_SNAPSHOT_MAX_HISTORY_HOURS = 720;
+const MARKET_SNAPSHOT_DEFAULT_HISTORY_HOURS = 168;
+const MARKET_SNAPSHOT_LOCAL_RETENTION_DAYS = 30;
+const MARKET_SNAPSHOT_LOCAL_MAX_ROWS = 10_000;
 
 const GAMMA_BASE = "https://gamma-api.polymarket.com";
 
@@ -218,6 +228,7 @@ let waitlistWriteQueue = Promise.resolve();
 let outboundClickWriteQueue = Promise.resolve();
 let betaFeedbackWriteQueue = Promise.resolve();
 let watchlistInterestWriteQueue = Promise.resolve();
+let marketSnapshotWriteQueue = Promise.resolve();
 
 const demoState = {
   account: createInitialAccountState(),
@@ -630,6 +641,78 @@ function normalizeWatchlistInterestData(raw) {
   };
 }
 
+function normalizeMarketSnapshotNumber(value, { min = null, max = null } = {}) {
+  if (value === null || value === undefined || value === "") return null;
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return null;
+  if (min !== null && numeric < min) return null;
+  if (max !== null && numeric > max) return null;
+  return roundTo(numeric, 4);
+}
+
+function normalizeMarketSnapshotHour(value) {
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return "";
+  const date = new Date(timestamp);
+  date.setUTCMinutes(0, 0, 0);
+  return date.toISOString();
+}
+
+function normalizeMarketSnapshotInput(input) {
+  const marketId = sanitizeOutboundClickText(input?.marketId ?? input?.market_id, 180);
+  const marketQuestion = sanitizeOutboundClickText(
+    input?.marketQuestion ?? input?.market_question,
+    320
+  );
+  const snapshotHour = normalizeMarketSnapshotHour(
+    input?.snapshotHour ?? input?.snapshot_hour
+  );
+  const capturedAt = String(input?.capturedAt || input?.captured_at || new Date().toISOString());
+
+  return {
+    marketId,
+    marketQuestion,
+    eventTitle: sanitizeOutboundClickText(input?.eventTitle ?? input?.event_title, 220) || null,
+    category: sanitizeOutboundClickText(input?.category, 120) || null,
+    yesProbability: normalizeMarketSnapshotNumber(
+      input?.yesProbability ?? input?.yes_probability,
+      { min: 0, max: 100 }
+    ),
+    movement: normalizeMarketSnapshotNumber(input?.movement),
+    volume: normalizeMarketSnapshotNumber(input?.volume, { min: 0 }),
+    liquidity: normalizeMarketSnapshotNumber(input?.liquidity, { min: 0 }),
+    source: sanitizeOutboundClickText(input?.source, 80) || "gamma",
+    snapshotHour,
+    capturedAt,
+  };
+}
+
+function normalizeMarketSnapshotData(raw) {
+  const snapshots = Array.isArray(raw?.snapshots) ? raw.snapshots : [];
+  const normalizedByKey = new Map();
+
+  for (const snapshot of snapshots) {
+    const normalized = normalizeMarketSnapshotInput(snapshot);
+    if (!normalized.marketId || !normalized.marketQuestion || !normalized.snapshotHour) continue;
+    normalizedByKey.set(`${normalized.marketId}::${normalized.snapshotHour}`, normalized);
+  }
+
+  const cutoff = Date.now() - MARKET_SNAPSHOT_LOCAL_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+  const normalizedSnapshots = Array.from(normalizedByKey.values())
+    .filter((snapshot) => {
+      const timestamp = Date.parse(snapshot.snapshotHour);
+      return Number.isFinite(timestamp) && timestamp >= cutoff;
+    })
+    .sort((a, b) => Date.parse(a.snapshotHour) - Date.parse(b.snapshotHour))
+    .slice(-MARKET_SNAPSHOT_LOCAL_MAX_ROWS);
+
+  return {
+    version: 1,
+    updatedAt: String(raw?.updatedAt || new Date().toISOString()),
+    snapshots: normalizedSnapshots,
+  };
+}
+
 async function readWaitlistData() {
   try {
     const rawJson = await fs.readFile(WAITLIST_DATA_FILE, "utf8");
@@ -758,6 +841,38 @@ async function writeWatchlistInterestData(data) {
   await fs.rename(tempFile, WATCHLIST_INTEREST_DATA_FILE);
 }
 
+async function readMarketSnapshotData() {
+  try {
+    const rawJson = await fs.readFile(MARKET_SNAPSHOTS_DATA_FILE, "utf8");
+    return normalizeMarketSnapshotData(JSON.parse(rawJson));
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return normalizeMarketSnapshotData({ snapshots: [] });
+    }
+    throw error;
+  }
+}
+
+async function writeMarketSnapshotData(data) {
+  const normalizedData = normalizeMarketSnapshotData({
+    ...data,
+    updatedAt: new Date().toISOString(),
+  });
+  const directory = path.dirname(MARKET_SNAPSHOTS_DATA_FILE);
+  const tempFile = path.join(
+    directory,
+    `.market-snapshots.${process.pid}.${Date.now()}.tmp`
+  );
+
+  await fs.mkdir(directory, { recursive: true });
+  await fs.writeFile(
+    tempFile,
+    `${JSON.stringify(normalizedData, null, 2)}\n`,
+    "utf8"
+  );
+  await fs.rename(tempFile, MARKET_SNAPSHOTS_DATA_FILE);
+}
+
 function getSupabaseWaitlistConfig() {
   const supabaseUrl = envFirst("SUPABASE_URL").replace(/\/+$/, "");
   const serviceRoleKey = envFirst("SUPABASE_SERVICE_ROLE_KEY");
@@ -816,6 +931,18 @@ function getSupabaseWatchlistInterestConfig() {
     supabaseUrl,
     serviceRoleKey,
     table: WATCHLIST_INTEREST_TABLE,
+  };
+}
+
+function getSupabaseMarketSnapshotConfig() {
+  const supabaseUrl = envFirst("SUPABASE_URL").replace(/\/+$/, "");
+  const serviceRoleKey = envFirst("SUPABASE_SERVICE_ROLE_KEY");
+
+  return {
+    enabled: !!(supabaseUrl && serviceRoleKey),
+    supabaseUrl,
+    serviceRoleKey,
+    table: MARKET_SNAPSHOTS_TABLE,
   };
 }
 
@@ -920,6 +1047,21 @@ function logWatchlistInterestStorageMode(context) {
   console.log(`[watchlist-interest] ${context}`, buildWatchlistInterestStorageLog());
 }
 
+function buildMarketSnapshotStorageLog(config = getSupabaseMarketSnapshotConfig()) {
+  return {
+    storageMode: config.enabled ? "supabase" : "json",
+    supabaseEnabled: config.enabled,
+    supabaseHost: getSupabaseHost(config.supabaseUrl) || "not-configured",
+    supabaseTable: config.table,
+    supabaseUrlConfigured: !!config.supabaseUrl,
+    supabaseServiceRoleKeyConfigured: !!config.serviceRoleKey,
+  };
+}
+
+function logMarketSnapshotStorageMode(context) {
+  console.log(`[market-snapshots] ${context}`, buildMarketSnapshotStorageLog());
+}
+
 function getActiveWaitlistStorageProvider() {
   const config = getSupabaseWaitlistConfig();
 
@@ -958,6 +1100,15 @@ function getActiveBetaFeedbackStorageProvider() {
 
 function getActiveWatchlistInterestStorageProvider() {
   const config = getSupabaseWatchlistInterestConfig();
+
+  return {
+    storageMode: config.enabled ? "supabase" : "json",
+    config,
+  };
+}
+
+function getActiveMarketSnapshotStorageProvider() {
+  const config = getSupabaseMarketSnapshotConfig();
 
   return {
     storageMode: config.enabled ? "supabase" : "json",
@@ -1959,6 +2110,423 @@ async function readWatchlistInterestStatusSummary() {
         topCategories: [],
       },
       watchlistInterestStorage: "error",
+    };
+  }
+}
+
+function probabilityToPercentagePoints(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return null;
+  if (numeric >= 0 && numeric <= 1) return roundTo(numeric * 100, 4);
+  if (numeric >= 0 && numeric <= 100) return roundTo(numeric, 4);
+  return null;
+}
+
+function movementToPercentagePoints(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return null;
+  if (Math.abs(numeric) <= 1.5) return roundTo(numeric * 100, 4);
+  if (Math.abs(numeric) <= 100) return roundTo(numeric, 4);
+  return null;
+}
+
+function getCurrentUtcSnapshotHour(date = new Date()) {
+  const hour = new Date(date);
+  hour.setUTCMinutes(0, 0, 0);
+  return hour.toISOString();
+}
+
+function mapMarketToSnapshot(market, snapshotHour, capturedAt = new Date().toISOString()) {
+  return normalizeMarketSnapshotInput({
+    marketId: market?.id,
+    marketQuestion: market?.question,
+    eventTitle: market?.eventGroup || market?.eventTitle || null,
+    category: market?.displayCategory || market?.category || null,
+    yesProbability: probabilityToPercentagePoints(market?.yesPriceLive ?? market?.yesPrice),
+    movement: movementToPercentagePoints(
+      market?.priceChange ?? market?.oneDayPriceChange
+    ),
+    volume: getNonNegativeSnapshotNumber(market?.volume24hr ?? market?.volume),
+    liquidity: getNonNegativeSnapshotNumber(market?.liquidity),
+    source: market?.dataSource || "gamma",
+    snapshotHour,
+    capturedAt,
+  });
+}
+
+function getNonNegativeSnapshotNumber(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric >= 0 ? roundTo(numeric, 4) : null;
+}
+
+function isUsableMarketSnapshot(snapshot) {
+  return !!(snapshot?.marketId && snapshot?.marketQuestion && snapshot?.snapshotHour);
+}
+
+async function readWatchlistInterestsForSnapshotCapture() {
+  const provider = getActiveWatchlistInterestStorageProvider();
+
+  try {
+    if (provider.storageMode === "supabase") {
+      const url = buildSupabaseTableUrl(provider.config);
+      url.searchParams.set("select", "market_id,market_question,event_title,category,created_at");
+      url.searchParams.set("order", "created_at.desc");
+      url.searchParams.set("limit", "500");
+
+      const rows = await fetchSupabaseJson(url, {
+        headers: getSupabaseHeaders(provider.config),
+        logLabel: "watchlist-interest",
+        errorLabel: "watchlist interest",
+      });
+
+      return (Array.isArray(rows) ? rows : []).map(mapSupabaseWatchlistInterestRow);
+    }
+
+    const data = await readWatchlistInterestData();
+    return Array.isArray(data.interests) ? data.interests : [];
+  } catch (error) {
+    console.error("[market-snapshots] Watchlist priority read failed:", error.message);
+    return [];
+  }
+}
+
+function selectMarketsForSnapshotCapture(markets, watchlistInterests, limit = MARKET_SNAPSHOT_CAPTURE_LIMIT) {
+  const activeMarkets = (Array.isArray(markets) ? markets : [])
+    .filter((market) => market && market.id && market.question && isLiveMarketCandidate(market));
+  const selectedById = new Map();
+  const watchedIds = new Set(
+    (Array.isArray(watchlistInterests) ? watchlistInterests : [])
+      .map((interest) => String(interest?.marketId || "").trim())
+      .filter(Boolean)
+  );
+
+  const pushMarket = (market) => {
+    if (!market || selectedById.size >= limit) return;
+    const key = String(market.id || "").trim();
+    if (!key || selectedById.has(key)) return;
+    selectedById.set(key, market);
+  };
+
+  activeMarkets
+    .filter((market) => watchedIds.has(String(market.id)))
+    .sort((a, b) => getMarketSnapshotCaptureScore(b) - getMarketSnapshotCaptureScore(a))
+    .forEach(pushMarket);
+
+  [
+    (market) => getNonNegativeSnapshotNumber(market.volume24hr) ?? 0,
+    (market) => getNonNegativeSnapshotNumber(market.liquidity) ?? 0,
+    (market) => Math.abs(Number(market.priceChange ?? market.oneDayPriceChange) || 0),
+    (market) => getMarketSnapshotCaptureScore(market),
+  ].forEach((scoreMarket) => {
+    [...activeMarkets]
+      .sort((a, b) => scoreMarket(b) - scoreMarket(a))
+      .forEach(pushMarket);
+  });
+
+  return Array.from(selectedById.values()).slice(0, limit);
+}
+
+function getMarketSnapshotCaptureScore(market) {
+  const volume = getNonNegativeSnapshotNumber(market?.volume24hr) ?? 0;
+  const liquidity = getNonNegativeSnapshotNumber(market?.liquidity) ?? 0;
+  const movement = Math.abs(Number(market?.priceChange ?? market?.oneDayPriceChange) || 0);
+  const opportunity = Number(market?.opportunityScore ?? market?.confidenceScore ?? 0);
+
+  return (
+    Math.log10(volume + 1) * 1200 +
+    Math.log10(liquidity + 1) * 1000 +
+    movement * 100000 +
+    (Number.isFinite(opportunity) ? opportunity * 100 : 0)
+  );
+}
+
+function mapSupabaseMarketSnapshotRow(row) {
+  return normalizeMarketSnapshotInput({
+    marketId: row?.market_id ?? row?.marketId,
+    marketQuestion: row?.market_question ?? row?.marketQuestion,
+    eventTitle: row?.event_title ?? row?.eventTitle,
+    category: row?.category,
+    yesProbability: row?.yes_probability ?? row?.yesProbability,
+    movement: row?.movement,
+    volume: row?.volume,
+    liquidity: row?.liquidity,
+    source: row?.source,
+    snapshotHour: row?.snapshot_hour ?? row?.snapshotHour,
+    capturedAt: row?.captured_at ?? row?.capturedAt,
+  });
+}
+
+function toSupabaseMarketSnapshotRow(snapshot) {
+  return {
+    market_id: snapshot.marketId,
+    market_question: snapshot.marketQuestion,
+    event_title: snapshot.eventTitle,
+    category: snapshot.category,
+    yes_probability: snapshot.yesProbability,
+    movement: snapshot.movement,
+    volume: snapshot.volume,
+    liquidity: snapshot.liquidity,
+    source: snapshot.source,
+    snapshot_hour: snapshot.snapshotHour,
+    captured_at: snapshot.capturedAt,
+  };
+}
+
+async function getExistingSupabaseSnapshotKeys(config, snapshotHour) {
+  const url = buildSupabaseTableUrl(config);
+  url.searchParams.set("select", "market_id,snapshot_hour");
+  url.searchParams.set("snapshot_hour", `eq.${snapshotHour}`);
+
+  const rows = await fetchSupabaseJson(url, {
+    headers: getSupabaseHeaders(config),
+    logLabel: "market-snapshots",
+    errorLabel: "market snapshots",
+  });
+
+  return new Set(
+    (Array.isArray(rows) ? rows : [])
+      .map((row) => `${String(row?.market_id || "")}::${normalizeMarketSnapshotHour(row?.snapshot_hour)}`)
+      .filter((key) => !key.startsWith("::") && !key.endsWith("::"))
+  );
+}
+
+async function captureSupabaseMarketSnapshots(snapshots, snapshotHour, config) {
+  const existingKeys = await getExistingSupabaseSnapshotKeys(config, snapshotHour);
+  const newSnapshots = snapshots.filter(
+    (snapshot) => !existingKeys.has(`${snapshot.marketId}::${snapshot.snapshotHour}`)
+  );
+
+  if (!newSnapshots.length) {
+    return {
+      captured: 0,
+      skipped: snapshots.length,
+    };
+  }
+
+  const url = buildSupabaseTableUrl(config);
+  url.searchParams.set("on_conflict", "market_id,snapshot_hour");
+
+  const rows = await fetchSupabaseJson(url, {
+    method: "POST",
+    headers: getSupabaseHeaders(config, {
+      "Content-Type": "application/json",
+      Prefer: "resolution=merge-duplicates,return=representation",
+    }),
+    body: JSON.stringify(newSnapshots.map(toSupabaseMarketSnapshotRow)),
+    logLabel: "market-snapshots",
+    errorLabel: "market snapshots",
+  });
+
+  return {
+    captured: Array.isArray(rows) ? rows.length : newSnapshots.length,
+    skipped: snapshots.length - newSnapshots.length,
+  };
+}
+
+async function captureJsonMarketSnapshots(snapshots) {
+  const task = async () => {
+    const data = await readMarketSnapshotData();
+    const byKey = new Map(
+      (Array.isArray(data.snapshots) ? data.snapshots : [])
+        .map((snapshot) => [`${snapshot.marketId}::${snapshot.snapshotHour}`, snapshot])
+    );
+    let captured = 0;
+    let skipped = 0;
+
+    for (const snapshot of snapshots) {
+      const key = `${snapshot.marketId}::${snapshot.snapshotHour}`;
+      if (byKey.has(key)) {
+        skipped += 1;
+        continue;
+      }
+      byKey.set(key, snapshot);
+      captured += 1;
+    }
+
+    await writeMarketSnapshotData({
+      snapshots: Array.from(byKey.values()),
+    });
+
+    return { captured, skipped };
+  };
+
+  marketSnapshotWriteQueue = marketSnapshotWriteQueue.then(task, task);
+  return marketSnapshotWriteQueue;
+}
+
+async function captureMarketSnapshots() {
+  const provider = getActiveMarketSnapshotStorageProvider();
+  const snapshotHour = getCurrentUtcSnapshotHour();
+  const capturedAt = new Date().toISOString();
+  const markets = await refreshLiveMarkets(true);
+  const watchlistInterests = await readWatchlistInterestsForSnapshotCapture();
+  const selectedMarkets = selectMarketsForSnapshotCapture(
+    markets,
+    watchlistInterests,
+    MARKET_SNAPSHOT_CAPTURE_LIMIT
+  );
+  const snapshots = selectedMarkets
+    .map((market) => mapMarketToSnapshot(market, snapshotHour, capturedAt))
+    .filter(isUsableMarketSnapshot);
+  const invalidSkipped = selectedMarkets.length - snapshots.length;
+  let result;
+  let storageMode = provider.storageMode;
+
+  if (provider.storageMode === "supabase") {
+    try {
+      result = await captureSupabaseMarketSnapshots(snapshots, snapshotHour, provider.config);
+    } catch (error) {
+      console.error("[market-snapshots] Supabase capture failed; falling back to JSON:", error.message);
+      result = await captureJsonMarketSnapshots(snapshots);
+      storageMode = "json";
+    }
+  } else {
+    result = await captureJsonMarketSnapshots(snapshots);
+  }
+
+  return {
+    captured: result.captured,
+    skipped: result.skipped + invalidSkipped,
+    storageMode,
+    snapshotHour,
+  };
+}
+
+function toPublicMarketHistoryPoint(snapshot) {
+  return {
+    snapshotHour: snapshot.snapshotHour,
+    yesProbability: snapshot.yesProbability,
+    movement: snapshot.movement,
+    volume: snapshot.volume,
+    liquidity: snapshot.liquidity,
+  };
+}
+
+async function readSupabaseMarketHistory({ marketId, hours, config }) {
+  const since = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
+  const url = buildSupabaseTableUrl(config);
+  url.searchParams.set("select", "market_id,market_question,event_title,category,yes_probability,movement,volume,liquidity,source,snapshot_hour,captured_at");
+  url.searchParams.set("market_id", `eq.${marketId}`);
+  url.searchParams.set("snapshot_hour", `gte.${since}`);
+  url.searchParams.set("order", "snapshot_hour.asc");
+  url.searchParams.set("limit", "1000");
+
+  const rows = await fetchSupabaseJson(url, {
+    headers: getSupabaseHeaders(config),
+    logLabel: "market-snapshots",
+    errorLabel: "market snapshots",
+  });
+
+  return (Array.isArray(rows) ? rows : [])
+    .map(mapSupabaseMarketSnapshotRow)
+    .filter(isUsableMarketSnapshot);
+}
+
+async function readJsonMarketHistory({ marketId, hours }) {
+  const since = Date.now() - hours * 60 * 60 * 1000;
+  const data = await readMarketSnapshotData();
+
+  return (Array.isArray(data.snapshots) ? data.snapshots : [])
+    .filter((snapshot) => String(snapshot.marketId) === String(marketId))
+    .filter((snapshot) => {
+      const timestamp = Date.parse(snapshot.snapshotHour);
+      return Number.isFinite(timestamp) && timestamp >= since;
+    })
+    .sort((a, b) => Date.parse(a.snapshotHour) - Date.parse(b.snapshotHour));
+}
+
+async function readMarketHistory({ marketId, hours }) {
+  const provider = getActiveMarketSnapshotStorageProvider();
+
+  try {
+    if (provider.storageMode === "supabase") {
+      return await readSupabaseMarketHistory({ marketId, hours, config: provider.config });
+    }
+    return await readJsonMarketHistory({ marketId, hours });
+  } catch (error) {
+    console.error("[market-snapshots] History read failed:", error.message);
+    if (provider.storageMode === "supabase") {
+      try {
+        return await readJsonMarketHistory({ marketId, hours });
+      } catch (fallbackError) {
+        console.error("[market-snapshots] JSON fallback history read failed:", fallbackError.message);
+      }
+    }
+    return [];
+  }
+}
+
+function getLatestMarketSnapshotAt(snapshots) {
+  let latestTimestamp = 0;
+
+  for (const snapshot of Array.isArray(snapshots) ? snapshots : []) {
+    const timestamp = Date.parse(snapshot?.capturedAt || snapshot?.snapshotHour);
+    if (Number.isFinite(timestamp) && timestamp > latestTimestamp) {
+      latestTimestamp = timestamp;
+    }
+  }
+
+  return latestTimestamp ? new Date(latestTimestamp).toISOString() : null;
+}
+
+async function readJsonMarketSnapshotStatusSummary() {
+  const data = await readMarketSnapshotData();
+  const snapshots = Array.isArray(data.snapshots) ? data.snapshots : [];
+
+  return {
+    marketSnapshots: {
+      count: snapshots.length,
+      latestSnapshotAt: getLatestMarketSnapshotAt(snapshots),
+    },
+    marketSnapshotStorage: "ok",
+  };
+}
+
+async function readSupabaseMarketSnapshotStatusSummary(config) {
+  const url = buildSupabaseTableUrl(config);
+  url.searchParams.set("select", "captured_at,snapshot_hour");
+  url.searchParams.set("order", "captured_at.desc");
+
+  const rows = await fetchSupabaseJson(url, {
+    headers: getSupabaseHeaders(config),
+    logLabel: "market-snapshots",
+    errorLabel: "market snapshots",
+  });
+
+  const snapshots = (Array.isArray(rows) ? rows : []).map(mapSupabaseMarketSnapshotRow);
+
+  return {
+    marketSnapshots: {
+      count: snapshots.length,
+      latestSnapshotAt: getLatestMarketSnapshotAt(snapshots),
+    },
+    marketSnapshotStorage: "ok",
+  };
+}
+
+async function readMarketSnapshotStatusSummary() {
+  const provider = getActiveMarketSnapshotStorageProvider();
+
+  try {
+    if (provider.storageMode === "supabase") {
+      return await readSupabaseMarketSnapshotStatusSummary(provider.config);
+    }
+    return await readJsonMarketSnapshotStatusSummary();
+  } catch (error) {
+    console.error("[market-snapshots] Status read failed:", error.message);
+    if (provider.storageMode === "supabase") {
+      try {
+        return await readJsonMarketSnapshotStatusSummary();
+      } catch (fallbackError) {
+        console.error("[market-snapshots] JSON fallback status read failed:", fallbackError.message);
+      }
+    }
+    return {
+      marketSnapshots: {
+        count: 0,
+        latestSnapshotAt: null,
+      },
+      marketSnapshotStorage: "error",
     };
   }
 }
@@ -4452,6 +5020,58 @@ app.get("/api/alerts/recent", async (req, res) => {
   }
 });
 
+app.post("/api/internal/capture-market-snapshots", async (req, res) => {
+  if (!authorizeAdminRequest(req, res)) return;
+
+  try {
+    logMarketSnapshotStorageMode("capture start");
+    const result = await captureMarketSnapshots();
+
+    res.set("Cache-Control", "no-store");
+    return res.json({
+      ok: true,
+      captured: result.captured,
+      skipped: result.skipped,
+      storageMode: result.storageMode,
+      snapshotHour: result.snapshotHour,
+    });
+  } catch (error) {
+    console.error("[market-snapshots] Capture failed:", error.message);
+    return res.status(500).json({
+      ok: false,
+      error: "Failed to capture market snapshots.",
+    });
+  }
+});
+
+app.get("/api/market-history", async (req, res) => {
+  const marketId = sanitizeOutboundClickText(req.query?.marketId ?? req.query?.market_id, 180);
+  const requestedHours = Number(req.query?.hours || MARKET_SNAPSHOT_DEFAULT_HISTORY_HOURS);
+  const rangeHours = Number.isFinite(requestedHours)
+    ? Math.max(1, Math.min(MARKET_SNAPSHOT_MAX_HISTORY_HOURS, Math.round(requestedHours)))
+    : MARKET_SNAPSHOT_DEFAULT_HISTORY_HOURS;
+
+  if (!marketId) {
+    return res.status(400).json({
+      ok: false,
+      error: "marketId is required.",
+    });
+  }
+
+  const snapshots = await readMarketHistory({ marketId, hours: rangeHours });
+  const points = snapshots
+    .sort((a, b) => Date.parse(a.snapshotHour) - Date.parse(b.snapshotHour))
+    .map(toPublicMarketHistoryPoint);
+
+  res.set("Cache-Control", "no-store");
+  return res.json({
+    ok: true,
+    marketId,
+    rangeHours,
+    points,
+  });
+});
+
 app.post("/api/events/outbound-click", async (req, res) => {
   try {
     const clickEvent = normalizeOutboundClickInput(req.body);
@@ -4652,12 +5272,14 @@ app.get("/api/admin/status", async (req, res) => {
     logOutboundClickStorageMode("admin status start");
     logBetaFeedbackStorageMode("admin status start");
     logWatchlistInterestStorageMode("admin status start");
-    const [waitlistSummary, alertSignalSummary, outboundClickSummary, feedbackSummary, watchlistInterestSummary] = await Promise.all([
+    logMarketSnapshotStorageMode("admin status start");
+    const [waitlistSummary, alertSignalSummary, outboundClickSummary, feedbackSummary, watchlistInterestSummary, marketSnapshotSummary] = await Promise.all([
       readWaitlistStatusSummary(),
       readAlertSignalStatusSummary(),
       readOutboundClickStatusSummary(),
       readBetaFeedbackStatusSummary(),
       readWatchlistInterestStatusSummary(),
+      readMarketSnapshotStatusSummary(),
     ]);
     const checks = {
       waitlistStorage: "ok",
@@ -4665,6 +5287,7 @@ app.get("/api/admin/status", async (req, res) => {
       outboundClickStorage: outboundClickSummary.outboundClickStorage,
       feedbackStorage: feedbackSummary.feedbackStorage,
       watchlistInterestStorage: watchlistInterestSummary.watchlistInterestStorage,
+      marketSnapshotStorage: marketSnapshotSummary.marketSnapshotStorage,
       adminAuth: "ok",
     };
     const statusOk = Object.values(checks).every((value) => value === "ok");
@@ -4678,6 +5301,7 @@ app.get("/api/admin/status", async (req, res) => {
       outboundClicks: outboundClickSummary.outboundClicks,
       feedback: feedbackSummary.feedback,
       watchlistInterest: watchlistInterestSummary.watchlistInterest,
+      marketSnapshots: marketSnapshotSummary.marketSnapshots,
       watchlistInsights: watchlistInterestSummary.watchlistInsights || {
         topMarkets: [],
         topCategories: [],

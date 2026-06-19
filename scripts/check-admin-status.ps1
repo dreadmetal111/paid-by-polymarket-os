@@ -36,6 +36,9 @@ try {
     $WatchlistInterestStorageCheck = $null
     $WatchlistTopMarkets = @()
     $WatchlistTopCategories = @()
+    $MarketSnapshotCount = $null
+    $LatestSnapshotAt = $null
+    $MarketSnapshotStorageCheck = $null
 
     if ($null -ne $Response.alertSignals) {
         $AlertSignalCount = $Response.alertSignals.count
@@ -55,6 +58,11 @@ try {
     if ($null -ne $Response.watchlistInterest) {
         $WatchlistInterestCount = $Response.watchlistInterest.count
         $LatestWatchlistAt = $Response.watchlistInterest.latestWatchlistAt
+    }
+
+    if ($null -ne $Response.marketSnapshots) {
+        $MarketSnapshotCount = $Response.marketSnapshots.count
+        $LatestSnapshotAt = $Response.marketSnapshots.latestSnapshotAt
     }
 
     if ($null -ne $Response.watchlistInsights) {
@@ -86,6 +94,7 @@ try {
         $OutboundClickStorageCheck = $Response.checks.outboundClickStorage
         $FeedbackStorageCheck = $Response.checks.feedbackStorage
         $WatchlistInterestStorageCheck = $Response.checks.watchlistInterestStorage
+        $MarketSnapshotStorageCheck = $Response.checks.marketSnapshotStorage
     }
 
     $SafeSummary = [ordered]@{
@@ -111,6 +120,10 @@ try {
             count = $WatchlistInterestCount
             latestWatchlistAt = $LatestWatchlistAt
         }
+        marketSnapshots = [ordered]@{
+            count = $MarketSnapshotCount
+            latestSnapshotAt = $LatestSnapshotAt
+        }
         watchlistInsights = [ordered]@{
             topMarkets = $WatchlistTopMarkets
             topCategories = $WatchlistTopCategories
@@ -121,6 +134,7 @@ try {
             outboundClickStorage = $OutboundClickStorageCheck
             feedbackStorage = $FeedbackStorageCheck
             watchlistInterestStorage = $WatchlistInterestStorageCheck
+            marketSnapshotStorage = $MarketSnapshotStorageCheck
         }
         generatedAt = $Response.generatedAt
     }
