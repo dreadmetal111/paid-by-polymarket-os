@@ -155,21 +155,23 @@ details summary {
 }
 
 .watchlist-action-btn {
-  border-color: rgba(56, 189, 248, 0.36);
-  background: rgba(56, 189, 248, 0.1);
-  color: #dff6ff;
+  min-height: 42px;
+  border-color: rgba(34, 197, 94, 0.38);
+  background: rgba(20, 83, 45, 0.16);
+  color: #dcfce7;
+  font-weight: 800;
 }
 
 .watchlist-action-btn:hover,
 .watchlist-action-btn:focus-visible {
-  border-color: rgba(56, 189, 248, 0.66);
-  background: rgba(56, 189, 248, 0.18);
+  border-color: rgba(34, 197, 94, 0.66);
+  background: rgba(34, 197, 94, 0.2);
 }
 
 .watchlist-action-btn.is-watching {
-  border-color: rgba(34, 197, 94, 0.5);
-  background: rgba(34, 197, 94, 0.13);
-  color: #bbf7d0;
+  border-color: rgba(74, 222, 128, 0.62);
+  background: rgba(34, 197, 94, 0.24);
+  color: #f0fdf4;
 }
 
 .watchlist-toast {
@@ -776,17 +778,22 @@ button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 40px;
-  border: 1px solid rgba(56, 189, 248, 0.42);
+  min-height: 44px;
+  border: 1px solid rgba(56, 189, 248, 0.62);
   border-radius: 12px;
-  background: var(--accent-soft);
-  color: #e0f2fe;
-  padding: 9px 13px;
+  background: linear-gradient(180deg, rgba(56, 189, 248, 0.28), rgba(14, 165, 233, 0.16));
+  color: #f0f9ff;
+  font-weight: 900;
+  padding: 10px 14px;
+  text-decoration: none;
 }
 
 .secondary-trade-btn {
-  background: rgba(2, 8, 23, 0.72);
-  color: var(--muted);
+  min-height: 42px;
+  border-color: rgba(148, 163, 184, 0.24);
+  background: rgba(15, 23, 42, 0.82);
+  color: #cbd5e1;
+  font-weight: 800;
 }
 
 .advanced-demo-card {
@@ -1492,31 +1499,46 @@ button {
 }
 
 .market-page-mode-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  width: min(440px, 100%);
   margin: 14px 0 4px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 16px;
+  background: rgba(2, 8, 23, 0.72);
+  padding: 6px;
 }
 
 .market-page-mode-pill {
   display: inline-flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  min-height: 32px;
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  border-radius: 999px;
-  background: rgba(15, 23, 42, 0.7);
+  gap: 2px;
+  min-height: 54px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: transparent;
   color: var(--muted);
-  font-size: 0.78rem;
+  font-size: 0.84rem;
   font-weight: 900;
-  padding: 7px 11px;
+  padding: 8px 10px;
   cursor: pointer;
 }
 
+.market-page-mode-pill small {
+  color: inherit;
+  font-size: 0.7rem;
+  font-weight: 800;
+  opacity: 0.78;
+}
+
 .market-page-mode-pill.active {
-  border-color: rgba(34, 197, 94, 0.38);
-  background: rgba(34, 197, 94, 0.12);
-  color: #bbf7d0;
+  border-color: rgba(56, 189, 248, 0.5);
+  background: linear-gradient(180deg, rgba(56, 189, 248, 0.2), rgba(14, 165, 233, 0.11));
+  color: #f0f9ff;
+  box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.12) inset;
 }
 
 .market-page-mode-pill.disabled {
@@ -1525,8 +1547,9 @@ button {
 
 .market-page-mode-pill:hover,
 .market-page-mode-pill:focus-visible {
-  border-color: rgba(56, 189, 248, 0.46);
-  background: rgba(56, 189, 248, 0.1);
+  border-color: rgba(56, 189, 248, 0.58);
+  outline: 2px solid rgba(56, 189, 248, 0.34);
+  outline-offset: 2px;
 }
 
 .market-page-nav {
@@ -1614,20 +1637,26 @@ button {
 .market-comparison-leaders {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  gap: 10px;
-  margin-top: 12px;
+  gap: 12px;
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid rgba(250, 204, 21, 0.16);
+  border-radius: var(--radius-sm);
+  background: rgba(113, 63, 18, 0.1);
 }
 
 .market-comparison-leader-badge {
   display: grid;
-  gap: 4px;
-  border: 1px solid rgba(56, 189, 248, 0.18);
+  gap: 6px;
+  border: 1px solid rgba(250, 204, 21, 0.28);
   border-radius: var(--radius-sm);
-  background: rgba(8, 47, 73, 0.18);
-  padding: 12px;
+  background:
+    radial-gradient(circle at top left, rgba(250, 204, 21, 0.14), transparent 42%),
+    rgba(15, 23, 42, 0.62);
+  padding: 13px;
 }
 
-.market-comparison-leader-badge span,
+.market-comparison-leader-label,
 .market-comparison-leader-badge small {
   color: var(--muted);
   font-size: 0.74rem;
@@ -1635,13 +1664,33 @@ button {
   text-transform: uppercase;
 }
 
+.market-comparison-leader-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: #fde68a;
+}
+
+.market-comparison-leader-label b {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: rgba(250, 204, 21, 0.18);
+  color: #fef3c7;
+  font-size: 0.78rem;
+}
+
 .market-comparison-leader-badge strong {
-  color: #e0f2fe;
+  color: #fef3c7;
+  font-size: 1.08rem;
 }
 
 .market-comparison-card {
   display: grid;
-  gap: 12px;
+  gap: 14px;
+  border-color: rgba(148, 163, 184, 0.18);
 }
 
 .market-comparison-card.compact {
@@ -1650,7 +1699,11 @@ button {
 
 .market-comparison-bars {
   display: grid;
-  gap: 9px;
+  gap: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.1);
+  border-radius: var(--radius-sm);
+  background: rgba(2, 8, 23, 0.28);
+  padding: 12px;
 }
 
 .market-comparison-bar {
@@ -1791,6 +1844,15 @@ button {
   width: 100%;
 }
 
+.market-page-action-stack #copyMarketPageLinkBtnSide,
+.market-page-copy-link-row button,
+.market-detail-share-actions button {
+  border-color: rgba(148, 163, 184, 0.24);
+  background: rgba(30, 41, 59, 0.58);
+  color: #e2e8f0;
+  font-weight: 800;
+}
+
 .market-page-side-link-input {
   width: 100%;
   min-width: 0;
@@ -1815,12 +1877,13 @@ button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 40px;
-  border-color: rgba(148, 163, 184, 0.28);
+  min-height: 42px;
+  border: 1px solid rgba(148, 163, 184, 0.34);
   border-radius: 12px;
-  background: rgba(148, 163, 184, 0.1);
+  background: rgba(30, 41, 59, 0.55);
   color: #dbeafe;
-  padding: 9px 13px;
+  font-weight: 850;
+  padding: 10px 14px;
   text-decoration: none;
 }
 
@@ -1828,6 +1891,18 @@ button {
 .market-page-link:focus-visible {
   border-color: rgba(56, 189, 248, 0.42);
   background: rgba(56, 189, 248, 0.12);
+}
+
+.market-detail-actions .market-page-link {
+  order: 2;
+}
+
+.market-detail-actions .watchlist-action-btn {
+  order: 3;
+}
+
+.market-detail-actions .secondary-trade-btn {
+  order: 4;
 }
 
 @media (min-width: 901px) {
@@ -2141,9 +2216,9 @@ body.pbp-debug-mode .public-beta-internal-section {
     grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 8px;
     margin: 14px 0;
-    border: 1px solid rgba(148, 163, 184, 0.14);
+    border: 1px solid rgba(56, 189, 248, 0.18);
     border-radius: var(--radius-sm);
-    background: rgba(2, 8, 23, 0.88);
+    background: rgba(2, 8, 23, 0.94);
     padding: 8px;
     backdrop-filter: blur(10px);
   }
@@ -2158,8 +2233,8 @@ body.pbp-debug-mode .public-beta-internal-section {
   }
 
   .market-page-mobile-tabs button.active {
-    border-color: rgba(56, 189, 248, 0.48);
-    background: rgba(56, 189, 248, 0.14);
+    border-color: rgba(56, 189, 248, 0.6);
+    background: rgba(56, 189, 248, 0.18);
     color: #e0f2fe;
   }
 
@@ -2296,11 +2371,11 @@ body.pbp-debug-mode .public-beta-internal-section {
 
   .market-page-mode-row {
     margin-top: 12px;
+    width: 100%;
   }
 
   .market-page-mode-pill {
-    flex: 1 1 130px;
-    min-height: 40px;
+    min-height: 56px;
   }
 
   .market-page-nav {
@@ -2319,6 +2394,7 @@ body.pbp-debug-mode .public-beta-internal-section {
   .market-page-action-row {
     align-items: stretch;
     flex-direction: column;
+    gap: 10px;
   }
 
   .market-page-copy-link-row input {
@@ -2328,6 +2404,52 @@ body.pbp-debug-mode .public-beta-internal-section {
 
   .market-page-related-grid {
     grid-template-columns: 1fr;
+  }
+
+  .market-page-related-card {
+    padding: 18px;
+  }
+
+  .market-page-related-card h3 {
+    font-size: 1.08rem;
+    line-height: 1.34;
+  }
+
+  .market-comparison-leaders {
+    grid-template-columns: 1fr;
+    padding: 10px;
+  }
+
+  .market-comparison-card {
+    gap: 16px;
+  }
+
+  .market-comparison-bars {
+    gap: 12px;
+    padding: 13px;
+  }
+
+  .market-comparison-bar-top {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .market-comparison-bar-top strong {
+    text-align: left;
+  }
+
+  .market-comparison-movement {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .market-page-related-card .market-page-link,
+  .market-page-related-card .market-link-primary,
+  .market-page-related-card .watchlist-action-btn,
+  .market-page-related-card .secondary-trade-btn {
+    width: 100%;
+    min-height: 46px;
   }
 
   .market-intelligence-metric {

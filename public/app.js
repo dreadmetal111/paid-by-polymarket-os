@@ -4441,6 +4441,12 @@ function getMarketComparisonContext(currentMarket, relatedMarkets = []) {
 function renderMarketComparisonLeaders(context) {
   const leaders = Array.isArray(context?.leaders) ? context.leaders : [];
   if (!leaders.length) return "";
+  const leaderSymbols = {
+    "Highest probability": "%",
+    "Highest volume": "$",
+    "Most liquid": "~",
+    "Biggest mover": "^",
+  };
 
   return `
     <div class="market-comparison-leaders" aria-label="Event leaders">
@@ -4450,7 +4456,7 @@ function renderMarketComparisonLeaders(context) {
           const outcome = getMarketOutcomeLabel(leader.market) || leader.market?.question || "Market";
           return `
             <div class="market-comparison-leader-badge">
-              <span>${safeText(leader.label)}</span>
+              <span class="market-comparison-leader-label"><b aria-hidden="true">${safeText(leaderSymbols[leader.label] || "*")}</b>${safeText(leader.label)}</span>
               <strong>${safeText(leader.value)}</strong>
               <small>${safeText(isCurrent ? "This market" : outcome)}</small>
             </div>
@@ -4514,7 +4520,7 @@ function renderMarketPageRelatedCard(market, context = {}, options = {}) {
 
       ${compact ? "" : renderHeatBadges(getMarketHeatBadges(market))}
       <div class="market-footer market-page-action-row">
-        ${renderMarketPageLink(market, "Open market page")}
+        ${renderMarketPageLink(market, "Open related market")}
         <a
           class="market-link market-link-primary"
           href="${safeUrl(market.url)}"
@@ -4581,8 +4587,8 @@ function saveMarketPageMode(mode) {
 
 function renderMarketPageModeToggle() {
   const modes = [
-    { key: "beginner", label: "Beginner" },
-    { key: "advanced", label: "Advanced" },
+    { key: "beginner", label: "Beginner", helper: "Simple view" },
+    { key: "advanced", label: "Advanced", helper: "Full signals" },
   ];
 
   return `
@@ -4595,7 +4601,7 @@ function renderMarketPageModeToggle() {
               type="button"
               data-market-page-mode="${safeAttr(mode.key)}"
               aria-pressed="${currentMarketPageMode === mode.key ? "true" : "false"}"
-            >${safeText(mode.label)}</button>
+            ><span>${safeText(mode.label)}</span><small>${safeText(mode.helper)}</small></button>
           `
         )
         .join("")}
