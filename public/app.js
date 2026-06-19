@@ -4947,6 +4947,14 @@ function renderShareCardGenerator(market) {
 }
 
 function drawWrappedCanvasText(ctx, text, x, y, maxWidth, lineHeight, maxLines = 6) {
+  const lines = getCanvasWrappedLines(ctx, text, maxWidth);
+  lines.slice(0, maxLines).forEach((item, index) => {
+    ctx.fillText(item, x, y + index * lineHeight);
+  });
+  return y + Math.min(lines.length, maxLines) * lineHeight;
+}
+
+function getCanvasWrappedLines(ctx, text, maxWidth) {
   const words = String(text || "").split(/\s+/).filter(Boolean);
   const lines = [];
   let line = "";
@@ -4962,10 +4970,124 @@ function drawWrappedCanvasText(ctx, text, x, y, maxWidth, lineHeight, maxLines =
   }
   if (line) lines.push(line);
 
-  lines.slice(0, maxLines).forEach((item, index) => {
-    ctx.fillText(item, x, y + index * lineHeight);
+  return lines.length ? lines : [""];
+}
+
+function fitCanvasTextLines(ctx, text, maxWidth, maxLines, startFontSize, minFontSize, fontWeight = 900) {
+  let fontSize = startFontSize;
+  let lines = [];
+  while (fontSize >= minFontSize) {
+    ctx.font = `${fontWeight} ${fontSize}px Inter, Arial, sans-serif`;
+    lines = getCanvasWrappedLines(ctx, text, maxWidth);
+    if (lines.length <= maxLines) break;
+    fontSize -= 2;
+  }
+
+  return {
+    fontSize,
+    lines: lines.slice(0, maxLines),
+    wasClipped: lines.length > maxLines,
+  };
+}
+
+function drawCanvasHistoryChart(ctx, summary, rect, options = {}) {
+  const { x, y, width, height } = rect;
+  ctx.strokeStyle = options.borderColor || "rgba(231, 247, 255, 0.22)";
+  ctx.lineWidth = options.borderWidth || 3;
+  ctx.strokeRect(x, y, width, height);
+
+  const points = Array.isArray(summary?.points) ? summary.points : [];
+  if (points.length < 2) {
+    ctx.fillStyle = options.emptyColor || "#c7d8e5";
+    ctx.font = `800 ${options.emptyFontSize || 30}px Inter, Arial, sans-serif`;
+    ctx.fillText(summary?.state || "No history yet", x + 28, y + height / 2);
+    return;
+  }
+
+  const minY = Math.max(0, (summary.low ?? 0) - 2);
+  const maxY = Math.min(100, (summary.high ?? 100) + 2);
+  const rangeY = Math.max(1, maxY - minY);
+  const firstTime = Date.parse(points[0].snapshotHour);
+  const lastTime = Date.parse(points[points.length - 1].snapshotHour);
+  const timeRange = Math.max(1, lastTime - firstTime);
+  const inset = options.inset || 18;
+
+  ctx.beginPath();
+  points.forEach((point, index) => {
+    const pointX = x + inset + ((Date.parse(point.snapshotHour) - firstTime) / timeRange) * (width - inset * 2);
+    const pointY = y + inset + (height - inset * 2) - ((point.yesProbability - minY) / rangeY) * (height - inset * 2);
+    if (index === 0) ctx.moveTo(pointX, pointY);
+    else ctx.lineTo(pointX, pointY);
   });
-  return y + Math.min(lines.length, maxLines) * lineHeight;
+  ctx.strokeStyle = options.lineColor || "#42d6ff";
+  ctx.lineWidth = options.lineWidth || 6;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.stroke();
+}
+
+function drawLandscapeShareCardCanvas(ctx, market, summary) {
+  const width = 1200;
+  const height = 675;
+  const marginX = 58;
+
+  ctx.fillStyle = "#071017";
+  ctx.fillRect(0, 0, width, height);
+  const gradient = ctx.createLinearGradient(0, 0, width, height);
+  gradient.addColorStop(0, "rgba(66, 214, 255, 0.22)");
+  gradient.addColorStop(0.55, "rgba(15, 23, 42, 0.18)");
+  gradient.addColorStop(1, "rgba(143, 125, 255, 0.16)");
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, width, height);
+
+  ctx.fillStyle = "#e7f7ff";
+  ctx.font = "800 32px Inter, Arial, sans-serif";
+  ctx.fillText("House of Markets", marginX, 54);
+
+  const questionFit = fitCanvasTextLines(ctx, market.question, width - marginX * 2, 4, 44, 32, 900);
+  const questionLineHeight = Math.ceil(questionFit.fontSize * 1.18);
+  ctx.font = `900 ${questionFit.fontSize}px Inter, Arial, sans-serif`;
+  ctx.fillStyle = "#f4fbff";
+  const questionY = 112;
+  questionFit.lines.forEach((line, index) => {
+    const suffix = questionFit.wasClipped && index === questionFit.lines.length - 1 ? " ..." : "";
+    ctx.fillText(`${line}${suffix}`, marginX, questionY + index * questionLineHeight);
+  });
+
+  const questionBottom = questionY + questionFit.lines.length * questionLineHeight;
+  const probabilityY = Math.max(250, questionBottom + 42);
+  const current = formatHistoryPercent(summary?.current ?? getCurrentProbabilityPercent(market));
+  const change = formatHistoryChange(summary?.netChange);
+  const probabilityFontSize = questionFit.fontSize <= 34 ? 72 : 86;
+
+  ctx.font = `900 ${probabilityFontSize}px Inter, Arial, sans-serif`;
+  ctx.fillStyle = "#42d6ff";
+  ctx.fillText(`${current} YES`, marginX, probabilityY);
+
+  const rangeY = probabilityY + 48;
+  ctx.font = "800 30px Inter, Arial, sans-serif";
+  ctx.fillStyle = "#c7d8e5";
+  ctx.fillText(`${MARKET_HISTORY_RANGES[currentMarketHistoryRange]?.label || "7D"} recorded period | Net ${change}`, marginX, rangeY);
+
+  const chartTop = rangeY + 42;
+  const footerOneY = 616;
+  const chartHeight = Math.max(142, Math.min(196, footerOneY - chartTop - 38));
+  drawCanvasHistoryChart(ctx, summary, {
+    x: marginX,
+    y: chartTop,
+    width: width - marginX * 2,
+    height: chartHeight,
+  }, {
+    borderWidth: 3,
+    lineWidth: 7,
+    inset: 20,
+    emptyFontSize: 28,
+  });
+
+  ctx.fillStyle = "#c7d8e5";
+  ctx.font = "700 22px Inter, Arial, sans-serif";
+  ctx.fillText(`Recorded by House of Markets | ${new Date().toLocaleString()}`, marginX, footerOneY);
+  ctx.fillText("Independent project. Not financial advice.", marginX, 646);
 }
 
 function drawShareCardCanvas(market, summary) {
@@ -4979,6 +5101,11 @@ function drawShareCardCanvas(market, summary) {
 
   const width = canvas.width;
   const height = canvas.height;
+  if (currentShareCardFormat === "landscape") {
+    drawLandscapeShareCardCanvas(ctx, market, summary);
+    return;
+  }
+
   const margin = Math.round(width * 0.07);
   ctx.fillStyle = "#071017";
   ctx.fillRect(0, 0, width, height);
@@ -5009,33 +5136,16 @@ function drawShareCardCanvas(market, summary) {
   const chartTop = Math.min(height - margin * 3, afterTitleY + Math.round(height * 0.2));
   const chartHeight = Math.max(130, Math.round(height * 0.23));
   const chartWidth = width - margin * 2;
-  ctx.strokeStyle = "rgba(231, 247, 255, 0.22)";
-  ctx.lineWidth = Math.max(2, Math.round(width * 0.003));
-  ctx.strokeRect(margin, chartTop, chartWidth, chartHeight);
-
-  const points = Array.isArray(summary?.points) ? summary.points : [];
-  if (points.length >= 2) {
-    const minY = Math.max(0, (summary.low ?? 0) - 2);
-    const maxY = Math.min(100, (summary.high ?? 100) + 2);
-    const rangeY = Math.max(1, maxY - minY);
-    const firstTime = Date.parse(points[0].snapshotHour);
-    const lastTime = Date.parse(points[points.length - 1].snapshotHour);
-    const timeRange = Math.max(1, lastTime - firstTime);
-    ctx.beginPath();
-    points.forEach((point, index) => {
-      const x = margin + ((Date.parse(point.snapshotHour) - firstTime) / timeRange) * chartWidth;
-      const y = chartTop + chartHeight - ((point.yesProbability - minY) / rangeY) * chartHeight;
-      if (index === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    });
-    ctx.strokeStyle = "#42d6ff";
-    ctx.lineWidth = Math.max(5, Math.round(width * 0.008));
-    ctx.stroke();
-  } else {
-    ctx.fillStyle = "#c7d8e5";
-    ctx.font = `800 ${Math.max(26, Math.round(width * 0.032))}px Inter, Arial, sans-serif`;
-    ctx.fillText(summary?.state || "No history yet", margin + 24, chartTop + chartHeight / 2);
-  }
+  drawCanvasHistoryChart(ctx, summary, {
+    x: margin,
+    y: chartTop,
+    width: chartWidth,
+    height: chartHeight,
+  }, {
+    borderWidth: Math.max(2, Math.round(width * 0.003)),
+    lineWidth: Math.max(5, Math.round(width * 0.008)),
+    emptyFontSize: Math.max(26, Math.round(width * 0.032)),
+  });
 
   ctx.fillStyle = "#c7d8e5";
   ctx.font = `700 ${Math.max(22, Math.round(width * 0.025))}px Inter, Arial, sans-serif`;
