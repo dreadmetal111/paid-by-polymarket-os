@@ -12,10 +12,31 @@ create table if not exists public.start_funnel_events (
         'start_lead_submit',
         'start_lead_success',
         'start_lead_existing',
-        'start_live_board_click'
+        'start_live_board_click',
+        'start_thank_you_view',
+        'start_checklist_open',
+        'start_checklist_print'
       )
     )
 );
+
+alter table public.start_funnel_events
+  drop constraint if exists start_funnel_events_event_name_check;
+
+alter table public.start_funnel_events
+  add constraint start_funnel_events_event_name_check
+    check (
+      event_name in (
+        'start_page_view',
+        'start_lead_submit',
+        'start_lead_success',
+        'start_lead_existing',
+        'start_live_board_click',
+        'start_thank_you_view',
+        'start_checklist_open',
+        'start_checklist_print'
+      )
+    );
 
 create index if not exists start_funnel_events_created_at_idx
   on public.start_funnel_events (created_at desc);

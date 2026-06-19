@@ -544,6 +544,9 @@ const START_FUNNEL_EVENT_NAMES = new Set([
   "start_lead_success",
   "start_lead_existing",
   "start_live_board_click",
+  "start_thank_you_view",
+  "start_checklist_open",
+  "start_checklist_print",
 ]);
 
 function normalizeStartFunnelEventName(value) {
@@ -2783,6 +2786,9 @@ function buildStartFunnelStatus(events) {
     leadSuccesses: 0,
     existingLeads: 0,
     liveBoardClicks: 0,
+    thankYouViews: 0,
+    checklistOpens: 0,
+    checklistPrints: 0,
   };
   let latestTimestamp = 0;
 
@@ -2793,6 +2799,9 @@ function buildStartFunnelStatus(events) {
     if (eventName === "start_lead_success") counts.leadSuccesses += 1;
     if (eventName === "start_lead_existing") counts.existingLeads += 1;
     if (eventName === "start_live_board_click") counts.liveBoardClicks += 1;
+    if (eventName === "start_thank_you_view") counts.thankYouViews += 1;
+    if (eventName === "start_checklist_open") counts.checklistOpens += 1;
+    if (eventName === "start_checklist_print") counts.checklistPrints += 1;
 
     const timestamp = Date.parse(event?.createdAt);
     if (Number.isFinite(timestamp) && timestamp > latestTimestamp) {
@@ -2863,6 +2872,9 @@ async function readStartFunnelStatusSummary() {
         leadSuccesses: 0,
         existingLeads: 0,
         liveBoardClicks: 0,
+        thankYouViews: 0,
+        checklistOpens: 0,
+        checklistPrints: 0,
         latestEventAt: null,
       },
       startFunnelStorage: "error",
@@ -5341,6 +5353,14 @@ app.get("/start", (req, res) => {
 
 app.get("/start/", (req, res) => {
   res.sendFile(path.join(PUBLIC_DIR, "start.html"));
+});
+
+app.get("/market-scan", (req, res) => {
+  res.sendFile(path.join(PUBLIC_DIR, "market-scan.html"));
+});
+
+app.get("/market-scan/", (req, res) => {
+  res.sendFile(path.join(PUBLIC_DIR, "market-scan.html"));
 });
 
 app.get("/api/public-config", (req, res) => {

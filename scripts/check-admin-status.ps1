@@ -45,6 +45,9 @@ try {
     $StartFunnelLeadSuccesses = $null
     $StartFunnelExistingLeads = $null
     $StartFunnelLiveBoardClicks = $null
+    $StartFunnelThankYouViews = $null
+    $StartFunnelChecklistOpens = $null
+    $StartFunnelChecklistPrints = $null
     $StartFunnelLatestEventAt = $null
 
     if ($null -ne $Response.alertSignals) {
@@ -78,6 +81,9 @@ try {
         $StartFunnelLeadSuccesses = $Response.startFunnel.leadSuccesses
         $StartFunnelExistingLeads = $Response.startFunnel.existingLeads
         $StartFunnelLiveBoardClicks = $Response.startFunnel.liveBoardClicks
+        $StartFunnelThankYouViews = $Response.startFunnel.thankYouViews
+        $StartFunnelChecklistOpens = $Response.startFunnel.checklistOpens
+        $StartFunnelChecklistPrints = $Response.startFunnel.checklistPrints
         $StartFunnelLatestEventAt = $Response.startFunnel.latestEventAt
     }
 
@@ -147,6 +153,9 @@ try {
             leadSuccesses = $StartFunnelLeadSuccesses
             existingLeads = $StartFunnelExistingLeads
             liveBoardClicks = $StartFunnelLiveBoardClicks
+            thankYouViews = $StartFunnelThankYouViews
+            checklistOpens = $StartFunnelChecklistOpens
+            checklistPrints = $StartFunnelChecklistPrints
             latestEventAt = $StartFunnelLatestEventAt
         }
         watchlistInsights = [ordered]@{

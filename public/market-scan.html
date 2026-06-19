@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>5-Minute Prediction Market Scan | House of Markets</title>
+    <meta
+      name="description"
+      content="House of Markets 5-Minute Prediction Market Scan, a printable educational checklist for reading prediction markets."
+    />
+    <link rel="stylesheet" href="/market-scan.css?v=hom-scan-1" />
+  </head>
+  <body>
+    <main class="scan-page">
+      <header class="scan-hero">
+        <a class="scan-back-link" href="/start">Return to start</a>
+        <p class="scan-eyebrow">House of Markets resource</p>
+        <h1>House of Markets 5-Minute Prediction Market Scan</h1>
+        <p class="scan-version">Version 1</p>
+        <p class="scan-subcopy">
+          A simple educational checklist for reading a prediction market before
+          deciding whether to open the real market on Polymarket.
+        </p>
+        <div class="scan-actions">
+          <button id="printScanButton" class="scan-button scan-button-primary" type="button">
+            Print or save as PDF
+          </button>
+          <a class="scan-button scan-button-secondary" href="/" data-scan-live-board>
+            Explore live markets
+          </a>
+        </div>
+        <p class="scan-disclaimer">
+          Independent project. Educational use only. Not financial advice. Not an official Polymarket product or partnership.
+        </p>
+      </header>
+
+      <section class="scan-card scan-timer-card" aria-labelledby="timerTitle">
+        <div>
+          <p class="scan-eyebrow">Five-minute flow</p>
+          <h2 id="timerTitle">Read the market before you react.</h2>
+        </div>
+        <ol class="scan-steps">
+          <li><strong>Minute 1:</strong> Identify exactly what the question resolves.</li>
+          <li><strong>Minute 2:</strong> Read the YES probability as an implied chance, not a promise.</li>
+          <li><strong>Minute 3:</strong> Check recent movement and ask what could have changed.</li>
+          <li><strong>Minute 4:</strong> Review volume and liquidity for activity and depth.</li>
+          <li><strong>Minute 5:</strong> Compare related markets before opening the real market.</li>
+        </ol>
+      </section>
+
+      <section class="scan-grid" aria-label="Market scan checklist">
+        <article class="scan-card">
+          <span class="scan-number">01</span>
+          <h2>What does the market question actually resolve?</h2>
+          <p>
+            Read the full question slowly. Look for the event, date, exact condition,
+            source of truth, and any wording that could change the outcome.
+          </p>
+          <div class="scan-example">
+            Example: Instead of reading only "Will a team win?", check the season,
+            competition, and resolution date.
+          </div>
+        </article>
+
+        <article class="scan-card">
+          <span class="scan-number">02</span>
+          <h2>YES probability</h2>
+          <p>
+            YES probability is the market's current implied chance for the YES outcome.
+            It can move quickly and it is not a guarantee.
+          </p>
+          <div class="scan-checkline">Ask: Is the probability high, low, or surprising compared with what I expected?</div>
+        </article>
+
+        <article class="scan-card">
+          <span class="scan-number">03</span>
+          <h2>Recent movement</h2>
+          <p>
+            Movement shows whether the market has shifted recently. A sharp move can
+            mean traders are reacting to new information, changing attention, or thin liquidity.
+          </p>
+          <div class="scan-checkline">Ask: Did something happen, or is this just noisy movement?</div>
+        </article>
+
+        <article class="scan-card">
+          <span class="scan-number">04</span>
+          <h2>Volume</h2>
+          <p>
+            Volume helps show how much activity the market has attracted. Higher volume
+            can make a market more worth reading, but it does not make an outcome correct.
+          </p>
+          <div class="scan-checkline">Ask: Are people actually trading this, or is it quiet?</div>
+        </article>
+
+        <article class="scan-card">
+          <span class="scan-number">05</span>
+          <h2>Liquidity</h2>
+          <p>
+            Liquidity is about market depth. Stronger liquidity may make prices easier
+            to interpret, while thin markets can jump around more.
+          </p>
+          <div class="scan-checkline">Ask: Does the market have enough depth to compare cleanly?</div>
+        </article>
+
+        <article class="scan-card">
+          <span class="scan-number">06</span>
+          <h2>Related-market comparison</h2>
+          <p>
+            Many prediction markets belong to the same event family. Compare related
+            outcomes before focusing on one card.
+          </p>
+          <div class="scan-checkline">Ask: Is this market part of a bigger event with better comparisons?</div>
+        </article>
+      </section>
+
+      <section class="scan-card scan-notes" aria-labelledby="notesTitle">
+        <h2 id="notesTitle">Short notes</h2>
+        <div class="notes-grid">
+          <div>
+            <span>Market question</span>
+          </div>
+          <div>
+            <span>What changed?</span>
+          </div>
+          <div>
+            <span>Related markets to compare</span>
+          </div>
+          <div>
+            <span>What I still need to check</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="scan-card scan-footer-card">
+        <h2>Next step</h2>
+        <p>
+          Use this checklist on the live market board, then open the real market on
+          Polymarket only when you are ready to leave House of Markets.
+        </p>
+        <div class="scan-actions">
+          <a class="scan-button scan-button-secondary" href="/start">Return to start</a>
+          <a class="scan-button scan-button-primary" href="/" data-scan-live-board>
+            Explore live markets
+          </a>
+        </div>
+      </section>
+    </main>
+
+    <script src="/market-scan.js?v=hom-scan-1"></script>
+  </body>
+</html>

@@ -1,6 +1,7 @@
 const START_FUNNEL_ENDPOINT = "/api/events/start-funnel";
 const WAITLIST_ENDPOINT = "/api/waitlist";
 const START_SOURCE_BASE = "instagram-start-free-scan";
+const FREE_SCAN_READY_STORAGE_KEY = "houseOfMarketsFreeScanReady";
 
 const START_ALLOWED_EVENT_NAMES = new Set([
   "start_page_view",
@@ -8,6 +9,9 @@ const START_ALLOWED_EVENT_NAMES = new Set([
   "start_lead_success",
   "start_lead_existing",
   "start_live_board_click",
+  "start_thank_you_view",
+  "start_checklist_open",
+  "start_checklist_print",
 ]);
 
 function sanitizeAttributionValue(value, fallback = "none", maxLength = 40) {
@@ -121,6 +125,61 @@ function setLoading(isLoading) {
   }
 }
 
+function rememberFreeScanReady() {
+  try {
+    window.localStorage?.setItem(FREE_SCAN_READY_STORAGE_KEY, "true");
+  } catch {
+    // Local memory is only a convenience for the thank-you state.
+  }
+}
+
+function hasFreeScanReadyMemory() {
+  try {
+    return window.localStorage?.getItem(FREE_SCAN_READY_STORAGE_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function renderThankYouPanel(kind = "created") {
+  const form = document.getElementById("freeScanForm");
+  if (!form) return;
+
+  const message =
+    kind === "existing"
+      ? "You were already on the list, so the checklist is ready for you now."
+      : "Your request is saved. The checklist is ready for you now.";
+
+  const panel = document.createElement("div");
+  panel.className = "start-thank-you-panel";
+  panel.setAttribute("tabindex", "-1");
+  panel.innerHTML = `
+    <p class="start-eyebrow">Saved</p>
+    <h3>Your free market scan is ready.</h3>
+    <p>${message}</p>
+    <p>No trade happens on House of Markets. The checklist is educational, and real market action happens on Polymarket.</p>
+    <div class="start-thank-you-actions">
+      <a class="start-button start-button-primary" href="/market-scan" data-start-checklist-link>
+        Open the checklist
+      </a>
+      <a class="start-button start-button-secondary" href="/" data-start-live-board>
+        Explore live markets
+      </a>
+    </div>
+  `;
+
+  form.replaceWith(panel);
+  panel.focus({ preventScroll: true });
+
+  panel.querySelectorAll("[data-start-live-board]").forEach((link) => {
+    link.addEventListener("click", () => {
+      trackStartEvent("start_live_board_click");
+    });
+  });
+
+  trackStartEvent("start_thank_you_view");
+}
+
 async function handleStartFormSubmit(event) {
   event.preventDefault();
 
@@ -148,19 +207,15 @@ async function handleStartFormSubmit(event) {
     });
 
     if (data.status === "existing") {
-      setStatus(
-        "You are already on the list. The free scan will be available here shortly.",
-        "success"
-      );
+      rememberFreeScanReady();
       trackStartEvent("start_lead_existing");
+      renderThankYouPanel("existing");
       return;
     }
 
-    setStatus(
-      "Your request is saved. The free scan will be available here shortly.",
-      "success"
-    );
+    rememberFreeScanReady();
     trackStartEvent("start_lead_success");
+    renderThankYouPanel("created");
   } catch (error) {
     setStatus(error.message || "Could not save your request. Please try again.", "error");
   } finally {
@@ -171,6 +226,10 @@ async function handleStartFormSubmit(event) {
 function initStartPage() {
   const form = document.getElementById("freeScanForm");
   form?.addEventListener("submit", handleStartFormSubmit);
+
+  if (hasFreeScanReadyMemory()) {
+    renderThankYouPanel("existing");
+  }
 
   document.querySelectorAll("[data-start-live-board]").forEach((link) => {
     link.addEventListener("click", () => {
