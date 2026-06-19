@@ -32,6 +32,18 @@ const EVENT_DETAIL_SORTS = {
   lowProbability: "Lowest probability",
 };
 
+const MARKET_HISTORY_RANGES = {
+  "24h": { label: "24H", hours: 24 },
+  "7d": { label: "7D", hours: 168 },
+  "30d": { label: "30D", hours: 720 },
+};
+
+const SHARE_CARD_FORMATS = {
+  square: { label: "Square", width: 1080, height: 1080 },
+  story: { label: "Story", width: 1080, height: 1920 },
+  landscape: { label: "Landscape", width: 1200, height: 675 },
+};
+
 const PBP_ALERT_TYPE_LABELS = {
   new_high_volume: "New high-activity market",
   probability_movement: "Market movement",
@@ -94,6 +106,9 @@ let activeMarketDetailId = "";
 let activeMarketDetailTab = "overview";
 let currentMarketPageId = "";
 let currentMarketPageMode = getStoredMarketPageMode();
+let currentMarketHistoryRange = "7d";
+let currentShareCardFormat = "square";
+const marketHistoryCache = new Map();
 let currentEventSlug = "";
 let currentEventSort = "volume";
 let currentTradeTicket = null;
@@ -4661,6 +4676,395 @@ function renderMarketPageBeginnerRead(market) {
   `;
 }
 
+function getMarketHistoryCacheKey(marketId, rangeKey = currentMarketHistoryRange) {
+  return `${String(marketId || "")}::${String(rangeKey || "7d")}`;
+}
+
+function normalizeMarketHistoryPoint(point) {
+  const yesProbability = getFiniteNumber(point?.yesProbability);
+  const snapshotHour = String(point?.snapshotHour || "").trim();
+  if (!snapshotHour || yesProbability === null || yesProbability < 0 || yesProbability > 100) return null;
+
+  return {
+    snapshotHour,
+    yesProbability,
+    movement: getFiniteNumber(point?.movement),
+    volume: getNonNegativeNumber(point?.volume),
+    liquidity: getNonNegativeNumber(point?.liquidity),
+  };
+}
+
+async function fetchMarketHistoryPoints(market, rangeKey = currentMarketHistoryRange) {
+  const marketId = getMarketTrackingId(market);
+  const range = MARKET_HISTORY_RANGES[rangeKey] || MARKET_HISTORY_RANGES["7d"];
+  const cacheKey = getMarketHistoryCacheKey(marketId, rangeKey);
+  if (marketHistoryCache.has(cacheKey)) return marketHistoryCache.get(cacheKey);
+
+  const response = await fetch(`/api/market-history?marketId=${encodeURIComponent(marketId)}&hours=${encodeURIComponent(range.hours)}`, {
+    cache: "no-store",
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data.ok === false) {
+    throw new Error(data.error || "Could not load market history.");
+  }
+
+  const points = (Array.isArray(data.points) ? data.points : [])
+    .map(normalizeMarketHistoryPoint)
+    .filter(Boolean)
+    .sort((a, b) => Date.parse(a.snapshotHour) - Date.parse(b.snapshotHour));
+
+  marketHistoryCache.set(cacheKey, points);
+  return points;
+}
+
+function getCurrentProbabilityPercent(market) {
+  const probability = hasUsableProbability(market?.yesPriceLive) ? getFiniteNumber(market.yesPriceLive) : null;
+  return probability === null ? null : probability * 100;
+}
+
+function summarizeMarketHistory(market, points = []) {
+  const validPoints = (Array.isArray(points) ? points : [])
+    .filter((point) => getFiniteNumber(point?.yesProbability) !== null)
+    .sort((a, b) => Date.parse(a.snapshotHour) - Date.parse(b.snapshotHour));
+  const probabilities = validPoints.map((point) => point.yesProbability);
+  const currentProbability = getCurrentProbabilityPercent(market);
+  const lastRecorded = probabilities.length ? probabilities[probabilities.length - 1] : null;
+  const current = currentProbability !== null ? currentProbability : lastRecorded;
+  const first = probabilities.length ? probabilities[0] : null;
+  const high = probabilities.length ? Math.max(...probabilities) : null;
+  const low = probabilities.length ? Math.min(...probabilities) : null;
+  const netChange = current !== null && first !== null ? current - first : null;
+
+  let state = "No history yet";
+  if (validPoints.length > 0 && validPoints.length < 3) state = "Collecting snapshots";
+  if (validPoints.length >= 3 && validPoints.length < 8) state = "Limited history";
+  if (validPoints.length >= 8) state = "History available";
+
+  return {
+    points: validPoints,
+    current,
+    first,
+    high,
+    low,
+    netChange,
+    snapshotCount: validPoints.length,
+    state,
+  };
+}
+
+function formatHistoryPercent(value, fallback = "Unavailable") {
+  const numeric = getFiniteNumber(value);
+  if (numeric === null || numeric < 0 || numeric > 100) return fallback;
+  const precision = numeric > 0 && numeric < 1 ? 2 : 1;
+  return `${numeric.toFixed(precision)}%`;
+}
+
+function formatHistoryChange(value, fallback = "Unavailable") {
+  const numeric = getFiniteNumber(value);
+  if (numeric === null) return fallback;
+  return `${numeric >= 0 ? "+" : ""}${numeric.toFixed(2)} pts`;
+}
+
+function renderMarketHistorySvg(summary) {
+  const points = Array.isArray(summary?.points) ? summary.points : [];
+  if (points.length < 2) {
+    return `
+      <div class="market-history-empty">
+        <strong>${safeText(summary?.state || "No history yet")}</strong>
+        <span>Snapshots are recorded hourly after capture starts. No fake history is shown.</span>
+      </div>
+    `;
+  }
+
+  const width = 640;
+  const height = 220;
+  const padding = 24;
+  const minY = Math.max(0, (summary.low ?? 0) - 2);
+  const maxY = Math.min(100, (summary.high ?? 100) + 2);
+  const rangeY = Math.max(1, maxY - minY);
+  const firstTime = Date.parse(points[0].snapshotHour);
+  const lastTime = Date.parse(points[points.length - 1].snapshotHour);
+  const timeRange = Math.max(1, lastTime - firstTime);
+  const polyline = points
+    .map((point) => {
+      const x = padding + ((Date.parse(point.snapshotHour) - firstTime) / timeRange) * (width - padding * 2);
+      const y = height - padding - ((point.yesProbability - minY) / rangeY) * (height - padding * 2);
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(" ");
+
+  return `
+    <svg class="market-history-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="Recorded YES probability history">
+      <line x1="${padding}" y1="${height - padding}" x2="${width - padding}" y2="${height - padding}" />
+      <line x1="${padding}" y1="${padding}" x2="${padding}" y2="${height - padding}" />
+      <polyline points="${safeAttr(polyline)}" />
+      <circle cx="${safeAttr(polyline.split(" ").at(-1)?.split(",")[0] || padding)}" cy="${safeAttr(polyline.split(" ").at(-1)?.split(",")[1] || padding)}" r="5" />
+    </svg>
+  `;
+}
+
+function renderMarketHistoryStats(summary) {
+  return `
+    <div class="market-history-stats">
+      <div class="meta-box"><span class="meta-label">Current</span><span class="meta-value">${safeText(formatHistoryPercent(summary.current))}</span></div>
+      <div class="meta-box"><span class="meta-label">First recorded</span><span class="meta-value">${safeText(formatHistoryPercent(summary.first))}</span></div>
+      <div class="meta-box"><span class="meta-label">Net change</span><span class="meta-value">${safeText(formatHistoryChange(summary.netChange))}</span></div>
+      <div class="meta-box"><span class="meta-label">High</span><span class="meta-value">${safeText(formatHistoryPercent(summary.high))}</span></div>
+      <div class="meta-box"><span class="meta-label">Low</span><span class="meta-value">${safeText(formatHistoryPercent(summary.low))}</span></div>
+      <div class="meta-box"><span class="meta-label">Snapshots</span><span class="meta-value">${safeText(summary.snapshotCount)}</span></div>
+    </div>
+  `;
+}
+
+function renderMarketHistoryCard(market) {
+  return `
+    <article id="marketPageHistory" class="market-card market-page-card market-history-card">
+      <div class="market-page-section-heading">
+        <p class="market-small">Recorded chart</p>
+        <h3>YES probability history</h3>
+        <p class="alert-time">Recorded by House of Markets from hourly snapshots. This is not full lifetime Polymarket history.</p>
+      </div>
+      <div class="market-history-controls" role="group" aria-label="Market history range">
+        ${Object.entries(MARKET_HISTORY_RANGES)
+          .map(([key, range]) => `
+            <button class="${currentMarketHistoryRange === key ? "active" : ""}" type="button" data-market-history-range="${safeAttr(key)}">
+              ${safeText(range.label)}
+            </button>
+          `)
+          .join("")}
+      </div>
+      <div id="marketHistoryPanel" class="market-history-panel" data-market-id="${safeAttr(getMarketTrackingId(market))}">
+        <p class="loading">Loading recorded history...</p>
+      </div>
+    </article>
+  `;
+}
+
+async function updateMarketHistoryPanel(market) {
+  const panel = document.getElementById("marketHistoryPanel");
+  if (!panel || !market) return null;
+
+  panel.innerHTML = `<p class="loading">Loading recorded history...</p>`;
+  try {
+    const points = await fetchMarketHistoryPoints(market, currentMarketHistoryRange);
+    const summary = summarizeMarketHistory(market, points);
+    panel.innerHTML = `
+      <div class="market-history-state ${summary.snapshotCount >= 8 ? "available" : ""}">
+        <strong>${safeText(summary.state)}</strong>
+        <span>${safeText(MARKET_HISTORY_RANGES[currentMarketHistoryRange]?.label || "7D")} recorded period</span>
+      </div>
+      ${renderMarketHistorySvg(summary)}
+      ${renderMarketHistoryStats(summary)}
+    `;
+    updateShareCardPreview(market, summary);
+    return summary;
+  } catch (error) {
+    panel.innerHTML = `
+      <div class="market-history-empty">
+        <strong>History unavailable</strong>
+        <span>${safeText(error.message || "Could not load recorded history yet.")}</span>
+      </div>
+    `;
+    return null;
+  }
+}
+
+function postContentExportEvent(eventName, market, options = {}) {
+  const payload = {
+    eventName,
+    marketId: getMarketTrackingId(market),
+    selectedFormat: options.selectedFormat || currentShareCardFormat,
+    selectedRange: options.selectedRange || currentMarketHistoryRange,
+    source: options.source || "market-page",
+  };
+
+  return fetch("/api/events/content-export", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+    body: JSON.stringify(payload),
+    keepalive: true,
+  }).catch(() => {});
+}
+
+function getShareCardCopy(market, summary) {
+  const question = String(market?.question || "This prediction market").trim();
+  const probability = formatHistoryPercent(summary?.current ?? getCurrentProbabilityPercent(market), "an unavailable probability");
+  const movement = getFiniteNumber(summary?.netChange) === null
+    ? "with limited recorded history"
+    : `moving ${formatHistoryChange(summary.netChange)} across the recorded period`;
+  return `${question} is currently at ${probability} YES, ${movement}. Track the market on House of Markets. Not financial advice.`;
+}
+
+function renderShareCardGenerator(market) {
+  return `
+    <article id="marketShareCardGenerator" class="market-card market-page-card market-share-card-generator market-page-mobile-panel" data-market-page-mobile-panel="share">
+      <div class="market-page-section-heading">
+        <p class="market-small">Content export</p>
+        <h3>Create share card</h3>
+        <p class="alert-time">Generate a branded card from real recorded snapshots. Missing history is shown honestly.</p>
+      </div>
+      <div class="share-card-controls">
+        <div>
+          <span class="meta-label">Format</span>
+          <div class="share-card-format-row" role="group" aria-label="Share card format">
+            ${Object.entries(SHARE_CARD_FORMATS)
+              .map(([key, format]) => `
+                <button class="${currentShareCardFormat === key ? "active" : ""}" type="button" data-share-card-format="${safeAttr(key)}">
+                  ${safeText(format.label)}
+                </button>
+              `)
+              .join("")}
+          </div>
+        </div>
+        <div>
+          <span class="meta-label">Range</span>
+          <div class="share-card-format-row" role="group" aria-label="Share card range">
+            ${Object.entries(MARKET_HISTORY_RANGES)
+              .map(([key, range]) => `
+                <button class="${currentMarketHistoryRange === key ? "active" : ""}" type="button" data-share-card-range="${safeAttr(key)}">
+                  ${safeText(range.label)}
+                </button>
+              `)
+              .join("")}
+          </div>
+        </div>
+      </div>
+      <canvas id="shareCardCanvas" class="share-card-preview" width="1080" height="1080" aria-label="Share card preview"></canvas>
+      <label class="market-detail-share-field">
+        <span class="meta-label">Share text</span>
+        <textarea id="shareCardText" rows="4" readonly>${safeText(getShareCardCopy(market, summarizeMarketHistory(market, [])))}</textarea>
+      </label>
+      <div class="market-footer market-detail-share-actions">
+        <button id="downloadShareCardBtn" type="button">Download PNG</button>
+        <button id="copyShareCardTextBtn" type="button">Copy share text</button>
+        <span id="shareCardStatus" class="alert-time" aria-live="polite"></span>
+      </div>
+    </article>
+  `;
+}
+
+function drawWrappedCanvasText(ctx, text, x, y, maxWidth, lineHeight, maxLines = 6) {
+  const words = String(text || "").split(/\s+/).filter(Boolean);
+  const lines = [];
+  let line = "";
+
+  for (const word of words) {
+    const next = line ? `${line} ${word}` : word;
+    if (ctx.measureText(next).width > maxWidth && line) {
+      lines.push(line);
+      line = word;
+    } else {
+      line = next;
+    }
+  }
+  if (line) lines.push(line);
+
+  lines.slice(0, maxLines).forEach((item, index) => {
+    ctx.fillText(item, x, y + index * lineHeight);
+  });
+  return y + Math.min(lines.length, maxLines) * lineHeight;
+}
+
+function drawShareCardCanvas(market, summary) {
+  const canvas = document.getElementById("shareCardCanvas");
+  if (!canvas) return;
+  const format = SHARE_CARD_FORMATS[currentShareCardFormat] || SHARE_CARD_FORMATS.square;
+  canvas.width = format.width;
+  canvas.height = format.height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+
+  const width = canvas.width;
+  const height = canvas.height;
+  const margin = Math.round(width * 0.07);
+  ctx.fillStyle = "#071017";
+  ctx.fillRect(0, 0, width, height);
+  const gradient = ctx.createLinearGradient(0, 0, width, height);
+  gradient.addColorStop(0, "rgba(66, 214, 255, 0.24)");
+  gradient.addColorStop(1, "rgba(143, 125, 255, 0.12)");
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, width, height);
+
+  ctx.fillStyle = "#e7f7ff";
+  ctx.font = `800 ${Math.max(32, Math.round(width * 0.038))}px Inter, Arial, sans-serif`;
+  ctx.fillText("House of Markets", margin, margin);
+
+  ctx.font = `900 ${Math.max(44, Math.round(width * (currentShareCardFormat === "landscape" ? 0.044 : 0.058)))}px Inter, Arial, sans-serif`;
+  const titleY = margin + Math.round(height * 0.12);
+  const afterTitleY = drawWrappedCanvasText(ctx, market.question, margin, titleY, width - margin * 2, Math.round(width * 0.07), currentShareCardFormat === "story" ? 8 : 5);
+
+  const current = formatHistoryPercent(summary?.current ?? getCurrentProbabilityPercent(market));
+  const change = formatHistoryChange(summary?.netChange);
+  ctx.font = `900 ${Math.max(58, Math.round(width * 0.09))}px Inter, Arial, sans-serif`;
+  ctx.fillStyle = "#42d6ff";
+  ctx.fillText(`${current} YES`, margin, afterTitleY + Math.round(height * 0.08));
+
+  ctx.font = `800 ${Math.max(26, Math.round(width * 0.032))}px Inter, Arial, sans-serif`;
+  ctx.fillStyle = "#c7d8e5";
+  ctx.fillText(`${MARKET_HISTORY_RANGES[currentMarketHistoryRange]?.label || "7D"} recorded period | Net ${change}`, margin, afterTitleY + Math.round(height * 0.13));
+
+  const chartTop = Math.min(height - margin * 3, afterTitleY + Math.round(height * 0.2));
+  const chartHeight = Math.max(130, Math.round(height * 0.23));
+  const chartWidth = width - margin * 2;
+  ctx.strokeStyle = "rgba(231, 247, 255, 0.22)";
+  ctx.lineWidth = Math.max(2, Math.round(width * 0.003));
+  ctx.strokeRect(margin, chartTop, chartWidth, chartHeight);
+
+  const points = Array.isArray(summary?.points) ? summary.points : [];
+  if (points.length >= 2) {
+    const minY = Math.max(0, (summary.low ?? 0) - 2);
+    const maxY = Math.min(100, (summary.high ?? 100) + 2);
+    const rangeY = Math.max(1, maxY - minY);
+    const firstTime = Date.parse(points[0].snapshotHour);
+    const lastTime = Date.parse(points[points.length - 1].snapshotHour);
+    const timeRange = Math.max(1, lastTime - firstTime);
+    ctx.beginPath();
+    points.forEach((point, index) => {
+      const x = margin + ((Date.parse(point.snapshotHour) - firstTime) / timeRange) * chartWidth;
+      const y = chartTop + chartHeight - ((point.yesProbability - minY) / rangeY) * chartHeight;
+      if (index === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+    ctx.strokeStyle = "#42d6ff";
+    ctx.lineWidth = Math.max(5, Math.round(width * 0.008));
+    ctx.stroke();
+  } else {
+    ctx.fillStyle = "#c7d8e5";
+    ctx.font = `800 ${Math.max(26, Math.round(width * 0.032))}px Inter, Arial, sans-serif`;
+    ctx.fillText(summary?.state || "No history yet", margin + 24, chartTop + chartHeight / 2);
+  }
+
+  ctx.fillStyle = "#c7d8e5";
+  ctx.font = `700 ${Math.max(22, Math.round(width * 0.025))}px Inter, Arial, sans-serif`;
+  const footerY = height - margin * 1.45;
+  ctx.fillText(`Recorded by House of Markets | ${new Date().toLocaleString()}`, margin, footerY);
+  ctx.fillText("Independent project. Not financial advice.", margin, footerY + Math.round(width * 0.04));
+}
+
+async function updateShareCardPreview(market, existingSummary = null) {
+  const canvas = document.getElementById("shareCardCanvas");
+  if (!canvas || !market) return;
+  const points = existingSummary
+    ? existingSummary.points
+    : await fetchMarketHistoryPoints(market, currentMarketHistoryRange).catch(() => []);
+  const summary = existingSummary || summarizeMarketHistory(market, points);
+  drawShareCardCanvas(market, summary);
+  const shareText = document.getElementById("shareCardText");
+  if (shareText) shareText.value = getShareCardCopy(market, summary);
+}
+
+function openShareCardGenerator(market) {
+  const panel = document.getElementById("marketShareCardGenerator");
+  if (!panel) return;
+  panel.classList.add("active");
+  panel.scrollIntoView({ behavior: "smooth", block: "start" });
+  postContentExportEvent("share_card_open", market, { source: "market-page-generator" });
+  updateShareCardPreview(market);
+}
+
 function renderMarketPageView(marketId, options = {}) {
   const section = ensureMarketPageSection();
   const requestedId = String(marketId || "").trim();
@@ -4739,8 +5143,10 @@ function renderMarketPageView(marketId, options = {}) {
 
     <nav class="market-page-nav market-page-desktop-nav" aria-label="Market page sections">
       <a href="#marketPageOverview">Overview</a>
+      <a href="#marketPageHistory">Chart</a>
       ${isAdvancedMode ? `<a href="#marketPageSignals">Signals</a>` : ""}
       <a href="#marketPageRelated">Related</a>
+      <a href="#marketShareCardGenerator">Export</a>
       ${isAdvancedMode ? `<a href="#marketPageShare">Share</a>` : ""}
     </nav>
 
@@ -4765,6 +5171,8 @@ function renderMarketPageView(marketId, options = {}) {
             ${isAdvancedMode ? renderMarketDetailOverview(market) : renderMarketPageBeginnerRead(market)}
           </article>
 
+          ${renderMarketHistoryCard(market)}
+
           ${isAdvancedMode ? `
             <article id="marketPageSignals" class="market-card market-page-card">
               <div class="market-page-section-heading">
@@ -4778,6 +5186,8 @@ function renderMarketPageView(marketId, options = {}) {
         </div>
 
         ${renderMarketPageComparisonSection(market, relatedMarkets, { mode: isAdvancedMode ? "advanced" : "beginner" })}
+
+        ${renderShareCardGenerator(market)}
 
         ${isAdvancedMode ? `
           <article id="marketPageShare" class="market-card market-page-card market-page-mobile-panel" data-market-page-mobile-panel="share">
@@ -4822,6 +5232,7 @@ function renderMarketPageView(marketId, options = {}) {
             <button class="trade-action-btn secondary-trade-btn" data-market-id="${safeAttr(market.id)}" data-side="BUY YES">Preview YES</button>
             <button class="trade-action-btn secondary-trade-btn" data-market-id="${safeAttr(market.id)}" data-side="BUY NO">Preview NO</button>
             ${renderWatchlistButton(market, "market-page")}
+            <button id="openShareCardGeneratorBtn" class="market-page-export-btn" type="button">Create share card</button>
             <input id="marketPageLinkInputSide" class="market-page-side-link-input" type="text" readonly value="${safeAttr(getMarketPageUrl())}" aria-label="Market page link" />
             <button id="copyMarketPageLinkBtnSide" type="button">Copy market link</button>
             <span id="marketPageLinkCopyStatusSide" class="alert-time" aria-live="polite"></span>
@@ -4845,6 +5256,7 @@ function renderMarketPageView(marketId, options = {}) {
 
   bindMarketPageControls();
   bindTradeActionButtons();
+  updateMarketHistoryPanel(market);
 
   if (options.updateUrl) {
     setMarketUrlParam(getMarketDetailId(market));
@@ -4899,6 +5311,7 @@ function setMarketPageMode(mode) {
 }
 
 function bindMarketPageControls() {
+  const pageMarket = getMarketByDetailId(currentMarketPageId);
   const backBtn = document.getElementById("marketPageBackBtn");
   const copyBtn = document.getElementById("copyMarketPageShareTextBtn");
   const shareText = document.getElementById("marketPageShareText");
@@ -4909,6 +5322,11 @@ function bindMarketPageControls() {
   const linkInputSide = document.getElementById("marketPageLinkInputSide");
   const linkStatus = document.getElementById("marketPageLinkCopyStatus");
   const linkStatusSide = document.getElementById("marketPageLinkCopyStatusSide");
+  const openShareCardBtn = document.getElementById("openShareCardGeneratorBtn");
+  const downloadShareCardBtn = document.getElementById("downloadShareCardBtn");
+  const copyShareCardTextBtn = document.getElementById("copyShareCardTextBtn");
+  const shareCardText = document.getElementById("shareCardText");
+  const shareCardStatus = document.getElementById("shareCardStatus");
 
   const copyMarketPageLink = async (statusElement, inputElement = linkInput) => {
     const text = inputElement?.value || linkInput?.value || getMarketPageUrl();
@@ -4925,12 +5343,102 @@ function bindMarketPageControls() {
   if (backBtn) backBtn.onclick = () => clearMarketPageView({ updateUrl: true });
   if (copyLinkBtn) copyLinkBtn.onclick = () => copyMarketPageLink(linkStatus);
   if (copyLinkBtnSide) copyLinkBtnSide.onclick = () => copyMarketPageLink(linkStatusSide, linkInputSide);
+  if (openShareCardBtn && pageMarket) openShareCardBtn.onclick = () => openShareCardGenerator(pageMarket);
   document.querySelectorAll("[data-market-page-mode]").forEach((button) => {
     button.onclick = () => setMarketPageMode(button.dataset.marketPageMode || "beginner");
   });
   document.querySelectorAll("[data-market-page-mobile-tab]").forEach((button) => {
     button.onclick = () => setMarketPageMobilePanel(button.dataset.marketPageMobileTab || "read");
   });
+  document.querySelectorAll("[data-market-history-range], [data-share-card-range]").forEach((button) => {
+    button.onclick = () => {
+      const nextRange = button.dataset.marketHistoryRange || button.dataset.shareCardRange || "7d";
+      currentMarketHistoryRange = MARKET_HISTORY_RANGES[nextRange] ? nextRange : "7d";
+      if (pageMarket) {
+        document.querySelectorAll("[data-market-history-range]").forEach((item) => {
+          item.classList.toggle("active", item.dataset.marketHistoryRange === currentMarketHistoryRange);
+        });
+        document.querySelectorAll("[data-share-card-range]").forEach((item) => {
+          item.classList.toggle("active", item.dataset.shareCardRange === currentMarketHistoryRange);
+        });
+        updateMarketHistoryPanel(pageMarket);
+      }
+    };
+  });
+  document.querySelectorAll("[data-share-card-format]").forEach((button) => {
+    button.onclick = () => {
+      const nextFormat = button.dataset.shareCardFormat || "square";
+      currentShareCardFormat = SHARE_CARD_FORMATS[nextFormat] ? nextFormat : "square";
+      if (pageMarket) {
+        postContentExportEvent("share_card_format_select", pageMarket, {
+          selectedFormat: currentShareCardFormat,
+          selectedRange: currentMarketHistoryRange,
+          source: "market-page-generator",
+        });
+        updateShareCardPreview(pageMarket);
+      }
+      document.querySelectorAll("[data-share-card-format]").forEach((item) => {
+        item.classList.toggle("active", item.dataset.shareCardFormat === currentShareCardFormat);
+      });
+    };
+  });
+  if (downloadShareCardBtn && pageMarket) {
+    downloadShareCardBtn.onclick = () => {
+      const canvas = document.getElementById("shareCardCanvas");
+      if (!canvas) return;
+      const filename = `house-of-markets-${getMarketTrackingId(pageMarket) || "market"}-${currentMarketHistoryRange}-${currentShareCardFormat}.png`;
+      const finish = (url) => {
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        if (shareCardStatus) shareCardStatus.textContent = "PNG download started.";
+        postContentExportEvent("share_card_download", pageMarket, {
+          selectedFormat: currentShareCardFormat,
+          selectedRange: currentMarketHistoryRange,
+          source: "market-page-generator",
+        });
+      };
+
+      if (canvas.toBlob) {
+        canvas.toBlob((blob) => {
+          if (!blob) {
+            if (shareCardStatus) shareCardStatus.textContent = "Download blocked. Long-press or screenshot the preview.";
+            return;
+          }
+          const url = URL.createObjectURL(blob);
+          finish(url);
+          window.setTimeout(() => URL.revokeObjectURL(url), 5000);
+        }, "image/png");
+      } else {
+        try {
+          finish(canvas.toDataURL("image/png"));
+        } catch {
+          if (shareCardStatus) shareCardStatus.textContent = "Download blocked. Long-press or screenshot the preview.";
+        }
+      }
+    };
+  }
+  if (copyShareCardTextBtn && shareCardText && pageMarket) {
+    copyShareCardTextBtn.onclick = async () => {
+      const text = shareCardText.value || "";
+      try {
+        await navigator.clipboard.writeText(text);
+        if (shareCardStatus) shareCardStatus.textContent = "Share text copied.";
+      } catch {
+        shareCardText.focus();
+        shareCardText.select();
+        if (shareCardStatus) shareCardStatus.textContent = "Select the text above to copy.";
+      }
+      postContentExportEvent("share_text_copy", pageMarket, {
+        selectedFormat: currentShareCardFormat,
+        selectedRange: currentMarketHistoryRange,
+        source: "market-page-generator",
+      });
+    };
+  }
   if (copyBtn && shareText) {
     copyBtn.onclick = async () => {
       const text = shareText.value || "";

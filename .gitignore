@@ -18,4 +18,6 @@ data/market-snapshots.json
 data/.market-snapshots.*.tmp
 data/start-funnel-events.json
 data/.start-funnel-events.*.tmp
+data/content-export-events.json
+data/.content-export-events.*.tmp
 pbp-snapshot-capture/snapshot-capture.env

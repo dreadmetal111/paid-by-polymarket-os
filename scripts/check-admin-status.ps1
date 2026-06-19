@@ -50,6 +50,14 @@ try {
     $StartFunnelChecklistPrints = $null
     $StartFunnelChecklistDownloads = $null
     $StartFunnelLatestEventAt = $null
+    $ContentExportStorageCheck = $null
+    $ContentExportGeneratorOpens = $null
+    $ContentExportCardDownloads = $null
+    $ContentExportShareTextCopies = $null
+    $ContentExportSquareSelections = $null
+    $ContentExportStorySelections = $null
+    $ContentExportLandscapeSelections = $null
+    $ContentExportLatestEventAt = $null
 
     if ($null -ne $Response.alertSignals) {
         $AlertSignalCount = $Response.alertSignals.count
@@ -89,6 +97,16 @@ try {
         $StartFunnelLatestEventAt = $Response.startFunnel.latestEventAt
     }
 
+    if ($null -ne $Response.contentExports) {
+        $ContentExportGeneratorOpens = $Response.contentExports.generatorOpens
+        $ContentExportCardDownloads = $Response.contentExports.cardDownloads
+        $ContentExportShareTextCopies = $Response.contentExports.shareTextCopies
+        $ContentExportSquareSelections = $Response.contentExports.squareSelections
+        $ContentExportStorySelections = $Response.contentExports.storySelections
+        $ContentExportLandscapeSelections = $Response.contentExports.landscapeSelections
+        $ContentExportLatestEventAt = $Response.contentExports.latestEventAt
+    }
+
     if ($null -ne $Response.watchlistInsights) {
         if ($null -ne $Response.watchlistInsights.topMarkets) {
             $WatchlistTopMarkets = @($Response.watchlistInsights.topMarkets) | ForEach-Object {
@@ -120,6 +138,7 @@ try {
         $WatchlistInterestStorageCheck = $Response.checks.watchlistInterestStorage
         $MarketSnapshotStorageCheck = $Response.checks.marketSnapshotStorage
         $StartFunnelStorageCheck = $Response.checks.startFunnelStorage
+        $ContentExportStorageCheck = $Response.checks.contentExportStorage
     }
 
     $SafeSummary = [ordered]@{
@@ -161,6 +180,15 @@ try {
             checklistDownloads = $StartFunnelChecklistDownloads
             latestEventAt = $StartFunnelLatestEventAt
         }
+        contentExports = [ordered]@{
+            generatorOpens = $ContentExportGeneratorOpens
+            cardDownloads = $ContentExportCardDownloads
+            shareTextCopies = $ContentExportShareTextCopies
+            squareSelections = $ContentExportSquareSelections
+            storySelections = $ContentExportStorySelections
+            landscapeSelections = $ContentExportLandscapeSelections
+            latestEventAt = $ContentExportLatestEventAt
+        }
         watchlistInsights = [ordered]@{
             topMarkets = $WatchlistTopMarkets
             topCategories = $WatchlistTopCategories
@@ -173,6 +201,7 @@ try {
             watchlistInterestStorage = $WatchlistInterestStorageCheck
             marketSnapshotStorage = $MarketSnapshotStorageCheck
             startFunnelStorage = $StartFunnelStorageCheck
+            contentExportStorage = $ContentExportStorageCheck
         }
         generatedAt = $Response.generatedAt
     }

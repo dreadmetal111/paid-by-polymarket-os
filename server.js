@@ -35,12 +35,17 @@ const START_FUNNEL_DATA_FILE = path.resolve(
   process.env.PBP_START_FUNNEL_DATA_FILE ||
     path.join(__dirname, "data", "start-funnel-events.json")
 );
+const CONTENT_EXPORT_DATA_FILE = path.resolve(
+  process.env.PBP_CONTENT_EXPORT_DATA_FILE ||
+    path.join(__dirname, "data", "content-export-events.json")
+);
 const ALERT_SIGNALS_TABLE = "alert_signals";
 const OUTBOUND_CLICK_EVENTS_TABLE = "outbound_click_events";
 const BETA_FEEDBACK_TABLE = "beta_feedback";
 const WATCHLIST_INTEREST_TABLE = "watchlist_interest";
 const MARKET_SNAPSHOTS_TABLE = "market_snapshots";
 const START_FUNNEL_EVENTS_TABLE = "start_funnel_events";
+const CONTENT_EXPORT_EVENTS_TABLE = "content_export_events";
 const PUBLIC_ALERT_SIGNAL_LIMIT = 5;
 const MARKET_SNAPSHOT_CAPTURE_LIMIT = 75;
 const MARKET_SNAPSHOT_MAX_HISTORY_HOURS = 720;
@@ -235,6 +240,7 @@ let betaFeedbackWriteQueue = Promise.resolve();
 let watchlistInterestWriteQueue = Promise.resolve();
 let marketSnapshotWriteQueue = Promise.resolve();
 let startFunnelWriteQueue = Promise.resolve();
+let contentExportWriteQueue = Promise.resolve();
 
 const demoState = {
   account: createInitialAccountState(),
@@ -581,6 +587,62 @@ function normalizeStartFunnelInput(body) {
   };
 }
 
+const CONTENT_EXPORT_EVENT_NAMES = new Set([
+  "share_card_open",
+  "share_card_download",
+  "share_text_copy",
+  "share_card_format_select",
+]);
+
+const CONTENT_EXPORT_FORMATS = new Set(["square", "story", "landscape"]);
+const CONTENT_EXPORT_RANGES = new Set(["24h", "7d", "30d"]);
+
+function normalizeContentExportEventName(value) {
+  const eventName = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 80);
+
+  return CONTENT_EXPORT_EVENT_NAMES.has(eventName) ? eventName : "";
+}
+
+function normalizeContentExportFormat(value) {
+  const format = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40);
+
+  return CONTENT_EXPORT_FORMATS.has(format) ? format : "square";
+}
+
+function normalizeContentExportRange(value) {
+  const range = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "")
+    .slice(0, 20);
+
+  return CONTENT_EXPORT_RANGES.has(range) ? range : "7d";
+}
+
+function normalizeContentExportInput(body) {
+  return {
+    eventName: normalizeContentExportEventName(body?.eventName ?? body?.event_name),
+    marketId: sanitizeOutboundClickText(body?.marketId ?? body?.market_id, 180) || null,
+    selectedFormat: normalizeContentExportFormat(
+      body?.selectedFormat ?? body?.selected_format ?? body?.format
+    ),
+    selectedRange: normalizeContentExportRange(
+      body?.selectedRange ?? body?.selected_range ?? body?.range
+    ),
+    source: sanitizeStartAttributionValue(body?.source, "market-page", 120),
+  };
+}
+
 function toPublicAlertSignal(signal) {
   return {
     alertType: signal.alertType,
@@ -772,6 +834,34 @@ function normalizeStartFunnelData(raw) {
       source: event?.source,
       campaign: event?.campaign,
       content: event?.content,
+    });
+
+    if (!normalized.eventName) continue;
+
+    normalizedEvents.push({
+      ...normalized,
+      createdAt: String(event?.createdAt || new Date().toISOString()),
+    });
+  }
+
+  return {
+    version: 1,
+    updatedAt: String(raw?.updatedAt || new Date().toISOString()),
+    events: normalizedEvents,
+  };
+}
+
+function normalizeContentExportData(raw) {
+  const events = Array.isArray(raw?.events) ? raw.events : [];
+  const normalizedEvents = [];
+
+  for (const event of events) {
+    const normalized = normalizeContentExportInput({
+      eventName: event?.eventName,
+      marketId: event?.marketId,
+      selectedFormat: event?.selectedFormat,
+      selectedRange: event?.selectedRange,
+      source: event?.source,
     });
 
     if (!normalized.eventName) continue;
@@ -981,6 +1071,38 @@ async function writeStartFunnelData(data) {
   await fs.rename(tempFile, START_FUNNEL_DATA_FILE);
 }
 
+async function readContentExportData() {
+  try {
+    const rawJson = await fs.readFile(CONTENT_EXPORT_DATA_FILE, "utf8");
+    return normalizeContentExportData(JSON.parse(rawJson));
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return normalizeContentExportData({ events: [] });
+    }
+    throw error;
+  }
+}
+
+async function writeContentExportData(data) {
+  const normalizedData = normalizeContentExportData({
+    ...data,
+    updatedAt: new Date().toISOString(),
+  });
+  const directory = path.dirname(CONTENT_EXPORT_DATA_FILE);
+  const tempFile = path.join(
+    directory,
+    `.content-export-events.${process.pid}.${Date.now()}.tmp`
+  );
+
+  await fs.mkdir(directory, { recursive: true });
+  await fs.writeFile(
+    tempFile,
+    `${JSON.stringify(normalizedData, null, 2)}\n`,
+    "utf8"
+  );
+  await fs.rename(tempFile, CONTENT_EXPORT_DATA_FILE);
+}
+
 function getSupabaseWaitlistConfig() {
   const supabaseUrl = envFirst("SUPABASE_URL").replace(/\/+$/, "");
   const serviceRoleKey = envFirst("SUPABASE_SERVICE_ROLE_KEY");
@@ -1063,6 +1185,18 @@ function getSupabaseStartFunnelConfig() {
     supabaseUrl,
     serviceRoleKey,
     table: START_FUNNEL_EVENTS_TABLE,
+  };
+}
+
+function getSupabaseContentExportConfig() {
+  const supabaseUrl = envFirst("SUPABASE_URL").replace(/\/+$/, "");
+  const serviceRoleKey = envFirst("SUPABASE_SERVICE_ROLE_KEY");
+
+  return {
+    enabled: !!(supabaseUrl && serviceRoleKey),
+    supabaseUrl,
+    serviceRoleKey,
+    table: CONTENT_EXPORT_EVENTS_TABLE,
   };
 }
 
@@ -1197,6 +1331,21 @@ function logStartFunnelStorageMode(context) {
   console.log(`[start-funnel] ${context}`, buildStartFunnelStorageLog());
 }
 
+function buildContentExportStorageLog(config = getSupabaseContentExportConfig()) {
+  return {
+    storageMode: config.enabled ? "supabase" : "json",
+    supabaseEnabled: config.enabled,
+    supabaseHost: getSupabaseHost(config.supabaseUrl) || "not-configured",
+    supabaseTable: config.table,
+    supabaseUrlConfigured: !!config.supabaseUrl,
+    supabaseServiceRoleKeyConfigured: !!config.serviceRoleKey,
+  };
+}
+
+function logContentExportStorageMode(context) {
+  console.log(`[content-exports] ${context}`, buildContentExportStorageLog());
+}
+
 function getActiveWaitlistStorageProvider() {
   const config = getSupabaseWaitlistConfig();
 
@@ -1253,6 +1402,15 @@ function getActiveMarketSnapshotStorageProvider() {
 
 function getActiveStartFunnelStorageProvider() {
   const config = getSupabaseStartFunnelConfig();
+
+  return {
+    storageMode: config.enabled ? "supabase" : "json",
+    config,
+  };
+}
+
+function getActiveContentExportStorageProvider() {
+  const config = getSupabaseContentExportConfig();
 
   return {
     storageMode: config.enabled ? "supabase" : "json",
@@ -2882,6 +3040,213 @@ async function readStartFunnelStatusSummary() {
         latestEventAt: null,
       },
       startFunnelStorage: "error",
+    };
+  }
+}
+
+function mapSupabaseContentExportRow(row) {
+  return {
+    eventName: normalizeContentExportEventName(row?.event_name ?? row?.eventName),
+    marketId: sanitizeOutboundClickText(row?.market_id ?? row?.marketId, 180) || null,
+    selectedFormat: normalizeContentExportFormat(row?.selected_format ?? row?.selectedFormat),
+    selectedRange: normalizeContentExportRange(row?.selected_range ?? row?.selectedRange),
+    source: sanitizeStartAttributionValue(row?.source, "market-page", 120),
+    createdAt: String(row?.created_at || row?.createdAt || new Date().toISOString()),
+  };
+}
+
+async function addSupabaseContentExportEvent({
+  event,
+  config = getSupabaseContentExportConfig(),
+}) {
+  const url = buildSupabaseTableUrl(config);
+
+  const rows = await fetchSupabaseJson(url, {
+    method: "POST",
+    headers: getSupabaseHeaders(config, {
+      "Content-Type": "application/json",
+      Prefer: "return=representation",
+    }),
+    body: JSON.stringify({
+      event_name: event.eventName,
+      market_id: event.marketId,
+      selected_format: event.selectedFormat,
+      selected_range: event.selectedRange,
+      source: event.source,
+    }),
+    logLabel: "content-exports",
+    errorLabel: "content export event",
+  });
+
+  return Array.isArray(rows) && rows[0]
+    ? mapSupabaseContentExportRow(rows[0])
+    : {
+        ...event,
+        createdAt: new Date().toISOString(),
+      };
+}
+
+async function addJsonContentExportEvent(eventInput) {
+  const task = async () => {
+    const data = await readContentExportData();
+    const event = {
+      ...normalizeContentExportInput(eventInput),
+      createdAt: new Date().toISOString(),
+    };
+
+    if (!event.eventName) {
+      throw new Error("Invalid content export event.");
+    }
+
+    data.events.push(event);
+    await writeContentExportData(data);
+
+    return {
+      event,
+      count: data.events.length,
+    };
+  };
+
+  contentExportWriteQueue = contentExportWriteQueue.then(task, task);
+  return contentExportWriteQueue;
+}
+
+async function addContentExportEvent(eventInput) {
+  const provider = getActiveContentExportStorageProvider();
+  const event = normalizeContentExportInput(eventInput);
+
+  if (!event.eventName) {
+    const error = new Error("Invalid content export event.");
+    error.status = 400;
+    throw error;
+  }
+
+  try {
+    const result =
+      provider.storageMode === "supabase"
+        ? {
+            event: await addSupabaseContentExportEvent({
+              event,
+              config: provider.config,
+            }),
+            count: null,
+          }
+        : await addJsonContentExportEvent(event);
+
+    return {
+      ...result,
+      storageMode: provider.storageMode,
+    };
+  } catch (error) {
+    if (provider.storageMode === "supabase") {
+      console.error("[content-exports] Supabase save failed; falling back to JSON:", error.message);
+      const fallbackResult = await addJsonContentExportEvent(event);
+      return {
+        ...fallbackResult,
+        storageMode: "json_fallback",
+      };
+    }
+
+    throw error;
+  }
+}
+
+function buildContentExportStatus(events) {
+  const counts = {
+    generatorOpens: 0,
+    cardDownloads: 0,
+    shareTextCopies: 0,
+    squareSelections: 0,
+    storySelections: 0,
+    landscapeSelections: 0,
+  };
+  let latestTimestamp = 0;
+
+  for (const event of Array.isArray(events) ? events : []) {
+    const eventName = normalizeContentExportEventName(event?.eventName);
+    const selectedFormat = normalizeContentExportFormat(event?.selectedFormat);
+    if (eventName === "share_card_open") counts.generatorOpens += 1;
+    if (eventName === "share_card_download") counts.cardDownloads += 1;
+    if (eventName === "share_text_copy") counts.shareTextCopies += 1;
+    if (eventName === "share_card_format_select") {
+      if (selectedFormat === "square") counts.squareSelections += 1;
+      if (selectedFormat === "story") counts.storySelections += 1;
+      if (selectedFormat === "landscape") counts.landscapeSelections += 1;
+    }
+
+    const timestamp = Date.parse(event?.createdAt);
+    if (Number.isFinite(timestamp) && timestamp > latestTimestamp) {
+      latestTimestamp = timestamp;
+    }
+  }
+
+  return {
+    ...counts,
+    latestEventAt: latestTimestamp ? new Date(latestTimestamp).toISOString() : null,
+  };
+}
+
+async function readJsonContentExportStatusSummary() {
+  const data = await readContentExportData();
+  const events = Array.isArray(data.events) ? data.events : [];
+
+  return {
+    contentExports: buildContentExportStatus(events),
+    contentExportStorage: "ok",
+  };
+}
+
+async function readSupabaseContentExportStatusSummary(config) {
+  const url = buildSupabaseTableUrl(config);
+  url.searchParams.set("select", "event_name,market_id,selected_format,selected_range,source,created_at");
+  url.searchParams.set("order", "created_at.desc");
+
+  const rows = await fetchSupabaseJson(url, {
+    headers: getSupabaseHeaders(config),
+    logLabel: "content-exports",
+    errorLabel: "content export events",
+  });
+
+  const events = (Array.isArray(rows) ? rows : []).map(mapSupabaseContentExportRow);
+
+  return {
+    contentExports: buildContentExportStatus(events),
+    contentExportStorage: "ok",
+  };
+}
+
+async function readContentExportStatusSummary() {
+  const provider = getActiveContentExportStorageProvider();
+
+  try {
+    if (provider.storageMode === "supabase") {
+      return await readSupabaseContentExportStatusSummary(provider.config);
+    }
+    return await readJsonContentExportStatusSummary();
+  } catch (error) {
+    console.error("[content-exports] Status read failed:", error.message);
+    if (provider.storageMode === "supabase") {
+      try {
+        const fallbackSummary = await readJsonContentExportStatusSummary();
+        return {
+          contentExports: fallbackSummary.contentExports,
+          contentExportStorage: "ok",
+        };
+      } catch (fallbackError) {
+        console.error("[content-exports] JSON fallback status read failed:", fallbackError.message);
+      }
+    }
+    return {
+      contentExports: {
+        generatorOpens: 0,
+        cardDownloads: 0,
+        shareTextCopies: 0,
+        squareSelections: 0,
+        storySelections: 0,
+        landscapeSelections: 0,
+        latestEventAt: null,
+      },
+      contentExportStorage: "error",
     };
   }
 }
@@ -5472,6 +5837,35 @@ app.post("/api/events/start-funnel", async (req, res) => {
   }
 });
 
+app.post("/api/events/content-export", async (req, res) => {
+  try {
+    const event = normalizeContentExportInput(req.body);
+
+    if (!event.eventName) {
+      return res.status(400).json({
+        ok: false,
+        error: "Invalid content export event.",
+      });
+    }
+
+    logContentExportStorageMode("event save start");
+    const result = await addContentExportEvent(event);
+
+    return res.status(201).json({
+      ok: true,
+      status: "created",
+      storageMode: result.storageMode,
+      message: "Content export event recorded.",
+    });
+  } catch (error) {
+    console.error("[content-exports] Save failed:", error.message);
+    return res.status(error.status || 500).json({
+      ok: false,
+      error: "Failed to record content export event.",
+    });
+  }
+});
+
 app.post("/api/events/outbound-click", async (req, res) => {
   try {
     const clickEvent = normalizeOutboundClickInput(req.body);
@@ -5674,7 +6068,8 @@ app.get("/api/admin/status", async (req, res) => {
     logWatchlistInterestStorageMode("admin status start");
     logMarketSnapshotStorageMode("admin status start");
     logStartFunnelStorageMode("admin status start");
-    const [waitlistSummary, alertSignalSummary, outboundClickSummary, feedbackSummary, watchlistInterestSummary, marketSnapshotSummary, startFunnelSummary] = await Promise.all([
+    logContentExportStorageMode("admin status start");
+    const [waitlistSummary, alertSignalSummary, outboundClickSummary, feedbackSummary, watchlistInterestSummary, marketSnapshotSummary, startFunnelSummary, contentExportSummary] = await Promise.all([
       readWaitlistStatusSummary(),
       readAlertSignalStatusSummary(),
       readOutboundClickStatusSummary(),
@@ -5682,6 +6077,7 @@ app.get("/api/admin/status", async (req, res) => {
       readWatchlistInterestStatusSummary(),
       readMarketSnapshotStatusSummary(),
       readStartFunnelStatusSummary(),
+      readContentExportStatusSummary(),
     ]);
     const checks = {
       waitlistStorage: "ok",
@@ -5691,6 +6087,7 @@ app.get("/api/admin/status", async (req, res) => {
       watchlistInterestStorage: watchlistInterestSummary.watchlistInterestStorage,
       marketSnapshotStorage: marketSnapshotSummary.marketSnapshotStorage,
       startFunnelStorage: startFunnelSummary.startFunnelStorage,
+      contentExportStorage: contentExportSummary.contentExportStorage,
       adminAuth: "ok",
     };
     const statusOk = Object.values(checks).every((value) => value === "ok");
@@ -5706,6 +6103,7 @@ app.get("/api/admin/status", async (req, res) => {
       watchlistInterest: watchlistInterestSummary.watchlistInterest,
       marketSnapshots: marketSnapshotSummary.marketSnapshots,
       startFunnel: startFunnelSummary.startFunnel,
+      contentExports: contentExportSummary.contentExports,
       watchlistInsights: watchlistInterestSummary.watchlistInsights || {
         topMarkets: [],
         topCategories: [],
