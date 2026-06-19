@@ -126,6 +126,12 @@ h2 {
   color: var(--scan-indigo);
 }
 
+.scan-button-download {
+  border-color: rgba(20, 139, 98, 0.28);
+  background: rgba(20, 139, 98, 0.1);
+  color: var(--scan-green);
+}
+
 .scan-button:focus-visible,
 .scan-back-link:focus-visible {
   outline: 3px solid rgba(12, 167, 223, 0.34);

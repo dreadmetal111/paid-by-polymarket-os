@@ -15,7 +15,8 @@ create table if not exists public.start_funnel_events (
         'start_live_board_click',
         'start_thank_you_view',
         'start_checklist_open',
-        'start_checklist_print'
+        'start_checklist_print',
+        'start_checklist_download'
       )
     )
 );
@@ -34,7 +35,8 @@ alter table public.start_funnel_events
         'start_live_board_click',
         'start_thank_you_view',
         'start_checklist_open',
-        'start_checklist_print'
+        'start_checklist_print',
+        'start_checklist_download'
       )
     );
 

@@ -547,6 +547,7 @@ const START_FUNNEL_EVENT_NAMES = new Set([
   "start_thank_you_view",
   "start_checklist_open",
   "start_checklist_print",
+  "start_checklist_download",
 ]);
 
 function normalizeStartFunnelEventName(value) {
@@ -2789,6 +2790,7 @@ function buildStartFunnelStatus(events) {
     thankYouViews: 0,
     checklistOpens: 0,
     checklistPrints: 0,
+    checklistDownloads: 0,
   };
   let latestTimestamp = 0;
 
@@ -2802,6 +2804,7 @@ function buildStartFunnelStatus(events) {
     if (eventName === "start_thank_you_view") counts.thankYouViews += 1;
     if (eventName === "start_checklist_open") counts.checklistOpens += 1;
     if (eventName === "start_checklist_print") counts.checklistPrints += 1;
+    if (eventName === "start_checklist_download") counts.checklistDownloads += 1;
 
     const timestamp = Date.parse(event?.createdAt);
     if (Number.isFinite(timestamp) && timestamp > latestTimestamp) {
@@ -2875,6 +2878,7 @@ async function readStartFunnelStatusSummary() {
         thankYouViews: 0,
         checklistOpens: 0,
         checklistPrints: 0,
+        checklistDownloads: 0,
         latestEventAt: null,
       },
       startFunnelStorage: "error",

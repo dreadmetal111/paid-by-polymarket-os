@@ -3,6 +3,7 @@ const SCAN_FUNNEL_ENDPOINT = "/api/events/start-funnel";
 const SCAN_ALLOWED_EVENT_NAMES = new Set([
   "start_checklist_open",
   "start_checklist_print",
+  "start_checklist_download",
   "start_live_board_click",
 ]);
 
@@ -73,6 +74,11 @@ function initMarketScanPage() {
   printButton?.addEventListener("click", () => {
     postScanEvent("start_checklist_print");
     window.setTimeout(() => window.print(), 120);
+  });
+
+  const downloadButton = document.getElementById("downloadScanPdfButton");
+  downloadButton?.addEventListener("click", () => {
+    postScanEvent("start_checklist_download");
   });
 }
 
