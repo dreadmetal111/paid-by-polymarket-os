@@ -1,0 +1,22 @@
+[Unit]
+Description=House of Markets hourly market snapshot capture
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=YOUR_UBUNTU_USERNAME
+Group=YOUR_UBUNTU_USERNAME
+WorkingDirectory=/home/YOUR_UBUNTU_USERNAME/projects/automation/pbp-snapshot-capture
+EnvironmentFile=/home/YOUR_UBUNTU_USERNAME/projects/automation/pbp-snapshot-capture/snapshot-capture.env
+ExecStart=/usr/bin/node /home/YOUR_UBUNTU_USERNAME/projects/automation/pbp-snapshot-capture/capture_market_snapshots.js
+TimeoutStartSec=90
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=false
+ReadWritePaths=/home/YOUR_UBUNTU_USERNAME/projects/automation/pbp-snapshot-capture
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

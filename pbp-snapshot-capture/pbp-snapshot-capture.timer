@@ -1,0 +1,12 @@
+[Unit]
+Description=Run House of Markets market snapshot capture hourly
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+RandomizedDelaySec=300
+AccuracySec=1min
+Unit=pbp-snapshot-capture.service
+
+[Install]
+WantedBy=timers.target
