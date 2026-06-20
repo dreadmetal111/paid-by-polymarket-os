@@ -1,0 +1,5 @@
+Original sanitized Acer archive:
+HOUSE_OF_MARKETS_54B_ACER_SOURCE_BACKUP_2026-06-20.tar.gz
+
+SHA-256:
+bfff807b212bbbcbd092fcb5acf7166df21fb5bb5668e17e2ebf1c293bcb566e

@@ -1,0 +1,24 @@
+[Unit]
+Description=Paid by Polymarket Alert Worker
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=dylan
+Group=dylan
+WorkingDirectory=/home/dylan/projects/automation/pbp-alert-worker
+EnvironmentFile=/home/dylan/projects/automation/pbp-alert-worker/alert-worker.env
+ExecStart=/home/dylan/projects/automation/pbp-alert-worker/.venv/bin/python /home/dylan/projects/automation/pbp-alert-worker/pbp_alert_worker.py
+Restart=always
+RestartSec=10
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=false
+ReadWritePaths=/home/dylan/projects/automation/pbp-alert-worker
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,22 @@
+[Unit]
+Description=House of Markets hourly market snapshot capture
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=dylan
+Group=dylan
+WorkingDirectory=/home/dylan/projects/automation/pbp-snapshot-capture
+EnvironmentFile=/home/dylan/projects/automation/pbp-snapshot-capture/snapshot-capture.env
+ExecStart=/usr/bin/node /home/dylan/projects/automation/pbp-snapshot-capture/capture_market_snapshots.js
+TimeoutStartSec=90
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=false
+ReadWritePaths=/home/dylan/projects/automation/pbp-snapshot-capture
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,13 @@
+[Unit]
+Description=Acer Node Heartbeat Service
+After=network.target
+
+[Service]
+User=dylan
+WorkingDirectory=/home/dylan/projects/automation/heartbeat
+ExecStart=/usr/bin/python3 /home/dylan/projects/automation/heartbeat/heartbeat.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
