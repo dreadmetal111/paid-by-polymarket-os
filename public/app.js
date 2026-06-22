@@ -570,6 +570,21 @@ function renderDiscordBetaCta(show = false) {
   }
 }
 
+function activateAlertsPageRoute() {
+  const pathname = window.location.pathname.replace(/\/+$/, "") || "/";
+  if (pathname !== "/alerts") return;
+
+  document.title = "Free Discord Alerts Beta | House of Markets";
+  renderDiscordBetaCta(true);
+
+  const section = document.getElementById("pbpAlertsComingSoon");
+  if (!section) return;
+
+  requestAnimationFrame(() => {
+    section.scrollIntoView({ behavior: "auto", block: "start" });
+  });
+}
+
 async function loadPublicConfig() {
   try {
     const res = await fetch("/api/public-config", { cache: "no-store" });
@@ -6587,6 +6602,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   setTopLevelView("discover");
+  activateAlertsPageRoute();
 
   setInterval(loadLatestAlertSignals, 60000);
   setInterval(loadAlerts, 60000);
