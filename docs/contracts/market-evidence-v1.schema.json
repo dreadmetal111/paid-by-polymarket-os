@@ -1,0 +1,323 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:house-of-markets:market-evidence:v1",
+  "title": "MarketEvidenceV1",
+  "description": "Staged research-only contract. Time, identity, lineage, coverage proof, and digest relationships require a separate future semantic validator.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "researchOnly",
+    "executionEnabled",
+    "evidenceID",
+    "contentDigest",
+    "instrument",
+    "source",
+    "sourceEventAtUtc",
+    "receivedAtUtc",
+    "availableAtUtc",
+    "evaluationAtUtc",
+    "availabilityCutoffUtc",
+    "expiresAtUtc",
+    "quality",
+    "metrics"
+  ],
+  "properties": {
+    "version": {"const":"MarketEvidenceV1"},
+    "researchOnly": {"const":true},
+    "executionEnabled": {"const":false},
+    "evidenceID": {"$ref":"#/$defs/evidenceID"},
+    "contentDigest": {"$ref":"#/$defs/digest"},
+    "instrument": {"$ref":"#/$defs/instrument"},
+    "source": {"$ref":"#/$defs/source"},
+    "sourceEventAtUtc": {"anyOf":[{"$ref":"#/$defs/utc"},{"type":"null"}]},
+    "receivedAtUtc": {"$ref":"#/$defs/utc"},
+    "availableAtUtc": {"$ref":"#/$defs/utc"},
+    "interval": {"$ref":"#/$defs/interval"},
+    "evaluationAtUtc": {"$ref":"#/$defs/utc"},
+    "availabilityCutoffUtc": {"$ref":"#/$defs/utc"},
+    "expiresAtUtc": {"$ref":"#/$defs/utc"},
+    "quality": {"$ref":"#/$defs/quality"},
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["yesProbability","volume","liquidity","movement"],
+      "properties": {
+        "yesProbability": {"$ref":"#/$defs/probability"},
+        "volume": {"$ref":"#/$defs/amount"},
+        "liquidity": {"$ref":"#/$defs/amount"},
+        "movement": {"$ref":"#/$defs/movement"}
+      }
+    }
+  },
+  "$defs": {
+    "opaqueID": {"type":["string","null"],"minLength":1,"maxLength":256},
+    "utc": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]\\.[0-9]{3}Z$"
+    },
+    "digest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm","canonicalization","value"],
+      "properties": {
+        "algorithm": {"const":"SHA-256"},
+        "canonicalization": {"const":"CANONICAL_JSON_UTF8_V1"},
+        "value": {"type":"string","pattern":"^[a-f0-9]{64}$"}
+      }
+    },
+    "interval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type","startUtc","endUtc"],
+      "properties": {
+        "type": {"enum":["POINT_IN_TIME","INTERVAL"]},
+        "startUtc": {"$ref":"#/$defs/utc"},
+        "endUtc": {"$ref":"#/$defs/utc"}
+      }
+    },
+    "instrument": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stableInstrumentID","venue","marketID","eventID","binaryMapping","yes","no"],
+      "properties": {
+        "stableInstrumentID": {"$ref":"#/$defs/opaqueID"},
+        "venue": {"enum":["polymarket","kalshi"]},
+        "marketID": {"$ref":"#/$defs/opaqueID"},
+        "eventID": {"$ref":"#/$defs/opaqueID"},
+        "binaryMapping": {"enum":["EXPLICIT_SOURCE","UNKNOWN"]},
+        "yes": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["label","outcomeID","tokenID"],
+          "properties": {"label":{"const":"YES"},"outcomeID":{"$ref":"#/$defs/opaqueID"},"tokenID":{"$ref":"#/$defs/opaqueID"}}
+        },
+        "no": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["label","outcomeID","tokenID"],
+          "properties": {"label":{"const":"NO"},"outcomeID":{"$ref":"#/$defs/opaqueID"},"tokenID":{"$ref":"#/$defs/opaqueID"}}
+        }
+      },
+      "allOf": [
+        {
+          "if": {"properties":{"binaryMapping":{"const":"UNKNOWN"}},"required":["binaryMapping"]},
+          "then": {
+            "properties": {
+              "yes": {"properties":{"outcomeID":{"type":"null"},"tokenID":{"type":"null"}}},
+              "no": {"properties":{"outcomeID":{"type":"null"},"tokenID":{"type":"null"}}}
+            }
+          }
+        }
+      ]
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["providerID","providerVersion","sourceID","sourceVersion","adapterVersion","evidenceBasis","payloadDigest"],
+      "properties": {
+        "providerID": {"type":"string","minLength":1,"maxLength":256},
+        "providerVersion": {"type":["string","null"],"minLength":1,"maxLength":256},
+        "sourceID": {"type":"string","minLength":1,"maxLength":256},
+        "sourceVersion": {"type":["string","null"],"minLength":1,"maxLength":256},
+        "adapterVersion": {"type":"string","minLength":1,"maxLength":256},
+        "evidenceBasis": {"enum":["PUBLIC_POINT_IN_TIME","SYNTHETIC_FIXTURE"]},
+        "payloadDigest": {"$ref":"#/$defs/digest"}
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind","sourceField","calculationID","calculationVersion","inputEvidenceIDs"],
+      "properties": {
+        "kind": {"enum":["SOURCE_REPORTED","DERIVED","UNAVAILABLE"]},
+        "sourceField": {"type":["string","null"],"minLength":1,"maxLength":256},
+        "calculationID": {"type":["string","null"],"minLength":1,"maxLength":256},
+        "calculationVersion": {"type":["string","null"],"minLength":1,"maxLength":256},
+        "inputEvidenceIDs": {"type":"array","uniqueItems":true,"items":{"$ref":"#/$defs/evidenceID"}}
+      },
+      "allOf": [
+        {
+          "if": {"properties":{"kind":{"const":"SOURCE_REPORTED"}},"required":["kind"]},
+          "then": {
+            "properties": {
+              "sourceField": {"type":"string","minLength":1,"maxLength":256},
+              "calculationID": {"type":"null"},
+              "calculationVersion": {"type":"null"},
+              "inputEvidenceIDs": {"maxItems":0}
+            }
+          }
+        },
+        {
+          "if": {"properties":{"kind":{"const":"DERIVED"}},"required":["kind"]},
+          "then": {
+            "properties": {
+              "sourceField": {"type":"null"},
+              "calculationID": {"type":"string","minLength":1,"maxLength":256},
+              "calculationVersion": {"type":"string","minLength":1,"maxLength":256},
+              "inputEvidenceIDs": {"minItems":1}
+            }
+          }
+        },
+        {
+          "if": {"properties":{"kind":{"const":"UNAVAILABLE"}},"required":["kind"]},
+          "then": {
+            "properties": {
+              "sourceField": {"type":"null"},
+              "calculationID": {"type":"null"},
+              "calculationVersion": {"type":"null"},
+              "inputEvidenceIDs": {"maxItems":0}
+            }
+          }
+        }
+      ]
+    },
+    "evidenceID": {"type":"string","pattern":"^mev1:sha256:[a-f0-9]{64}$"},
+    "quality": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "coverage",
+        "expectedSampleCount",
+        "observedSampleCount",
+        "observedInterval",
+        "observedCoverageFraction",
+        "gaps"
+      ],
+      "properties": {
+        "status": {"enum":["UNKNOWN","PARTIAL","USABLE"]},
+        "coverage": {"enum":["UNKNOWN","PARTIAL","COMPLETE_PROVEN"]},
+        "expectedSampleCount": {"type":["integer","null"],"minimum":0,"maximum":9007199254740991},
+        "observedSampleCount": {"type":["integer","null"],"minimum":0,"maximum":9007199254740991},
+        "observedInterval": {"anyOf":[{"$ref":"#/$defs/interval"},{"type":"null"}]},
+        "observedCoverageFraction": {"type":["number","null"],"minimum":0,"maximum":1},
+        "gaps": {"type":"array","items":{"$ref":"#/$defs/gap"}}
+      },
+      "allOf": [
+        {
+          "if": {"properties":{"observedCoverageFraction":{"type":"number"}}},
+          "then": {
+            "properties": {"observedInterval":{"allOf":[{"$ref":"#/$defs/interval"},{"properties":{"type":{"const":"INTERVAL"}}}]}}
+          }
+        },
+        {
+          "if": {"properties":{"coverage":{"const":"COMPLETE_PROVEN"}},"required":["coverage"]},
+          "then": {
+            "properties": {
+              "expectedSampleCount": {"type":"integer","minimum":1},
+              "observedSampleCount": {"type":"integer","minimum":1},
+              "observedInterval": {"allOf":[{"$ref":"#/$defs/interval"},{"properties":{"type":{"const":"INTERVAL"}}}]},
+              "observedCoverageFraction": {"const":1},
+              "gaps": {"maxItems":0}
+            }
+          }
+        }
+      ]
+    },
+    "gap": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reason","interval"],
+      "properties": {
+        "reason": {
+          "enum": [
+            "SOURCE_UNAVAILABLE",
+            "SAMPLE_MISSING",
+            "METRIC_MISSING",
+            "IDENTITY_UNAVAILABLE",
+            "TIMESTAMP_UNKNOWN",
+            "INVALID_SOURCE_VALUE"
+          ]
+        },
+        "interval": {"anyOf":[{"$ref":"#/$defs/interval"},{"type":"null"}]}
+      }
+    },
+    "probability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value","unit","window","provenance"],
+      "properties": {
+        "value": {"type":["number","null"],"minimum":0,"maximum":1},
+        "unit": {"const":"PROBABILITY_FRACTION"},
+        "window": {"anyOf":[{"$ref":"#/$defs/interval"},{"type":"null"}]},
+        "provenance": {"$ref":"#/$defs/provenance"}
+      },
+      "allOf": [
+        {
+          "if": {"properties":{"provenance":{"properties":{"kind":{"const":"UNAVAILABLE"}}}}},
+          "then": {"properties":{"value":{"type":"null"}}}
+        }
+      ]
+    },
+    "amount": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value","unit","currency","window","provenance"],
+      "properties": {
+        "value": {"type":["number","null"],"minimum":0},
+        "unit": {"enum":["CURRENCY_AMOUNT","CONTRACTS",null]},
+        "currency": {"type":["string","null"],"pattern":"^[A-Z]{3}$"},
+        "window": {"anyOf":[{"$ref":"#/$defs/interval"},{"type":"null"}]},
+        "provenance": {"$ref":"#/$defs/provenance"}
+      },
+      "allOf": [
+        {
+          "if": {"properties":{"provenance":{"properties":{"kind":{"const":"UNAVAILABLE"}}}}},
+          "then": {"properties":{"value":{"type":"null"}}}
+        },
+        {
+          "if": {"properties":{"value":{"type":"number"}}},
+          "then": {"properties":{"unit":{"enum":["CURRENCY_AMOUNT","CONTRACTS"]},"window":{"$ref":"#/$defs/interval"}}}
+        },
+        {
+          "if": {"properties":{"unit":{"const":"CURRENCY_AMOUNT"}},"required":["unit"]},
+          "then": {"properties":{"currency":{"type":"string","pattern":"^[A-Z]{3}$"}}}
+        },
+        {
+          "if": {"properties":{"unit":{"const":"CONTRACTS"}},"required":["unit"]},
+          "then": {"properties":{"currency":{"type":"null"}}}
+        },
+        {
+          "if": {"properties":{"unit":{"const":null}},"required":["unit"]},
+          "then": {"properties":{"currency":{"type":"null"}}}
+        }
+      ]
+    },
+    "movement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value","unit","window","provenance"],
+      "properties": {
+        "value": {"type":["number","null"]},
+        "unit": {"enum":["PROBABILITY_FRACTION","PERCENTAGE_POINTS",null]},
+        "window": {"anyOf":[{"$ref":"#/$defs/interval"},{"type":"null"}]},
+        "provenance": {"$ref":"#/$defs/provenance"}
+      },
+      "allOf": [
+        {
+          "if": {"properties":{"provenance":{"properties":{"kind":{"const":"UNAVAILABLE"}}}}},
+          "then": {"properties":{"value":{"type":"null"}}}
+        },
+        {
+          "if": {"properties":{"value":{"type":"number"}}},
+          "then": {
+            "properties": {
+              "unit": {"enum":["PROBABILITY_FRACTION","PERCENTAGE_POINTS"]},
+              "window": {"allOf":[{"$ref":"#/$defs/interval"},{"properties":{"type":{"const":"INTERVAL"}}}]}
+            }
+          }
+        },
+        {
+          "if": {"properties":{"unit":{"const":"PROBABILITY_FRACTION"}},"required":["unit"]},
+          "then": {"properties":{"value":{"minimum":-1,"maximum":1}}}
+        },
+        {
+          "if": {"properties":{"unit":{"const":"PERCENTAGE_POINTS"}},"required":["unit"]},
+          "then": {"properties":{"value":{"minimum":-100,"maximum":100}}}
+        }
+      ]
+    }
+  }
+}
