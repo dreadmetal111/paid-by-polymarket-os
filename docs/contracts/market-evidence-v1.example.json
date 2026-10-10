@@ -1,0 +1,118 @@
+{
+  "version": "MarketEvidenceV1",
+  "researchOnly": true,
+  "executionEnabled": false,
+  "evidenceID": "mev1:sha256:9d5d8da5a1d7353253506886aa9e6fd646d66f12f6d59db7c013f18dd4929c9d",
+  "contentDigest": {
+    "algorithm": "SHA-256",
+    "canonicalization": "CANONICAL_JSON_UTF8_V1",
+    "value": "9d5d8da5a1d7353253506886aa9e6fd646d66f12f6d59db7c013f18dd4929c9d"
+  },
+  "instrument": {
+    "stableInstrumentID": "synthetic-instrument-001",
+    "venue": "polymarket",
+    "marketID": "synthetic-market-001",
+    "eventID": null,
+    "binaryMapping": "EXPLICIT_SOURCE",
+    "yes": {
+      "label": "YES",
+      "outcomeID": "synthetic-outcome-yes-001",
+      "tokenID": "synthetic-token-yes-001"
+    },
+    "no": {
+      "label": "NO",
+      "outcomeID": "synthetic-outcome-no-001",
+      "tokenID": "synthetic-token-no-001"
+    }
+  },
+  "source": {
+    "providerID": "synthetic-provider-001",
+    "providerVersion": "synthetic-v1",
+    "sourceID": "synthetic-source-001",
+    "sourceVersion": "synthetic-v1",
+    "adapterVersion": "synthetic-adapter-v1",
+    "evidenceBasis": "SYNTHETIC_FIXTURE",
+    "payloadDigest": {
+      "algorithm": "SHA-256",
+      "canonicalization": "CANONICAL_JSON_UTF8_V1",
+      "value": "d195143a931d17f41157698a04d3069117b9e1330c6bf0ca5a0ad8d9e416af50"
+    }
+  },
+  "sourceEventAtUtc": null,
+  "receivedAtUtc": "2000-01-01T00:00:00.000Z",
+  "availableAtUtc": "2000-01-01T00:00:00.100Z",
+  "interval": {
+    "type": "POINT_IN_TIME",
+    "startUtc": "2000-01-01T00:00:00.000Z",
+    "endUtc": "2000-01-01T00:00:00.000Z"
+  },
+  "evaluationAtUtc": "2000-01-01T00:01:00.000Z",
+  "availabilityCutoffUtc": "2000-01-01T00:00:00.100Z",
+  "expiresAtUtc": "2000-01-01T00:05:00.100Z",
+  "quality": {
+    "status": "PARTIAL",
+    "coverage": "UNKNOWN",
+    "expectedSampleCount": null,
+    "observedSampleCount": 1,
+    "observedInterval": null,
+    "observedCoverageFraction": null,
+    "gaps": [
+      {
+        "reason": "METRIC_MISSING",
+        "interval": null
+      }
+    ]
+  },
+  "metrics": {
+    "yesProbability": {
+      "value": 0.62,
+      "unit": "PROBABILITY_FRACTION",
+      "window": null,
+      "provenance": {
+        "kind": "SOURCE_REPORTED",
+        "sourceField": "yesProbability",
+        "calculationID": null,
+        "calculationVersion": null,
+        "inputEvidenceIDs": []
+      }
+    },
+    "volume": {
+      "value": null,
+      "unit": null,
+      "currency": null,
+      "window": null,
+      "provenance": {
+        "kind": "UNAVAILABLE",
+        "sourceField": null,
+        "calculationID": null,
+        "calculationVersion": null,
+        "inputEvidenceIDs": []
+      }
+    },
+    "liquidity": {
+      "value": null,
+      "unit": null,
+      "currency": null,
+      "window": null,
+      "provenance": {
+        "kind": "UNAVAILABLE",
+        "sourceField": null,
+        "calculationID": null,
+        "calculationVersion": null,
+        "inputEvidenceIDs": []
+      }
+    },
+    "movement": {
+      "value": null,
+      "unit": null,
+      "window": null,
+      "provenance": {
+        "kind": "UNAVAILABLE",
+        "sourceField": null,
+        "calculationID": null,
+        "calculationVersion": null,
+        "inputEvidenceIDs": []
+      }
+    }
+  }
+}
