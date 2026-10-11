@@ -1757,27 +1757,166 @@ async function addAlertSignal(alertSignal) {
   };
 }
 
+const RECENT_ALERT_READ_FAILURE_CODES = Object.freeze({
+  QUERY_SETUP: "query_setup",
+  QUERY_REJECTED: "query_rejected",
+  TRANSPORT: "transport",
+  BODY_READ: "body_read",
+  PARSE: "parse",
+  SHAPE: "shape",
+  MAPPING: "mapping",
+  UNKNOWN: "unknown",
+});
+
+const RECENT_ALERT_READ_FAILURE_CODE_SET = new Set(
+  Object.values(RECENT_ALERT_READ_FAILURE_CODES)
+);
+
+function createRecentAlertReadFailure(code) {
+  const error = new Error("Recent alert read failed.");
+  error.code = code;
+  return error;
+}
+
+function getRecentAlertReadFailureCode(error) {
+  let code;
+
+  try {
+    code = error?.code;
+  } catch {
+    return RECENT_ALERT_READ_FAILURE_CODES.UNKNOWN;
+  }
+
+  return RECENT_ALERT_READ_FAILURE_CODE_SET.has(code)
+    ? code
+    : RECENT_ALERT_READ_FAILURE_CODES.UNKNOWN;
+}
+
+async function discardRecentAlertResponseBody(response) {
+  try {
+    if (response?.body && typeof response.body.cancel === "function") {
+      await response.body.cancel();
+      return;
+    }
+
+    if (typeof response?.arrayBuffer === "function") {
+      await response.arrayBuffer();
+      return;
+    }
+
+    if (typeof response?.text === "function") {
+      await response.text();
+    }
+  } catch {
+    // The query failure classification must not depend on body cleanup.
+  }
+}
+
+async function fetchRecentAlertSignalRows(url, options) {
+  let response;
+
+  try {
+    response = await fetch(url, options);
+  } catch {
+    throw createRecentAlertReadFailure(
+      RECENT_ALERT_READ_FAILURE_CODES.TRANSPORT
+    );
+  }
+
+  let responseOk;
+
+  try {
+    responseOk = response?.ok;
+  } catch {
+    throw createRecentAlertReadFailure(RECENT_ALERT_READ_FAILURE_CODES.UNKNOWN);
+  }
+
+  if (typeof responseOk !== "boolean") {
+    await discardRecentAlertResponseBody(response);
+    throw createRecentAlertReadFailure(RECENT_ALERT_READ_FAILURE_CODES.SHAPE);
+  }
+
+  if (!responseOk) {
+    await discardRecentAlertResponseBody(response);
+    throw createRecentAlertReadFailure(
+      RECENT_ALERT_READ_FAILURE_CODES.QUERY_REJECTED
+    );
+  }
+
+  let readText;
+
+  try {
+    readText = response.text;
+  } catch {
+    throw createRecentAlertReadFailure(
+      RECENT_ALERT_READ_FAILURE_CODES.BODY_READ
+    );
+  }
+
+  if (typeof readText !== "function") {
+    throw createRecentAlertReadFailure(
+      RECENT_ALERT_READ_FAILURE_CODES.BODY_READ
+    );
+  }
+
+  let text;
+
+  try {
+    text = await readText.call(response);
+  } catch {
+    throw createRecentAlertReadFailure(
+      RECENT_ALERT_READ_FAILURE_CODES.BODY_READ
+    );
+  }
+
+  let rows;
+
+  try {
+    rows = JSON.parse(text);
+  } catch {
+    throw createRecentAlertReadFailure(RECENT_ALERT_READ_FAILURE_CODES.PARSE);
+  }
+
+  if (!Array.isArray(rows)) {
+    throw createRecentAlertReadFailure(RECENT_ALERT_READ_FAILURE_CODES.SHAPE);
+  }
+
+  return rows;
+}
+
 async function readRecentSupabaseAlertSignals({
   limit = PUBLIC_ALERT_SIGNAL_LIMIT,
   config = getSupabaseAlertSignalConfig(),
 } = {}) {
-  const url = buildSupabaseTableUrl(config);
-  url.searchParams.set(
-    "select",
-    "alert_type,market_question,reason,severity,source,created_at"
-  );
-  url.searchParams.set("order", "created_at.desc");
-  url.searchParams.set("limit", String(limit));
+  let url;
+  let headers;
 
-  const rows = await fetchSupabaseJson(url, {
-    headers: getSupabaseHeaders(config),
-    logLabel: "alert-signals",
-    errorLabel: "alert signals",
-  });
+  try {
+    url = buildSupabaseTableUrl(config);
+    url.searchParams.set(
+      "select",
+      "alert_type,market_question,reason,severity,source,created_at"
+    );
+    url.searchParams.set("order", "created_at.desc");
+    url.searchParams.set("limit", String(limit));
+    headers = getSupabaseHeaders(config);
+  } catch {
+    throw createRecentAlertReadFailure(
+      RECENT_ALERT_READ_FAILURE_CODES.QUERY_SETUP
+    );
+  }
 
-  return (Array.isArray(rows) ? rows : [])
-    .map(mapSupabaseAlertSignalRow)
-    .filter((alertSignal) => alertSignal.alertType && alertSignal.marketQuestion);
+  const rows = await fetchRecentAlertSignalRows(url, { headers });
+
+  try {
+    return rows
+      .map(mapSupabaseAlertSignalRow)
+      .filter((alertSignal) => alertSignal.alertType && alertSignal.marketQuestion);
+  } catch {
+    throw createRecentAlertReadFailure(
+      RECENT_ALERT_READ_FAILURE_CODES.MAPPING
+    );
+  }
 }
 
 async function readRecentAlertSignals(limit = PUBLIC_ALERT_SIGNAL_LIMIT) {
@@ -1792,7 +1931,13 @@ async function readRecentAlertSignals(limit = PUBLIC_ALERT_SIGNAL_LIMIT) {
     config: provider.config,
   });
 
-  return signals.map(toPublicAlertSignal);
+  try {
+    return signals.map(toPublicAlertSignal);
+  } catch {
+    throw createRecentAlertReadFailure(
+      RECENT_ALERT_READ_FAILURE_CODES.MAPPING
+    );
+  }
 }
 
 function getLatestAlertSignalAt(signals) {
@@ -5748,10 +5893,12 @@ app.get("/api/alerts/recent", async (req, res) => {
       generatedAt: new Date().toISOString(),
     });
   } catch (error) {
-    console.error("[alert-signals] Recent read failed:", error.message);
+    const code = getRecentAlertReadFailureCode(error);
+    console.error(`[alert-signals] recent_read_failed:${code}`);
     return res.status(500).json({
       ok: false,
       error: "Failed to load recent alert signals.",
+      code,
     });
   }
 });
