@@ -4,6 +4,11 @@ import crypto from "crypto";
 import fs from "fs/promises";
 import path from "path";
 import { fileURLToPath } from "url";
+import {
+  AlertDeliveryV2Error,
+  storeAlertDeliveryV2,
+  validateAlertDeliveryV2,
+} from "./alert-delivery-v2.js";
 
 const app = express();
 
@@ -1125,6 +1130,13 @@ function getSupabaseAlertSignalConfig() {
     supabaseUrl,
     serviceRoleKey,
     table: ALERT_SIGNALS_TABLE,
+  };
+}
+
+function getAlertDeliveryV2Config() {
+  return {
+    ...getSupabaseAlertSignalConfig(),
+    admitted: envFlag("PBP_ALERT_INGEST_V2_ENABLED"),
   };
 }
 
@@ -5822,6 +5834,57 @@ app.post("/api/trade/submit-signed", async (req, res) => {
 
 app.post("/api/internal/alerts", async (req, res) => {
   if (!authorizeAlertIngestRequest(req, res)) return;
+
+  const guardedDeliveryKeys = [
+    "schemaVersion",
+    "eventId",
+    "fingerprint",
+    "sourceEventAt",
+    "expiresAt",
+    "schema_version",
+    "protocol_version",
+    "event_id",
+    "payload_fingerprint",
+    "source_event_at",
+    "expires_at",
+  ];
+  const isGuardedDelivery = !!(
+    req.body &&
+    typeof req.body === "object" &&
+    guardedDeliveryKeys.some((key) => Object.hasOwn(req.body, key))
+  );
+
+  if (isGuardedDelivery) {
+    const config = getAlertDeliveryV2Config();
+    if (!config.admitted) {
+      return res.status(503).json({
+        ok: false,
+        code: "protocol_not_admitted",
+        error: "Guarded alert ingestion is not enabled.",
+      });
+    }
+
+    try {
+      const payload = validateAlertDeliveryV2(req.body);
+      const result = await storeAlertDeliveryV2({ payload, config });
+      return res.status(result.status === "created" ? 201 : 200).json({
+        ok: true,
+        protocolVersion: 2,
+        status: result.status,
+        eventId: payload.eventId,
+      });
+    } catch (error) {
+      const guardedError = error instanceof AlertDeliveryV2Error
+        ? error
+        : new AlertDeliveryV2Error("internal_failure", 500);
+      console.error(`[alert-delivery-v2] ingest_failed:${guardedError.code}`);
+      return res.status(guardedError.status).json({
+        ok: false,
+        code: guardedError.code,
+        error: "Guarded alert delivery failed.",
+      });
+    }
+  }
 
   try {
     const alertSignal = normalizeAlertSignalInput(req.body);

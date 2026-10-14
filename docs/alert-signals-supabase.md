@@ -32,7 +32,13 @@ Add this environment variable to the Render service:
 
 ```text
 PBP_ALERT_INGEST_SECRET=paste-a-long-random-secret-here
+PBP_ALERT_INGEST_V2_ENABLED=false
 ```
+
+Guarded V2 ingest is deliberately disabled by default. Before enabling it,
+review and apply `docs/alert-delivery-v2-supabase.sql`, deploy the receiver, and
+follow the receiver-first order in `docs/guarded-alert-delivery-runbook.md`.
+Legacy payloads remain compatible while the V2 flag is off.
 
 The app also uses the existing Supabase environment variables:
 

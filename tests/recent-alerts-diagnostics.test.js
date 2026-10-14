@@ -239,6 +239,10 @@ test("executes the checked-in query, sanitation, filtering, and public projectio
         severity: " HIGH ",
         source: "private-worker-source",
         created_at: createdAt,
+        event_id: `pbp_${"a".repeat(40)}`,
+        payload_fingerprint: "b".repeat(64),
+        protocol_version: 2,
+        source_event_at: createdAt,
       },
       {
         alert_type: "",

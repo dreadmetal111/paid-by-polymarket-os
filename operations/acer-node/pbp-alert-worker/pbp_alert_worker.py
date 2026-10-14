@@ -35,6 +35,10 @@ SERVICE_NAME = "pbp-alert-worker"
 DEFAULT_MARKETS_URL = "https://paid-by-polymarket-os.onrender.com/api/liveMarkets"
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_ENV_FILE = BASE_DIR / "alert-worker.env"
+RENDER_DELIVERY_SCHEMA_VERSION = 2
+RENDER_EVENT_ID_PATTERN = re.compile(r"^pbp_[a-f0-9]{40}$")
+RENDER_FINGERPRINT_PATTERN = re.compile(r"^[a-f0-9]{64}$")
+STRICT_UTC_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$")
 
 
 def load_env_file() -> Path:
@@ -47,8 +51,16 @@ def load_env_file() -> Path:
 ENV_FILE = load_env_file()
 
 
+def utc_datetime_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def format_utc(value: datetime) -> str:
+    return value.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
 def utc_now() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return format_utc(utc_datetime_now())
 
 
 def utc_minutes_ago(minutes: int) -> str:
@@ -142,6 +154,12 @@ class Settings:
     max_public_alerts_per_cycle: int
     render_alert_ingest_url: str
     alert_ingest_secret: str
+    public_alert_retry_enabled: bool
+    public_alert_retry_max_attempts: int
+    public_alert_retry_ttl_seconds: int
+    public_alert_retry_initial_backoff_seconds: int
+    public_alert_retry_max_backoff_seconds: int
+    public_alert_retry_future_skew_seconds: int
     alert_cooldown_minutes: int
     alert_on_first_run: bool
     alert_min_volume: float
@@ -168,9 +186,27 @@ def build_settings() -> Settings:
         discord_username=env_str("PBP_DISCORD_USERNAME", "PBP Alerts"),
         discord_avatar_url=env_str("PBP_DISCORD_AVATAR_URL", ""),
         max_discord_alerts_per_cycle=max(1, env_int("PBP_MAX_DISCORD_ALERTS_PER_CYCLE", 10)),
-        max_public_alerts_per_cycle=max(1, env_int("PBP_ALERT_MAX_PUBLIC_ALERTS_PER_CYCLE", 5)),
+        max_public_alerts_per_cycle=min(
+            50, max(1, env_int("PBP_ALERT_MAX_PUBLIC_ALERTS_PER_CYCLE", 5))
+        ),
         render_alert_ingest_url=env_str("PBP_RENDER_ALERT_INGEST_URL", ""),
         alert_ingest_secret=env_str("PBP_ALERT_INGEST_SECRET", ""),
+        public_alert_retry_enabled=env_bool("PBP_ALERT_DELIVERY_V2_ENABLED", False),
+        public_alert_retry_max_attempts=min(
+            10, max(1, env_int("PBP_ALERT_RETRY_MAX_ATTEMPTS", 5))
+        ),
+        public_alert_retry_ttl_seconds=min(
+            900, max(60, env_int("PBP_ALERT_RETRY_TTL_SECONDS", 900))
+        ),
+        public_alert_retry_initial_backoff_seconds=min(
+            300, max(5, env_int("PBP_ALERT_RETRY_INITIAL_BACKOFF_SECONDS", 30))
+        ),
+        public_alert_retry_max_backoff_seconds=min(
+            300, max(5, env_int("PBP_ALERT_RETRY_MAX_BACKOFF_SECONDS", 300))
+        ),
+        public_alert_retry_future_skew_seconds=min(
+            60, max(0, env_int("PBP_ALERT_RETRY_FUTURE_SKEW_SECONDS", 60))
+        ),
         alert_cooldown_minutes=max(
             1,
             env_int_any(("PBP_ALERT_MARKET_COOLDOWN_MINUTES", "PBP_ALERT_COOLDOWN_MINUTES"), 60),
@@ -446,7 +482,15 @@ def init_db(settings: Settings) -> None:
                 discord_error TEXT,
                 sent_to_render INTEGER NOT NULL DEFAULT 0,
                 render_sent_at TEXT,
-                render_status TEXT
+                render_status TEXT,
+                render_protocol_version INTEGER,
+                render_event_id TEXT,
+                render_payload_fingerprint TEXT,
+                render_source_event_at TEXT,
+                render_expires_at TEXT,
+                render_attempt_count INTEGER NOT NULL DEFAULT 0,
+                render_last_attempt_at TEXT,
+                render_next_attempt_at TEXT
             );
 
             CREATE INDEX IF NOT EXISTS idx_alerts_created_at
@@ -461,7 +505,20 @@ def init_db(settings: Settings) -> None:
         conn.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_alerts_render_pending
-                ON alerts (sent_to_render, render_status, created_at);
+                ON alerts (sent_to_render, render_status, created_at)
+            """
+        )
+        conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_alerts_render_event_id
+                ON alerts (render_event_id)
+                WHERE render_event_id IS NOT NULL
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_alerts_render_v2_due
+                ON alerts (render_protocol_version, sent_to_render, render_next_attempt_at, created_at)
             """
         )
 
@@ -486,6 +543,14 @@ def ensure_alert_render_columns(conn: sqlite3.Connection) -> None:
     ensure_sqlite_column(conn, "alerts", "sent_to_render", "INTEGER NOT NULL DEFAULT 0")
     ensure_sqlite_column(conn, "alerts", "render_sent_at", "TEXT")
     ensure_sqlite_column(conn, "alerts", "render_status", "TEXT")
+    ensure_sqlite_column(conn, "alerts", "render_protocol_version", "INTEGER")
+    ensure_sqlite_column(conn, "alerts", "render_event_id", "TEXT")
+    ensure_sqlite_column(conn, "alerts", "render_payload_fingerprint", "TEXT")
+    ensure_sqlite_column(conn, "alerts", "render_source_event_at", "TEXT")
+    ensure_sqlite_column(conn, "alerts", "render_expires_at", "TEXT")
+    ensure_sqlite_column(conn, "alerts", "render_attempt_count", "INTEGER NOT NULL DEFAULT 0")
+    ensure_sqlite_column(conn, "alerts", "render_last_attempt_at", "TEXT")
+    ensure_sqlite_column(conn, "alerts", "render_next_attempt_at", "TEXT")
 
 
 def ensure_alert_quality_columns(conn: sqlite3.Connection) -> None:
@@ -817,6 +882,7 @@ def spike_detected(current: float, previous: float, multiplier: float, min_chang
 
 def insert_alert(
     conn: sqlite3.Connection,
+    settings: Settings,
     alert_key: str,
     alert_type: str,
     market: sqlite3.Row,
@@ -835,14 +901,37 @@ def insert_alert(
     details.setdefault("quality_score", quality_score)
     details.setdefault("quality_label", safe_quality_label)
 
+    created_at = utc_now()
+    render_protocol: dict[str, Any] = {
+        "version": None,
+        "event_id": None,
+        "fingerprint": None,
+        "source_event_at": None,
+        "expires_at": None,
+        "status": None,
+    }
+    if settings.public_alert_retry_enabled:
+        render_protocol = build_render_delivery_identity(
+            settings=settings,
+            alert_key=alert_key,
+            alert_type=alert_type,
+            question=market["question"],
+            message=message,
+            severity=severity,
+            created_at=created_at,
+        )
+
     cursor = conn.execute(
         """
         INSERT OR IGNORE INTO alerts (
             alert_key, alert_type, market_id, question, url,
             severity, title, message, quality_score, quality_label,
-            suppressed_reason, details_json, created_at
+            suppressed_reason, details_json, created_at,
+            render_protocol_version, render_event_id,
+            render_payload_fingerprint, render_source_event_at,
+            render_expires_at, render_status
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             alert_key,
@@ -857,7 +946,13 @@ def insert_alert(
             safe_quality_label,
             suppressed_reason,
             json_dumps(details),
-            utc_now(),
+            created_at,
+            render_protocol["version"],
+            render_protocol["event_id"],
+            render_protocol["fingerprint"],
+            render_protocol["source_event_at"],
+            render_protocol["expires_at"],
+            render_protocol["status"],
         ),
     )
     if cursor.rowcount == 0:
@@ -896,6 +991,7 @@ def create_new_high_volume_alert(
     }
     return insert_alert(
         conn,
+        settings=settings,
         alert_key=f"new_high_volume:{market['market_id']}",
         alert_type="new_high_volume",
         market=market,
@@ -974,6 +1070,7 @@ def create_probability_movement_alert(
     }
     return insert_alert(
         conn,
+        settings=settings,
         alert_key=f"probability_movement:{market['market_id']}:{snapshot_id}",
         alert_type="probability_movement",
         market=market,
@@ -1055,6 +1152,7 @@ def create_volume_liquidity_spike_alert(
     severity = "high" if current_volume >= 500_000 or current_liquidity >= 500_000 else "medium"
     return insert_alert(
         conn,
+        settings=settings,
         alert_key=f"volume_liquidity_spike:{market['market_id']}:{snapshot_id}",
         alert_type="volume_liquidity_spike",
         market=market,
@@ -1190,6 +1288,90 @@ def build_render_alert_payload(alert: dict[str, Any]) -> dict[str, str]:
     }
 
 
+def parse_strict_utc(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not STRICT_UTC_PATTERN.fullmatch(value):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value[:-1] + "+00:00")
+    except ValueError:
+        return None
+    if parsed.tzinfo is None or parsed.utcoffset() != timedelta(0):
+        return None
+    return parsed.astimezone(timezone.utc)
+
+
+def canonical_render_delivery_payload(payload: dict[str, Any]) -> str:
+    canonical = {
+        "alertType": payload["alertType"],
+        "eventId": payload["eventId"],
+        "expiresAt": payload["expiresAt"],
+        "marketQuestion": payload["marketQuestion"],
+        "reason": payload["reason"],
+        "schemaVersion": payload["schemaVersion"],
+        "severity": payload["severity"],
+        "source": payload["source"],
+        "sourceEventAt": payload["sourceEventAt"],
+    }
+    return json.dumps(canonical, ensure_ascii=False, separators=(",", ":"))
+
+
+def fingerprint_render_delivery_payload(payload: dict[str, Any]) -> str:
+    return hashlib.sha256(canonical_render_delivery_payload(payload).encode("utf-8")).hexdigest()
+
+
+def build_render_delivery_identity(
+    settings: Settings,
+    alert_key: str,
+    alert_type: str,
+    question: Any,
+    message: Any,
+    severity: str,
+    created_at: str,
+) -> dict[str, Any]:
+    source_time = parse_strict_utc(created_at)
+    if source_time is None:
+        raise ValueError("Cannot enroll alert delivery with an invalid UTC source timestamp")
+
+    event_seed = f"{alert_key}\n{created_at}".encode("utf-8")
+    event_id = f"pbp_{hashlib.sha256(event_seed).hexdigest()[:40]}"
+    expires_at = format_utc(source_time + timedelta(seconds=settings.public_alert_retry_ttl_seconds))
+    payload: dict[str, Any] = {
+        **build_render_alert_payload(
+            {
+                "alert_type": alert_type,
+                "question": question,
+                "message": message,
+                "severity": severity,
+            }
+        ),
+        "schemaVersion": RENDER_DELIVERY_SCHEMA_VERSION,
+        "eventId": event_id,
+        "sourceEventAt": created_at,
+        "expiresAt": expires_at,
+    }
+    payload["fingerprint"] = fingerprint_render_delivery_payload(payload)
+    return {
+        "version": RENDER_DELIVERY_SCHEMA_VERSION,
+        "event_id": event_id,
+        "fingerprint": payload["fingerprint"],
+        "source_event_at": created_at,
+        "expires_at": expires_at,
+        "status": "pending",
+    }
+
+
+def build_render_alert_payload_v2(alert: dict[str, Any]) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        **build_render_alert_payload(alert),
+        "schemaVersion": alert.get("render_protocol_version"),
+        "eventId": alert.get("render_event_id"),
+        "sourceEventAt": alert.get("render_source_event_at"),
+        "expiresAt": alert.get("render_expires_at"),
+        "fingerprint": alert.get("render_payload_fingerprint"),
+    }
+    return payload
+
+
 def build_discord_payload(settings: Settings, alert: dict[str, Any]) -> dict[str, Any]:
     details = alert.get("details") or {}
     fields = [
@@ -1261,6 +1443,111 @@ def send_render_alert_signal(settings: Settings, alert: dict[str, Any]) -> None:
         raise RuntimeError(f"Render ingest returned HTTP {response.status_code}: {safe_body}")
 
 
+def validate_render_delivery_attempt(
+    alert: dict[str, Any], settings: Settings, now: datetime
+) -> tuple[str, dict[str, Any] | None]:
+    if alert.get("render_protocol_version") != RENDER_DELIVERY_SCHEMA_VERSION:
+        return "invalid_protocol", None
+
+    event_id = alert.get("render_event_id")
+    fingerprint = alert.get("render_payload_fingerprint")
+    if not isinstance(event_id, str) or not RENDER_EVENT_ID_PATTERN.fullmatch(event_id):
+        return "invalid_payload", None
+    if not isinstance(fingerprint, str) or not RENDER_FINGERPRINT_PATTERN.fullmatch(fingerprint):
+        return "invalid_payload", None
+
+    source_time = parse_strict_utc(alert.get("render_source_event_at"))
+    expires_time = parse_strict_utc(alert.get("render_expires_at"))
+    if source_time is None or expires_time is None:
+        return "invalid_timestamp", None
+    if expires_time <= source_time or expires_time - source_time > timedelta(minutes=15):
+        return "invalid_expiry", None
+    if source_time > now + timedelta(seconds=settings.public_alert_retry_future_skew_seconds):
+        return "future_timestamp", None
+    if now >= expires_time:
+        return "expired", None
+
+    attempt_count = alert.get("render_attempt_count")
+    if not isinstance(attempt_count, int) or attempt_count < 0:
+        return "invalid_attempt_state", None
+    if attempt_count >= settings.public_alert_retry_max_attempts:
+        return "exhausted", None
+
+    last_attempt = alert.get("render_last_attempt_at")
+    if last_attempt:
+        last_attempt_time = parse_strict_utc(last_attempt)
+        if last_attempt_time is None:
+            return "invalid_timestamp", None
+        if now < last_attempt_time:
+            return "not_due", None
+
+    next_attempt = alert.get("render_next_attempt_at")
+    if next_attempt:
+        next_attempt_time = parse_strict_utc(next_attempt)
+        if next_attempt_time is None:
+            return "invalid_timestamp", None
+        if now < next_attempt_time:
+            return "not_due", None
+
+    payload = build_render_alert_payload_v2(alert)
+    if fingerprint_render_delivery_payload(payload) != fingerprint:
+        return "invalid_payload", None
+    return "ready", payload
+
+
+def render_retry_delay_seconds(settings: Settings, attempt_number: int) -> int:
+    exponent = max(0, attempt_number - 1)
+    return min(
+        settings.public_alert_retry_max_backoff_seconds,
+        settings.public_alert_retry_initial_backoff_seconds * (2**exponent),
+    )
+
+
+def send_render_alert_signal_v2(
+    settings: Settings,
+    payload: dict[str, Any],
+    post: Any = requests.post,
+) -> str:
+    try:
+        response = post(
+            settings.render_alert_ingest_url,
+            json=payload,
+            headers={
+                "Accept": "application/json",
+                "Authorization": f"Bearer {settings.alert_ingest_secret}",
+                "User-Agent": f"{SERVICE_NAME}/2.0",
+            },
+            timeout=min(settings.request_timeout_seconds, 10),
+        )
+    except requests.RequestException:
+        return "retryable"
+    except Exception:
+        return "retryable"
+
+    try:
+        status_code = int(getattr(response, "status_code", 0) or 0)
+    except (TypeError, ValueError):
+        return "retryable"
+    if 200 <= status_code <= 299:
+        try:
+            acknowledgement = response.json()
+        except Exception:
+            return "retryable"
+        if (
+            isinstance(acknowledgement, dict)
+            and acknowledgement.get("ok") is True
+            and acknowledgement.get("protocolVersion") == RENDER_DELIVERY_SCHEMA_VERSION
+            and acknowledgement.get("status") in {"created", "duplicate"}
+            and acknowledgement.get("eventId") == payload["eventId"]
+        ):
+            return "acknowledged"
+        return "retryable"
+
+    if status_code in {408, 429} or 500 <= status_code <= 599 or status_code <= 0:
+        return "retryable"
+    return f"permanent_http_{status_code}"
+
+
 def dispatch_pending_alerts(conn: sqlite3.Connection, settings: Settings) -> int:
     if not settings.discord_enabled:
         logging.info("Discord dispatch is disabled by PBP_DISCORD_ENABLED=false")
@@ -1309,27 +1596,159 @@ def dispatch_pending_alerts(conn: sqlite3.Connection, settings: Settings) -> int
     return sent_count
 
 
-def dispatch_pending_render_alerts(conn: sqlite3.Connection, settings: Settings) -> int:
+def dispatch_pending_render_alerts(
+    conn: sqlite3.Connection,
+    settings: Settings,
+    *,
+    now: datetime | None = None,
+    clock: Any = utc_datetime_now,
+    post: Any = requests.post,
+) -> int:
     if not render_alert_bridge_configured(settings):
         logging.info("Render alert ingest is not configured; skipping public alert bridge")
         return 0
 
+    def current_time() -> datetime:
+        value = now if now is not None else clock()
+        if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() != timedelta(0):
+            raise ValueError("Guarded alert delivery clock must return a UTC datetime")
+        return value.astimezone(timezone.utc).replace(microsecond=0)
+
+    selection_now = current_time()
+    selection_now_text = format_utc(selection_now)
+    candidate_limit = min(500, max(50, settings.max_public_alerts_per_cycle * 20))
     rows = conn.execute(
         """
         SELECT *
         FROM alerts
         WHERE sent_to_render = 0
-          AND COALESCE(render_status, '') = ''
           AND COALESCE(quality_label, 'medium') IN ('medium', 'high')
-        ORDER BY created_at ASC
+          AND (
+            (render_protocol_version IS NULL AND COALESCE(render_status, '') = '')
+            OR
+            (? = 1 AND render_protocol_version = 2
+              AND render_status IN ('pending', 'retry_wait'))
+          )
+        ORDER BY
+          CASE
+            WHEN render_protocol_version = 2
+              AND (render_next_attempt_at IS NULL OR render_next_attempt_at <= ?)
+              AND render_expires_at > ? THEN 0
+            WHEN render_protocol_version IS NULL THEN 1
+            WHEN render_protocol_version = 2
+              AND (render_next_attempt_at IS NULL OR render_next_attempt_at <= ?) THEN 2
+            ELSE 3
+          END,
+          created_at ASC
         LIMIT ?
         """,
-        (settings.max_public_alerts_per_cycle,),
+        (
+            1 if settings.public_alert_retry_enabled else 0,
+            selection_now_text,
+            selection_now_text,
+            selection_now_text,
+            candidate_limit,
+        ),
     ).fetchall()
 
     sent_count = 0
+    network_attempts = 0
     for row in rows:
         alert = alert_from_row(row)
+        if alert.get("render_protocol_version") == RENDER_DELIVERY_SCHEMA_VERSION:
+            attempt_now = current_time()
+            validation, payload = validate_render_delivery_attempt(alert, settings, attempt_now)
+            if validation == "not_due":
+                continue
+            if validation != "ready" or payload is None:
+                conn.execute(
+                    "UPDATE alerts SET render_status = ?, render_next_attempt_at = NULL WHERE id = ?",
+                    (validation, alert["id"]),
+                )
+                continue
+            if network_attempts >= settings.max_public_alerts_per_cycle:
+                break
+
+            attempt_number = int(alert["render_attempt_count"] or 0) + 1
+            attempted_at = format_utc(attempt_now)
+            retry_at = attempt_now + timedelta(
+                seconds=render_retry_delay_seconds(settings, attempt_number)
+            )
+            conn.execute(
+                """
+                UPDATE alerts
+                SET render_attempt_count = ?,
+                    render_last_attempt_at = ?,
+                    render_next_attempt_at = ?,
+                    render_status = 'retry_wait'
+                WHERE id = ?
+                """,
+                (attempt_number, attempted_at, format_utc(retry_at), alert["id"]),
+            )
+            # Persist the attempt before the network call. A crash or timeout can then
+            # only cause a bounded retry of the same durable event identity.
+            conn.commit()
+
+            network_attempts += 1
+            outcome = send_render_alert_signal_v2(settings, payload, post=post)
+            if outcome == "acknowledged":
+                conn.execute(
+                    """
+                    UPDATE alerts
+                    SET sent_to_render = 1,
+                        render_sent_at = ?,
+                        render_status = 'sent',
+                        render_next_attempt_at = NULL
+                    WHERE id = ?
+                    """,
+                    (attempted_at, alert["id"]),
+                )
+                logging.info("Acknowledged guarded alert %s from Render ingest", alert["id"])
+                sent_count += 1
+                continue
+
+            if outcome == "retryable":
+                terminal_status = "retry_wait"
+                if attempt_number >= settings.public_alert_retry_max_attempts:
+                    terminal_status = "exhausted"
+                elif retry_at >= parse_strict_utc(alert["render_expires_at"]):
+                    terminal_status = "expired"
+                conn.execute(
+                    """
+                    UPDATE alerts
+                    SET render_status = ?,
+                        render_next_attempt_at = CASE WHEN ? = 'retry_wait'
+                          THEN render_next_attempt_at ELSE NULL END
+                    WHERE id = ?
+                    """,
+                    (terminal_status, terminal_status, alert["id"]),
+                )
+                logging.warning(
+                    "Guarded alert %s was not acknowledged; state=%s attempt=%s",
+                    alert["id"],
+                    terminal_status,
+                    attempt_number,
+                )
+                continue
+
+            conn.execute(
+                """
+                UPDATE alerts
+                SET render_status = ?, render_next_attempt_at = NULL
+                WHERE id = ?
+                """,
+                (outcome, alert["id"]),
+            )
+            logging.warning(
+                "Guarded alert %s was permanently rejected; state=%s",
+                alert["id"],
+                outcome,
+            )
+            continue
+
+        if network_attempts >= settings.max_public_alerts_per_cycle:
+            break
+        network_attempts += 1
         try:
             send_render_alert_signal(settings, alert)
         except Exception as exc:
