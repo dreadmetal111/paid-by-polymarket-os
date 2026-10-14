@@ -3189,12 +3189,6 @@ function resetFrontendDemoUiState() {
 async function beginCleanPublicLoad() {
   clearBrowserDemoState();
   resetFrontendDemoUiState();
-
-  try {
-    await postJson("/api/public-demo/reset", {});
-  } catch (err) {
-    console.error("Public demo reset failed:", err);
-  }
 }
 
 async function syncAppAccountFromWalletAddress(walletAddress, source = "BROWSER") {
