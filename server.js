@@ -6,6 +6,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import {
   AlertDeliveryV2Error,
+  assertCanonicalAlertDeliveryV2PublicFields,
   storeAlertDeliveryV2,
   validateAlertDeliveryV2,
 } from "./alert-delivery-v2.js";
@@ -383,6 +384,43 @@ function sanitizeOptionalPublicAlertText(value, maxLength) {
   return text || null;
 }
 
+function toWellFormedPublicAlertText(value) {
+  const text = String(value || "");
+  let result = "";
+  for (let index = 0; index < text.length; index += 1) {
+    const unit = text.charCodeAt(index);
+    if (unit >= 0xd800 && unit <= 0xdbff) {
+      const next = text.charCodeAt(index + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        result += text[index] + text[index + 1];
+        index += 1;
+      } else {
+        result += "\ufffd";
+      }
+    } else if (unit >= 0xdc00 && unit <= 0xdfff) {
+      result += "\ufffd";
+    } else {
+      result += text[index];
+    }
+  }
+  return result;
+}
+
+function sanitizePublicAlertTextV2(value, maxLength) {
+  const text = toWellFormedPublicAlertText(redactSensitivePublicText(value))
+    .replace(/\s+/g, " ")
+    .trim();
+  const scalars = Array.from(text);
+  if (scalars.length <= maxLength) return text;
+  const suffix = "...";
+  return `${scalars.slice(0, maxLength - suffix.length).join("").trimEnd()}${suffix}`;
+}
+
+function sanitizeOptionalPublicAlertTextV2(value, maxLength) {
+  const text = sanitizePublicAlertTextV2(value, maxLength);
+  return text || null;
+}
+
 function normalizeAlertType(value) {
   return sanitizePublicAlertText(value, 80)
     .toLowerCase()
@@ -418,6 +456,18 @@ function normalizeAlertSignalInput(body) {
     reason: sanitizeOptionalPublicAlertText(body?.reason, 400),
     severity: normalizeAlertSeverity(body?.severity),
     source: normalizeAlertSource(body?.source),
+  };
+}
+
+function normalizeAlertSignalInputV2(body) {
+  const normalized = normalizeAlertSignalInput(body);
+  return {
+    ...normalized,
+    marketQuestion: sanitizePublicAlertTextV2(
+      body?.marketQuestion ?? body?.market_question,
+      280
+    ),
+    reason: sanitizeOptionalPublicAlertTextV2(body?.reason, 400),
   };
 }
 
@@ -5866,6 +5916,10 @@ app.post("/api/internal/alerts", async (req, res) => {
 
     try {
       const payload = validateAlertDeliveryV2(req.body);
+      assertCanonicalAlertDeliveryV2PublicFields(
+        payload,
+        normalizeAlertSignalInputV2(req.body)
+      );
       const result = await storeAlertDeliveryV2({ payload, config });
       return res.status(result.status === "created" ? 201 : 200).json({
         ok: true,

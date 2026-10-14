@@ -7,6 +7,7 @@ begin;
 alter table public.alert_signals
   add column if not exists event_id text,
   add column if not exists source_event_at timestamptz,
+  add column if not exists expires_at timestamptz,
   add column if not exists payload_fingerprint text,
   add column if not exists protocol_version smallint;
 
@@ -26,6 +27,7 @@ alter table public.alert_signals
       protocol_version is null
       and event_id is null
       and source_event_at is null
+      and expires_at is null
       and payload_fingerprint is null
     )
     or
@@ -35,6 +37,9 @@ alter table public.alert_signals
       and event_id is not null
       and event_id ~ '^pbp_[0-9a-f]{40}$'
       and source_event_at is not null
+      and expires_at is not null
+      and expires_at > source_event_at
+      and expires_at <= source_event_at + interval '15 minutes'
       and payload_fingerprint is not null
       and payload_fingerprint ~ '^[0-9a-f]{64}$'
       and created_at = source_event_at
@@ -45,6 +50,8 @@ comment on column public.alert_signals.event_id is
   'Nullable stable V2 delivery identity; NULL for legacy alert rows.';
 comment on column public.alert_signals.source_event_at is
   'Original V2 source event time; public freshness must use this value.';
+comment on column public.alert_signals.expires_at is
+  'Original V2 delivery expiry; NULL for legacy alert rows.';
 comment on column public.alert_signals.payload_fingerprint is
   'SHA-256 of the canonical V2 payload bound to event_id.';
 comment on column public.alert_signals.protocol_version is

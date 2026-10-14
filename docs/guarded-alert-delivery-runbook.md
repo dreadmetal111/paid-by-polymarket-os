@@ -25,7 +25,7 @@ must retain NULL V2 identity fields and remain unenrolled.
   boundary. PostgreSQL still permits multiple legacy `NULL` values. The receiver
   uses `on_conflict=event_id` with `resolution=ignore-duplicates`; it never
   merges or updates a stored payload. An ignored insert is acknowledged only
-  after a bounded lookup returns exactly one matching event ID and fingerprint.
+  after a bounded lookup confirms the complete stored public payload, protocol, source/expiry times, event ID, and fingerprint.
 - V2 never falls back to legacy JSON/file storage when Supabase or its new schema
   is unavailable. Public recent-alert rows still contain only the existing five
   public fields, with `createdAt` sourced from the original event time.
@@ -35,7 +35,7 @@ must retain NULL V2 identity fields and remain unenrolled.
 1. Keep both activation flags `false`. Back up and record the current Render and
    Acer configuration without copying secret values into tickets or logs.
 2. Review and run `docs/alert-delivery-v2-supabase.sql` in the existing Supabase
-   project. Do not modify existing rows. Verify the four nullable columns and
+   project. Do not modify existing rows. Verify all five nullable columns (`event_id`, `source_event_at`, `expires_at`, `payload_fingerprint`, `protocol_version`) and
    `alert_signals_event_id_full_uidx` exists as a full (non-partial) unique index;
    confirm legacy row counts and values are unchanged. Before receiver admission,
    exercise a transaction-scoped test insert using the `event_id` conflict target
@@ -47,7 +47,7 @@ must retain NULL V2 identity fields and remain unenrolled.
    its Supabase URL, service-role key, alert table, and ingest secret are present.
    If the schema is missing, V2 must return `schema_unavailable` and must not use
    legacy/file storage.
-5. Update both Acer worker copies from the reviewed identical source. Leave the
+5. Install the reviewed worker script in the existing Acer installation; both tracked source copies must match. Leave the
    worker flag off for one normal cycle and confirm snapshot detection, Discord,
    health endpoints, and legacy bridge behavior are unchanged.
 6. Set Acer `PBP_ALERT_DELIVERY_V2_ENABLED=true` and restart only the alert worker.

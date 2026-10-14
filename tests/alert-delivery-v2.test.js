@@ -6,6 +6,7 @@ import vm from "node:vm";
 
 import {
   AlertDeliveryV2Error,
+  assertCanonicalAlertDeliveryV2PublicFields,
   fingerprintAlertDeliveryV2,
   storeAlertDeliveryV2,
   validateAlertDeliveryV2,
@@ -43,6 +44,28 @@ function response(status, body) {
     async text() {
       return JSON.stringify(body);
     },
+  };
+}
+
+function durableRow(payload, overrides = {}) {
+  const databaseTimestamp = (value, fractionDigits = 6) => {
+    const iso = new Date(value).toISOString();
+    const milliseconds = iso.slice(20, 23);
+    return `${iso.slice(0, 19)}.${milliseconds.padEnd(fractionDigits, "0")}+00:00`;
+  };
+  return {
+    alert_type: payload.alertType,
+    market_question: payload.marketQuestion,
+    reason: payload.reason,
+    severity: payload.severity,
+    source: payload.source,
+    created_at: databaseTimestamp(payload.sourceEventAt, 3),
+    event_id: payload.eventId,
+    source_event_at: databaseTimestamp(payload.sourceEventAt),
+    expires_at: databaseTimestamp(payload.expiresAt),
+    payload_fingerprint: payload.fingerprint,
+    protocol_version: payload.schemaVersion,
+    ...overrides,
   };
 }
 
@@ -86,6 +109,7 @@ function createAlertRouteHarness() {
   });
   const context = vm.createContext({
     AlertDeliveryV2Error,
+    assertCanonicalAlertDeliveryV2PublicFields,
     Buffer,
     Object,
     String,
@@ -105,11 +129,8 @@ function createAlertRouteHarness() {
       state.storeCalls.push(arguments_);
       return state.storeResult;
     },
-    normalizeAlertSignalInput(value) {
-      state.legacyCalls += 1;
-      return value;
-    },
     async addAlertSignal(alertSignal) {
+      state.legacyCalls += 1;
       return { storageMode: "synthetic", alertSignal };
     },
     logAlertSignalStorageMode() {},
@@ -118,6 +139,17 @@ function createAlertRouteHarness() {
     },
   });
   const executableSource = [
+    extractFunction(serverSource, "redactSensitivePublicText"),
+    extractFunction(serverSource, "sanitizePublicAlertText"),
+    extractFunction(serverSource, "sanitizeOptionalPublicAlertText"),
+    extractFunction(serverSource, "toWellFormedPublicAlertText"),
+    extractFunction(serverSource, "sanitizePublicAlertTextV2"),
+    extractFunction(serverSource, "sanitizeOptionalPublicAlertTextV2"),
+    extractFunction(serverSource, "normalizeAlertType"),
+    extractFunction(serverSource, "normalizeAlertSeverity"),
+    extractFunction(serverSource, "normalizeAlertSource"),
+    extractFunction(serverSource, "normalizeAlertSignalInput"),
+    extractFunction(serverSource, "normalizeAlertSignalInputV2"),
     extractFunction(serverSource, "envFirst"),
     extractFunction(serverSource, "envFlag"),
     extractFunction(serverSource, "getAlertDeliveryV2Config"),
@@ -177,6 +209,27 @@ test("validation accepts a canonical guarded event and rejects tampering", () =>
   );
 });
 
+test("V2 text bounds count Unicode scalars and reject unpaired surrogates", () => {
+  for (const [field, limit] of [["marketQuestion", 280], ["reason", 400]]) {
+    assert.doesNotThrow(() => validateAlertDeliveryV2(
+      makePayload({ [field]: "x".repeat(limit) }),
+      { now: NOW }
+    ));
+    assert.doesNotThrow(() => validateAlertDeliveryV2(
+      makePayload({ [field]: "🚀".repeat(limit) }),
+      { now: NOW }
+    ));
+    assert.throws(
+      () => validateAlertDeliveryV2(makePayload({ [field]: "🚀".repeat(limit + 1) }), { now: NOW }),
+      (error) => error.code === "invalid_payload"
+    );
+    assert.throws(
+      () => validateAlertDeliveryV2(makePayload({ [field]: `safe\ud800text` }), { now: NOW }),
+      (error) => error.code === "invalid_payload"
+    );
+  }
+});
+
 test("validation rejects expired, malformed calendar, and future timestamps", () => {
   assert.throws(
     () => validateAlertDeliveryV2(makePayload({ expiresAt: "2026-10-14T01:09:59Z" }), { now: NOW }),
@@ -227,6 +280,24 @@ test("canonical fingerprint matches the worker Unicode fixture", () => {
   );
 });
 
+test("escaped Unicode and quotes share the worker canonical fingerprint", () => {
+  const payload = {
+    alertType: "probability_movement",
+    eventId: `pbp_${"e".repeat(40)}`,
+    expiresAt: "2026-10-14T01:20:00Z",
+    marketQuestion: 'Will "caf\u00e9" \u{1f680} win?',
+    reason: 'Path \\ archive and \u201cquoted\u201d \u{1f680}',
+    schemaVersion: 2,
+    severity: "high",
+    source: "acer-alert-worker",
+    sourceEventAt: "2026-10-14T01:05:00Z",
+  };
+  assert.equal(
+    fingerprintAlertDeliveryV2(payload),
+    "d8ca986a372a986422898ca7105e25224118dde907255094bcf14b03d34b57cd"
+  );
+});
+
 test("successful insert requires the durable row identity in the response", async () => {
   const payload = validateAlertDeliveryV2(makePayload(), { now: NOW });
   const requests = [];
@@ -235,10 +306,7 @@ test("successful insert requires the durable row identity in the response", asyn
     config: CONFIG,
     async fetchImplementation(url, options) {
       requests.push({ url: String(url), options });
-      return response(201, [{
-        event_id: payload.eventId,
-        payload_fingerprint: payload.fingerprint,
-      }]);
+      return response(201, [durableRow(payload)]);
     },
   });
 
@@ -254,6 +322,7 @@ test("successful insert requires the durable row identity in the response", asyn
   const stored = JSON.parse(requests[0].options.body);
   assert.equal(stored.created_at, payload.sourceEventAt);
   assert.equal(stored.source_event_at, payload.sourceEventAt);
+  assert.equal(stored.expires_at, payload.expiresAt);
   assert.equal(stored.event_id, payload.eventId);
 });
 
@@ -270,10 +339,7 @@ test("timeout after commit is recovered through an ignored duplicate insert", as
       }
       return response(201, []);
     }
-    return response(200, [{
-      event_id: committed.event_id,
-      payload_fingerprint: committed.payload_fingerprint,
-    }]);
+    return response(200, [committed]);
   };
 
   await expectDeliveryError(
@@ -295,10 +361,7 @@ test("a concurrent unique-key collision confirms the matching fingerprint", asyn
     async fetchImplementation(_url, options = {}) {
       calls += 1;
       if (options.method === "POST") return response(201, []);
-      return response(200, [{
-        event_id: payload.eventId,
-        payload_fingerprint: payload.fingerprint,
-      }]);
+      return response(200, [durableRow(payload)]);
     },
   });
   assert.deepEqual(result, { status: "duplicate" });
@@ -313,10 +376,9 @@ test("same event id with a different durable fingerprint fails closed", async ()
       config: CONFIG,
       async fetchImplementation(_url, options = {}) {
         if (options.method === "POST") return response(201, []);
-        return response(200, [{
-          event_id: payload.eventId,
+        return response(200, [durableRow(payload, {
           payload_fingerprint: "b".repeat(64),
-        }]);
+        })]);
       },
     }),
     "event_id_conflict",
@@ -370,7 +432,7 @@ test("storage must be configured and insert acknowledgements must be exact", asy
       payload,
       config: CONFIG,
       async fetchImplementation() {
-        return response(201, [{ event_id: payload.eventId, payload_fingerprint: "c".repeat(64) }]);
+        return response(201, [durableRow(payload, { payload_fingerprint: "c".repeat(64) })]);
       },
     }),
     "storage_response",
@@ -382,8 +444,8 @@ test("storage must be configured and insert acknowledgements must be exact", asy
       config: CONFIG,
       async fetchImplementation() {
         return response(201, [
-          { event_id: payload.eventId, payload_fingerprint: payload.fingerprint },
-          { event_id: payload.eventId, payload_fingerprint: payload.fingerprint },
+          durableRow(payload),
+          durableRow(payload),
         ]);
       },
     }),
@@ -400,21 +462,21 @@ test("ignored duplicate confirmation is exactly one matching durable row", async
     {
       name: "multiple rows",
       body: [
-        { event_id: payload.eventId, payload_fingerprint: payload.fingerprint },
-        { event_id: payload.eventId, payload_fingerprint: payload.fingerprint },
+        durableRow(payload),
+        durableRow(payload),
       ],
       code: "storage_response",
       status: 503,
     },
     {
       name: "wrong event id",
-      body: [{ event_id: `pbp_${"f".repeat(40)}`, payload_fingerprint: payload.fingerprint }],
+      body: [durableRow(payload, { event_id: `pbp_${"f".repeat(40)}` })],
       code: "dedup_unconfirmed",
       status: 503,
     },
     {
       name: "wrong fingerprint",
-      body: [{ event_id: payload.eventId, payload_fingerprint: "f".repeat(64) }],
+      body: [durableRow(payload, { payload_fingerprint: "f".repeat(64) })],
       code: "event_id_conflict",
       status: 409,
     },
@@ -440,7 +502,77 @@ test("ignored duplicate confirmation is exactly one matching durable row", async
       assert.equal(requests.length, 2);
       assert.equal(requests[1].url.searchParams.get("limit"), "1");
       assert.equal(requests[1].url.searchParams.get("event_id"), `eq.${payload.eventId}`);
+      assert.match(requests[1].url.searchParams.get("select"), /expires_at/);
       assert.equal(requests[1].options.method, undefined);
+    });
+  }
+});
+
+test("created and duplicate acknowledgements bind every durable payload field", async (t) => {
+  const payload = validateAlertDeliveryV2(makePayload(), { now: NOW });
+  const mutations = [
+    ["alert_type", "volume_spike"],
+    ["market_question", "Altered question"],
+    ["market_question", undefined],
+    ["reason", "Altered reason"],
+    ["severity", "low"],
+    ["source", "other-worker"],
+    ["protocol_version", 3],
+    ["created_at", "2026-10-14T01:05:01+00:00"],
+    ["source_event_at", "2026-10-14T01:05:01.000000+00:00"],
+    ["expires_at", "2026-10-14T01:19:59+00:00"],
+  ];
+
+  for (const mode of ["created", "duplicate"]) {
+    for (const [field, value] of mutations) {
+      await t.test(`${mode} altered ${field}`, async () => {
+        await expectDeliveryError(
+          storeAlertDeliveryV2({
+            payload,
+            config: CONFIG,
+            async fetchImplementation(_url, options = {}) {
+              const row = durableRow(payload, { [field]: value });
+              if (mode === "created") return response(201, [row]);
+              return options.method === "POST" ? response(201, []) : response(200, [row]);
+            },
+          }),
+          mode === "created" ? "storage_response" : "event_id_conflict",
+          mode === "created" ? 503 : 409
+        );
+      });
+    }
+  }
+});
+
+test("durable timestamp comparison accepts DB formats and rejects malformed or unequal instants", async (t) => {
+  const payload = validateAlertDeliveryV2(makePayload(), { now: NOW });
+  const validFormats = durableRow(payload, {
+    created_at: "2026-10-13T21:05:00.000000-04:00",
+    source_event_at: "2026-10-14T01:05:00+00:00",
+    expires_at: "2026-10-14T01:20:00.000Z",
+  });
+  assert.deepEqual(await storeAlertDeliveryV2({
+    payload,
+    config: CONFIG,
+    async fetchImplementation() {
+      return response(201, [validFormats]);
+    },
+  }), { status: "created" });
+
+  for (const [name, overrides] of [
+    ["invalid calendar", { created_at: "2026-02-30T01:05:00+00:00" }],
+    ["wrong shape", { source_event_at: { value: payload.sourceEventAt } }],
+    ["microsecond mismatch", { expires_at: "2026-10-14T01:20:00.000001+00:00" }],
+    ["missing timestamp", { expires_at: undefined }],
+  ]) {
+    await t.test(name, async () => {
+      await expectDeliveryError(storeAlertDeliveryV2({
+        payload,
+        config: CONFIG,
+        async fetchImplementation() {
+          return response(201, [durableRow(payload, overrides)]);
+        },
+      }), "storage_response", 503);
     });
   }
 });
@@ -496,10 +628,75 @@ test("SQL requires complete V2 metadata and a full nullable unique index", () =>
   );
   assert.match(sql, /create unique index[\s\S]*on public\.alert_signals \(event_id\);/i);
   assert.doesNotMatch(sql, /unique index[\s\S]*where event_id is not null/i);
-  for (const column of ["protocol_version", "event_id", "source_event_at", "payload_fingerprint"]) {
+  for (const column of ["protocol_version", "event_id", "source_event_at", "expires_at", "payload_fingerprint"]) {
     assert.match(sql, new RegExp(`${column} is not null`, "i"));
   }
   assert.match(sql, /created_at = source_event_at/i);
+});
+
+test("authenticated V2 route rejects every unsafe public field without reflecting content", async (t) => {
+  const unsafeValues = [
+    "https://private.invalid/path",
+    "person@example.invalid",
+    "192.168.40.20",
+    "Bearer private-token-marker",
+    "PBP_ALERT_INGEST_SECRET=private-secret-marker",
+  ];
+  for (const field of ["alertType", "marketQuestion", "reason", "severity", "source"]) {
+    for (const unsafeValue of unsafeValues) {
+      await t.test(`${field} rejects unsafe pattern`, async () => {
+        const harness = createAlertRouteHarness();
+        const sourceEventAt = new Date(Date.now() - 1_000);
+        const payload = makePayload({
+          [field]: unsafeValue,
+          sourceEventAt: sourceEventAt.toISOString(),
+          expiresAt: new Date(sourceEventAt.getTime() + 10 * 60 * 1000).toISOString(),
+        });
+        const result = await harness.invoke(payload);
+        assert.equal(result.status, 400);
+        assert.equal(result.body.code, "invalid_payload");
+        assert.equal(harness.state.storeCalls.length, 0);
+        const publicOutput = JSON.stringify([result.body, harness.state.logs]);
+        assert.ok(!publicOutput.includes("private.invalid"));
+        assert.ok(!publicOutput.includes("example.invalid"));
+        assert.ok(!publicOutput.includes("192.168.40.20"));
+        assert.ok(!publicOutput.includes("private-token-marker"));
+        assert.ok(!publicOutput.includes("private-secret-marker"));
+      });
+    }
+  }
+});
+
+test("authenticated V2 route admits canonical worker-style redacted Unicode payload", async () => {
+  const harness = createAlertRouteHarness();
+  const sourceEventAt = new Date(Date.now() - 1_000);
+  const reasonPrefix = 'Quoted "café" [redacted-url] Bearer [redacted] ';
+  const payload = makePayload({
+    marketQuestion: `${"🚀".repeat(277)}...`,
+    reason: `${reasonPrefix}${"x".repeat(397 - Array.from(reasonPrefix).length)}...`,
+    sourceEventAt: sourceEventAt.toISOString(),
+    expiresAt: new Date(sourceEventAt.getTime() + 10 * 60 * 1000).toISOString(),
+  });
+  assert.equal(Array.from(payload.marketQuestion).length, 280);
+  assert.equal(Array.from(payload.reason).length, 400);
+  const result = await harness.invoke(payload);
+  assert.equal(result.status, 201);
+  assert.equal(harness.state.storeCalls.length, 1);
+
+  for (const overrides of [
+    { marketQuestion: "🚀".repeat(281) },
+    { reason: "x".repeat(401) },
+    { marketQuestion: "safe\ud800text" },
+  ]) {
+    const rejected = await harness.invoke(makePayload({
+      ...overrides,
+      sourceEventAt: payload.sourceEventAt,
+      expiresAt: payload.expiresAt,
+    }));
+    assert.equal(rejected.status, 400);
+    assert.equal(rejected.body.code, "invalid_payload");
+  }
+  assert.equal(harness.state.storeCalls.length, 1);
 });
 
 test("authenticated guarded route fails closed and returns exact acknowledgements", async (t) => {

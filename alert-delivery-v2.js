@@ -9,6 +9,27 @@ const EVENT_ID_PATTERN = /^pbp_[a-f0-9]{40}$/;
 const FINGERPRINT_PATTERN = /^[a-f0-9]{64}$/;
 const TOKEN_PATTERN = /^[a-z0-9][a-z0-9_-]*$/;
 const UTC_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/;
+const STORAGE_TIMESTAMP_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,6}))?(Z|([+-])(\d{2}):(\d{2}))$/;
+const DURABLE_DELIVERY_COLUMNS = [
+  "alert_type",
+  "market_question",
+  "reason",
+  "severity",
+  "source",
+  "created_at",
+  "event_id",
+  "source_event_at",
+  "expires_at",
+  "payload_fingerprint",
+  "protocol_version",
+];
+const PUBLIC_FIELD_NAMES = [
+  "alertType",
+  "marketQuestion",
+  "reason",
+  "severity",
+  "source",
+];
 const V2_PAYLOAD_KEYS = [
   "alertType",
   "eventId",
@@ -52,11 +73,43 @@ function isBoundedText(value, maxLength, { optional = false } = {}) {
   if (value === null && optional) return true;
   return (
     typeof value === "string" &&
-    value.length > 0 &&
-    value.length <= maxLength &&
+    Array.from(value).length > 0 &&
+    Array.from(value).length <= maxLength &&
     value === value.trim() &&
+    !hasUnpairedSurrogate(value) &&
     !/[\u0000-\u001f\u007f]/.test(value)
   );
+}
+
+function hasUnpairedSurrogate(value) {
+  for (let index = 0; index < value.length; index += 1) {
+    const unit = value.charCodeAt(index);
+    if (unit >= 0xd800 && unit <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) return true;
+      index += 1;
+    } else if (unit >= 0xdc00 && unit <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function assertCanonicalAlertDeliveryV2PublicFields(
+  payload,
+  canonicalPublicFields
+) {
+  if (
+    !canonicalPublicFields ||
+    typeof canonicalPublicFields !== "object" ||
+    Array.isArray(canonicalPublicFields) ||
+    PUBLIC_FIELD_NAMES.some(
+      (field) => payload?.[field] !== canonicalPublicFields[field]
+    )
+  ) {
+    throw new AlertDeliveryV2Error("invalid_payload");
+  }
+  return payload;
 }
 
 function canonicalDeliveryObject(payload) {
@@ -233,7 +286,7 @@ async function findExistingDelivery(
   timeoutMs
 ) {
   const url = supabaseTableUrl(config);
-  url.searchParams.set("select", "event_id,payload_fingerprint");
+  url.searchParams.set("select", DURABLE_DELIVERY_COLUMNS.join(","));
   url.searchParams.set("event_id", `eq.${payload.eventId}`);
   url.searchParams.set("limit", "1");
 
@@ -260,10 +313,99 @@ async function findExistingDelivery(
   ) {
     throw new AlertDeliveryV2Error("dedup_unconfirmed", 503);
   }
-  if (existing.payload_fingerprint !== payload.fingerprint) {
-    throw new AlertDeliveryV2Error("event_id_conflict", 409);
-  }
+  assertDurableDeliveryRow(existing, payload, "event_id_conflict", 409);
   return existing;
+}
+
+function timestampInstantMicroseconds(value) {
+  if (typeof value !== "string") return null;
+  const match = STORAGE_TIMESTAMP_PATTERN.exec(value);
+  if (!match) return null;
+
+  const [, yearText, monthText, dayText, hourText, minuteText, secondText,
+    fractionText = "", zone, offsetSign, offsetHourText, offsetMinuteText] = match;
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const hour = Number(hourText);
+  const minute = Number(minuteText);
+  const second = Number(secondText);
+  const fraction = fractionText.padEnd(6, "0");
+  const millisecond = Number(fraction.slice(0, 3));
+  if (
+    year < 1 ||
+    month < 1 || month > 12 ||
+    day < 1 || day > 31 ||
+    hour > 23 || minute > 59 || second > 59
+  ) return null;
+
+  const localDate = new Date(0);
+  localDate.setUTCFullYear(year, month - 1, day);
+  localDate.setUTCHours(hour, minute, second, millisecond);
+  const localMilliseconds = localDate.getTime();
+  if (!Number.isFinite(localMilliseconds)) return null;
+  if (
+    localDate.getUTCFullYear() !== year ||
+    localDate.getUTCMonth() !== month - 1 ||
+    localDate.getUTCDate() !== day ||
+    localDate.getUTCHours() !== hour ||
+    localDate.getUTCMinutes() !== minute ||
+    localDate.getUTCSeconds() !== second
+  ) return null;
+
+  let offsetMinutes = 0;
+  if (zone !== "Z") {
+    const offsetHours = Number(offsetHourText);
+    const offsetMinute = Number(offsetMinuteText);
+    if (offsetHours > 23 || offsetMinute > 59) return null;
+    offsetMinutes = (offsetHours * 60 + offsetMinute) * (offsetSign === "+" ? 1 : -1);
+  }
+  return (
+    BigInt(localMilliseconds - offsetMinutes * 60_000) * 1000n +
+    BigInt(fraction.slice(3, 6))
+  );
+}
+
+function sameTimestampInstant(storedValue, requestValue) {
+  const storedInstant = timestampInstantMicroseconds(storedValue);
+  const requestInstant = timestampInstantMicroseconds(requestValue);
+  return storedInstant !== null && requestInstant !== null && storedInstant === requestInstant;
+}
+
+function durableDeliveryRowMatches(row, payload) {
+  if (!row || typeof row !== "object" || Array.isArray(row)) return false;
+  if (
+    row.alert_type !== payload.alertType ||
+    row.market_question !== payload.marketQuestion ||
+    row.reason !== payload.reason ||
+    row.severity !== payload.severity ||
+    row.source !== payload.source ||
+    row.event_id !== payload.eventId ||
+    row.protocol_version !== payload.schemaVersion ||
+    row.payload_fingerprint !== payload.fingerprint ||
+    !sameTimestampInstant(row.created_at, payload.sourceEventAt) ||
+    !sameTimestampInstant(row.source_event_at, payload.sourceEventAt) ||
+    !sameTimestampInstant(row.expires_at, payload.expiresAt)
+  ) return false;
+
+  const durablePayload = {
+    alertType: row.alert_type,
+    eventId: row.event_id,
+    expiresAt: payload.expiresAt,
+    marketQuestion: row.market_question,
+    reason: row.reason,
+    schemaVersion: row.protocol_version,
+    severity: row.severity,
+    source: row.source,
+    sourceEventAt: payload.sourceEventAt,
+  };
+  return fingerprintAlertDeliveryV2(durablePayload) === row.payload_fingerprint;
+}
+
+function assertDurableDeliveryRow(row, payload, code, status) {
+  if (!durableDeliveryRowMatches(row, payload)) {
+    throw new AlertDeliveryV2Error(code, status);
+  }
 }
 
 export async function storeAlertDeliveryV2({
@@ -296,6 +438,7 @@ export async function storeAlertDeliveryV2({
         created_at: payload.sourceEventAt,
         event_id: payload.eventId,
         source_event_at: payload.sourceEventAt,
+        expires_at: payload.expiresAt,
         payload_fingerprint: payload.fingerprint,
         protocol_version: payload.schemaVersion,
       }),
@@ -309,13 +452,7 @@ export async function storeAlertDeliveryV2({
       return { status: "duplicate" };
     }
     const row = Array.isArray(body) && body.length === 1 ? body[0] : null;
-    if (
-      !row ||
-      row.event_id !== payload.eventId ||
-      row.payload_fingerprint !== payload.fingerprint
-    ) {
-      throw new AlertDeliveryV2Error("storage_response", 503);
-    }
+    assertDurableDeliveryRow(row, payload, "storage_response", 503);
     return { status: "created" };
   }
 

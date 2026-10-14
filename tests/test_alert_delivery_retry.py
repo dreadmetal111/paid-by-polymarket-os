@@ -108,9 +108,11 @@ class SupabaseConstraintSemanticsTests(unittest.TestCase):
             "protocol_version",
             "event_id",
             "source_event_at",
+            "expires_at",
             "payload_fingerprint",
         ):
             self.assertIn(f"{column} is not null", sql.lower())
+        self.assertIn("expires_at <= source_event_at + interval '15 minutes'", sql.lower())
 
         # SQLite follows the same CHECK rule at issue here: UNKNOWN passes. This
         # in-memory equivalent proves the explicit guards make incomplete V2 rows
@@ -124,12 +126,14 @@ class SupabaseConstraintSemanticsTests(unittest.TestCase):
                 protocol_version INTEGER,
                 event_id TEXT,
                 source_event_at TEXT,
+                expires_at TEXT,
                 payload_fingerprint TEXT,
                 CHECK (
                     (
                         protocol_version IS NULL
                         AND event_id IS NULL
                         AND source_event_at IS NULL
+                        AND expires_at IS NULL
                         AND payload_fingerprint IS NULL
                     )
                     OR
@@ -138,6 +142,7 @@ class SupabaseConstraintSemanticsTests(unittest.TestCase):
                         AND protocol_version = 2
                         AND event_id IS NOT NULL
                         AND source_event_at IS NOT NULL
+                        AND expires_at IS NOT NULL
                         AND payload_fingerprint IS NOT NULL
                         AND created_at = source_event_at
                     )
@@ -151,26 +156,27 @@ class SupabaseConstraintSemanticsTests(unittest.TestCase):
         conn.execute("INSERT INTO guarded_rows (created_at) VALUES (?)", (valid_time,))
         conn.execute(
             """
-            INSERT INTO guarded_rows VALUES (?, 2, ?, ?, ?)
+            INSERT INTO guarded_rows VALUES (?, 2, ?, ?, ?, ?)
             """,
-            (valid_time, valid_id, valid_time, valid_fingerprint),
+            (valid_time, valid_id, valid_time, "2026-10-14T01:20:00Z", valid_fingerprint),
         )
         invalid_rows = (
-            (valid_time, 2, None, valid_time, valid_fingerprint),
-            (valid_time, 2, valid_id, None, valid_fingerprint),
-            (valid_time, 2, valid_id, valid_time, None),
-            (valid_time, 3, valid_id, valid_time, valid_fingerprint),
-            (valid_time, None, valid_id, None, None),
-            ("2026-10-14T01:06:00Z", 2, valid_id, valid_time, valid_fingerprint),
+            (valid_time, 2, None, valid_time, "2026-10-14T01:20:00Z", valid_fingerprint),
+            (valid_time, 2, valid_id, None, "2026-10-14T01:20:00Z", valid_fingerprint),
+            (valid_time, 2, valid_id, valid_time, None, valid_fingerprint),
+            (valid_time, 2, valid_id, valid_time, "2026-10-14T01:20:00Z", None),
+            (valid_time, 3, valid_id, valid_time, "2026-10-14T01:20:00Z", valid_fingerprint),
+            (valid_time, None, valid_id, None, None, None),
+            ("2026-10-14T01:06:00Z", 2, valid_id, valid_time, "2026-10-14T01:20:00Z", valid_fingerprint),
         )
         for row in invalid_rows:
             with self.subTest(row=row), self.assertRaises(sqlite3.IntegrityError):
-                conn.execute("INSERT INTO guarded_rows VALUES (?, ?, ?, ?, ?)", row)
+                conn.execute("INSERT INTO guarded_rows VALUES (?, ?, ?, ?, ?, ?)", row)
 
 
 class AlertDeliveryRetryTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.temp_dir = tempfile.TemporaryDirectory(dir=ROOT)
+        self.temp_dir = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp_dir.cleanup)
         self.db_path = Path(self.temp_dir.name) / "worker.sqlite3"
         self.settings = replace(
@@ -637,6 +643,75 @@ class AlertDeliveryRetryTests(unittest.TestCase):
             worker.fingerprint_render_delivery_payload(payload),
             "12d0ee6c295a4e6c63a611ac560eab2a919a786cf6e040f546dae4602927d1d5",
         )
+
+    def test_v2_escaped_unicode_and_quotes_cross_language_fingerprint(self) -> None:
+        payload = {
+            "alertType": "probability_movement",
+            "eventId": f"pbp_{'e' * 40}",
+            "expiresAt": "2026-10-14T01:20:00Z",
+            "marketQuestion": 'Will "caf\u00e9" \U0001f680 win?',
+            "reason": 'Path \\ archive and \u201cquoted\u201d \U0001f680',
+            "schemaVersion": 2,
+            "severity": "high",
+            "source": "acer-alert-worker",
+            "sourceEventAt": "2026-10-14T01:05:00Z",
+        }
+        self.assertEqual(
+            worker.fingerprint_render_delivery_payload(payload),
+            "d8ca986a372a986422898ca7105e25224118dde907255094bcf14b03d34b57cd",
+        )
+
+    def test_v2_public_text_budget_reserves_suffix_and_counts_unicode_scalars(self) -> None:
+        for field, input_key, limit in (
+            ("marketQuestion", "question", 280),
+            ("reason", "message", 400),
+        ):
+            for character in ("x", "\U0001f680"):
+                alert = {
+                    "alert_type": "probability_movement",
+                    "question": "Question",
+                    "message": "Reason",
+                    "severity": "high",
+                }
+                with self.subTest(field=field, character=character, boundary="exact"):
+                    alert[input_key] = character * limit
+                    result = worker.build_canonical_render_public_fields_v2(alert)[field]
+                    self.assertEqual(len(result), limit)
+                    self.assertFalse(result.endswith("..."))
+
+                with self.subTest(field=field, character=character, boundary="truncated"):
+                    alert[input_key] = character * (limit + 1)
+                    result = worker.build_canonical_render_public_fields_v2(alert)[field]
+                    self.assertEqual(len(result), limit)
+                    self.assertTrue(result.endswith("..."))
+                    self.assertEqual(result[:-3], character * (limit - 3))
+
+        canonical = worker.build_canonical_render_public_fields_v2({
+            "alert_type": "probability_movement",
+            "question": "safe\ud800text",
+            "message": "safe\udc00text",
+            "severity": "high",
+        })
+        self.assertEqual(canonical["marketQuestion"], "safe\ufffdtext")
+        self.assertEqual(canonical["reason"], "safe\ufffdtext")
+        self.assertFalse(any(0xD800 <= ord(value) <= 0xDFFF for value in canonical["marketQuestion"]))
+        self.assertEqual(
+            worker.sanitize_public_signal_text_v2("left\ufeffright", 280),
+            "left right",
+        )
+
+    def test_v2_identity_is_validated_before_enrollment(self) -> None:
+        with patch.object(worker, "fingerprint_render_delivery_payload", return_value="not-a-fingerprint"):
+            with self.assertRaisesRegex(ValueError, "noncanonical V2 payload"):
+                worker.build_render_delivery_identity(
+                    settings=self.settings,
+                    alert_key="probability_movement:invalid:7",
+                    alert_type="probability_movement",
+                    question="Question",
+                    message="Reason",
+                    severity="high",
+                    created_at=worker.format_utc(SOURCE_TIME),
+                )
 
     def test_settings_default_disabled_and_future_skew_clamped_to_receiver_bound(self) -> None:
         with patch.dict(

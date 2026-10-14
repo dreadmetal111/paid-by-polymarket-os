@@ -39,6 +39,11 @@ RENDER_DELIVERY_SCHEMA_VERSION = 2
 RENDER_EVENT_ID_PATTERN = re.compile(r"^pbp_[a-f0-9]{40}$")
 RENDER_FINGERPRINT_PATTERN = re.compile(r"^[a-f0-9]{64}$")
 STRICT_UTC_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$")
+ECMASCRIPT_WHITESPACE = (
+    "\u0009\u000a\u000b\u000c\u000d\u0020\u00a0\u1680\u2000\u2001\u2002\u2003"
+    "\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff"
+)
+ECMASCRIPT_WHITESPACE_PATTERN = re.compile(f"[{re.escape(ECMASCRIPT_WHITESPACE)}]+")
 
 
 def load_env_file() -> Path:
@@ -1229,8 +1234,8 @@ def trim_discord(value: Any, limit: int) -> str:
     return text[: limit - 1] + "..."
 
 
-def redact_public_signal_text(value: Any) -> str:
-    text = clean_string(value)
+def redact_public_signal_text(value: Any, *, collapse_whitespace: bool = True) -> str:
+    text = clean_string(value) if collapse_whitespace else ("" if value is None else str(value))
     text = re.sub(
         r"\b(?:PBP_ADMIN_SECRET|PBP_ALERT_INGEST_SECRET|SUPABASE_SERVICE_ROLE_KEY|DISCORD_WEBHOOK_URL|WEBHOOK_URL)\s*[:=]\s*[\"']?[^\"'\s]+[\"']?",
         "[redacted-secret]",
@@ -1256,7 +1261,7 @@ def redact_public_signal_text(value: Any) -> str:
         text,
     )
     text = re.sub(r"\blocalhost(?::\d{2,5})?\b", "[redacted-host]", text, flags=re.IGNORECASE)
-    return re.sub(r"\s+", " ", text).strip()
+    return re.sub(r"\s+", " ", text).strip() if collapse_whitespace else text
 
 
 def sanitize_public_signal_text(value: Any, limit: int, default: str = "") -> str:
@@ -1268,8 +1273,48 @@ def sanitize_public_signal_text(value: Any, limit: int, default: str = "") -> st
     return text[: limit - 1].rstrip() + "..."
 
 
+def well_formed_unicode_scalars(value: str) -> str:
+    result: list[str] = []
+    index = 0
+    while index < len(value):
+        codepoint = ord(value[index])
+        if 0xD800 <= codepoint <= 0xDBFF:
+            if index + 1 < len(value):
+                low = ord(value[index + 1])
+                if 0xDC00 <= low <= 0xDFFF:
+                    result.append(chr(0x10000 + ((codepoint - 0xD800) << 10) + low - 0xDC00))
+                    index += 2
+                    continue
+            result.append("\ufffd")
+        elif 0xDC00 <= codepoint <= 0xDFFF:
+            result.append("\ufffd")
+        else:
+            result.append(value[index])
+        index += 1
+    return "".join(result)
+
+
+def sanitize_public_signal_text_v2(value: Any, limit: int, default: str = "") -> str:
+    text = well_formed_unicode_scalars(
+        redact_public_signal_text(value, collapse_whitespace=False)
+    )
+    text = ECMASCRIPT_WHITESPACE_PATTERN.sub(" ", text).strip(ECMASCRIPT_WHITESPACE)
+    if not text:
+        text = well_formed_unicode_scalars(default)
+    if len(text) <= limit:
+        return text
+    suffix = "..."
+    return text[: limit - len(suffix)].rstrip(" ") + suffix
+
+
 def normalize_public_signal_token(value: Any, limit: int, default: str) -> str:
     text = sanitize_public_signal_text(value, limit, default).lower()
+    text = re.sub(r"[^a-z0-9_-]+", "_", text).strip("_")
+    return text[:limit] or default
+
+
+def normalize_public_signal_token_v2(value: Any, limit: int, default: str) -> str:
+    text = sanitize_public_signal_text_v2(value, limit, default).lower()
     text = re.sub(r"[^a-z0-9_-]+", "_", text).strip("_")
     return text[:limit] or default
 
@@ -1284,6 +1329,18 @@ def build_render_alert_payload(alert: dict[str, Any]) -> dict[str, str]:
         "marketQuestion": sanitize_public_signal_text(alert.get("question"), 280, "Untitled market"),
         "reason": sanitize_public_signal_text(alert.get("message") or alert.get("title"), 400, "Alert triggered."),
         "severity": normalize_public_signal_token(alert.get("severity"), 40, "low"),
+        "source": "acer-alert-worker",
+    }
+
+
+def build_canonical_render_public_fields_v2(alert: dict[str, Any]) -> dict[str, str]:
+    return {
+        "alertType": normalize_public_signal_token_v2(alert.get("alert_type"), 80, "alert_signal"),
+        "marketQuestion": sanitize_public_signal_text_v2(alert.get("question"), 280, "Untitled market"),
+        "reason": sanitize_public_signal_text_v2(
+            alert.get("message") or alert.get("title"), 400, "Alert triggered."
+        ),
+        "severity": normalize_public_signal_token_v2(alert.get("severity"), 40, "low"),
         "source": "acer-alert-worker",
     }
 
@@ -1319,6 +1376,52 @@ def fingerprint_render_delivery_payload(payload: dict[str, Any]) -> str:
     return hashlib.sha256(canonical_render_delivery_payload(payload).encode("utf-8")).hexdigest()
 
 
+def render_delivery_payload_has_valid_contract(payload: dict[str, Any]) -> bool:
+    bounded_fields = (
+        ("alertType", 80),
+        ("marketQuestion", 280),
+        ("reason", 400),
+        ("severity", 40),
+        ("source", 120),
+    )
+    for field, limit in bounded_fields:
+        value = payload.get(field)
+        if (
+            not isinstance(value, str)
+            or not value
+            or value != value.strip()
+            or len(value) > limit
+            or any(ord(character) < 0x20 or ord(character) == 0x7F for character in value)
+            or any(0xD800 <= ord(character) <= 0xDFFF for character in value)
+        ):
+            return False
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", payload["alertType"]):
+        return False
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", payload["severity"]):
+        return False
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", payload["source"]):
+        return False
+    if payload.get("schemaVersion") != RENDER_DELIVERY_SCHEMA_VERSION:
+        return False
+    if not isinstance(payload.get("eventId"), str) or not RENDER_EVENT_ID_PATTERN.fullmatch(payload["eventId"]):
+        return False
+    source_time = parse_strict_utc(payload.get("sourceEventAt"))
+    expires_time = parse_strict_utc(payload.get("expiresAt"))
+    if (
+        source_time is None
+        or expires_time is None
+        or expires_time <= source_time
+        or expires_time - source_time > timedelta(minutes=15)
+    ):
+        return False
+    fingerprint = payload.get("fingerprint")
+    return (
+        isinstance(fingerprint, str)
+        and RENDER_FINGERPRINT_PATTERN.fullmatch(fingerprint) is not None
+        and fingerprint_render_delivery_payload(payload) == fingerprint
+    )
+
+
 def build_render_delivery_identity(
     settings: Settings,
     alert_key: str,
@@ -1336,7 +1439,7 @@ def build_render_delivery_identity(
     event_id = f"pbp_{hashlib.sha256(event_seed).hexdigest()[:40]}"
     expires_at = format_utc(source_time + timedelta(seconds=settings.public_alert_retry_ttl_seconds))
     payload: dict[str, Any] = {
-        **build_render_alert_payload(
+        **build_canonical_render_public_fields_v2(
             {
                 "alert_type": alert_type,
                 "question": question,
@@ -1350,6 +1453,8 @@ def build_render_delivery_identity(
         "expiresAt": expires_at,
     }
     payload["fingerprint"] = fingerprint_render_delivery_payload(payload)
+    if not render_delivery_payload_has_valid_contract(payload):
+        raise ValueError("Cannot enroll alert delivery with a noncanonical V2 payload")
     return {
         "version": RENDER_DELIVERY_SCHEMA_VERSION,
         "event_id": event_id,
@@ -1362,7 +1467,7 @@ def build_render_delivery_identity(
 
 def build_render_alert_payload_v2(alert: dict[str, Any]) -> dict[str, Any]:
     payload: dict[str, Any] = {
-        **build_render_alert_payload(alert),
+        **build_canonical_render_public_fields_v2(alert),
         "schemaVersion": alert.get("render_protocol_version"),
         "eventId": alert.get("render_event_id"),
         "sourceEventAt": alert.get("render_source_event_at"),
@@ -1490,7 +1595,7 @@ def validate_render_delivery_attempt(
             return "not_due", None
 
     payload = build_render_alert_payload_v2(alert)
-    if fingerprint_render_delivery_payload(payload) != fingerprint:
+    if not render_delivery_payload_has_valid_contract(payload):
         return "invalid_payload", None
     return "ready", payload
 
