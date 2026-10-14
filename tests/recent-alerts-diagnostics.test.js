@@ -1,9 +1,16 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import vm from "node:vm";
 import { fileURLToPath } from "node:url";
+
+import {
+  fingerprintAlertDeliveryV2,
+  storeAlertDeliveryV2,
+  validateAlertDeliveryV2,
+} from "../alert-delivery-v2.js";
 
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const sourceArgument = process.argv
@@ -124,9 +131,14 @@ function createHarness() {
     "redactSensitivePublicText",
     "sanitizePublicAlertText",
     "sanitizeOptionalPublicAlertText",
+    "toWellFormedPublicAlertText",
+    "sanitizePublicAlertTextV2",
+    "sanitizeOptionalPublicAlertTextV2",
     "normalizeAlertType",
     "normalizeAlertSeverity",
     "normalizeAlertSource",
+    "normalizeAlertSignalInput",
+    "normalizeAlertSignalInputV2",
     "toPublicAlertSignal",
     "getSupabaseTargetInfo",
     "buildSupabaseTableUrl",
@@ -147,7 +159,7 @@ function createHarness() {
     ...constants,
     ...functions,
     extractRecentAlertsRoute(),
-    "globalThis.__recentAlerts = { readRecentAlertSignals, readRecentSupabaseAlertSignals };",
+    "globalThis.__recentAlerts = { normalizeAlertSignalInputV2, readRecentAlertSignals, readRecentSupabaseAlertSignals };",
   ].join("\n\n");
 
   new vm.Script(executableSource, {
@@ -227,6 +239,112 @@ function jsonResponse(payload) {
   };
 }
 
+function storageResponse(status, payload) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    async text() {
+      return JSON.stringify(payload);
+    },
+  };
+}
+
+function isUtf8RoundTripWellFormed(value) {
+  return Buffer.from(value, "utf8").toString("utf8") === value;
+}
+
+test("Python V2 boundary payload survives receiver storage and the public handler unchanged", async () => {
+  const python = process.platform === "win32" ? "python" : "python3";
+  const childEnvironment = {
+    PATH: process.env.PATH,
+    PYTHONDONTWRITEBYTECODE: "1",
+    PYTHONIOENCODING: "utf-8",
+  };
+  if (process.platform === "win32") {
+    childEnvironment.PATHEXT = process.env.PATHEXT;
+    childEnvironment.SystemRoot = process.env.SystemRoot;
+  }
+  const fixture = spawnSync(
+    python,
+    [path.join(TEST_DIR, "build_alert_delivery_boundary_fixture.py")],
+    {
+      cwd: path.join(TEST_DIR, ".."),
+      encoding: "utf8",
+      env: childEnvironment,
+      timeout: 10_000,
+    }
+  );
+  assert.equal(fixture.status, 0, fixture.stderr || fixture.error?.message);
+  const payload = JSON.parse(fixture.stdout);
+  const validated = validateAlertDeliveryV2(payload, {
+    now: new Date("2026-10-14T01:10:00Z"),
+  });
+  assert.equal(payload.fingerprint, fingerprintAlertDeliveryV2(payload));
+  assert.equal(payload.marketQuestion, `a${"\u{1f680}".repeat(138)}...`);
+  assert.equal(payload.reason, `a${"\u{1f680}".repeat(198)}...`);
+  assert.equal(payload.marketQuestion.length, 280);
+  assert.equal(payload.reason.length, 400);
+  assert.equal(isUtf8RoundTripWellFormed(payload.marketQuestion), true);
+  assert.equal(isUtf8RoundTripWellFormed(payload.reason), true);
+
+  const harness = createHarness();
+  const canonicalFields = harness.context.__recentAlerts.normalizeAlertSignalInputV2(payload);
+  for (const field of ["alertType", "marketQuestion", "reason", "severity", "source"]) {
+    assert.equal(canonicalFields[field], payload[field]);
+  }
+
+  let durableRow;
+  const storageResult = await storeAlertDeliveryV2({
+    payload: validated,
+    config: {
+      enabled: true,
+      supabaseUrl: "https://synthetic-storage.invalid",
+      serviceRoleKey: "SYNTHETIC_STORAGE_KEY",
+      table: "alert_signals",
+    },
+    async fetchImplementation(_url, options) {
+      assert.equal(options.method, "POST");
+      durableRow = JSON.parse(options.body);
+      return storageResponse(201, [durableRow]);
+    },
+  });
+  assert.deepEqual(storageResult, { status: "created" });
+  assert.deepEqual(durableRow, {
+    alert_type: payload.alertType,
+    market_question: payload.marketQuestion,
+    reason: payload.reason,
+    severity: payload.severity,
+    source: payload.source,
+    created_at: payload.sourceEventAt,
+    event_id: payload.eventId,
+    source_event_at: payload.sourceEventAt,
+    expires_at: payload.expiresAt,
+    payload_fingerprint: payload.fingerprint,
+    protocol_version: payload.schemaVersion,
+  });
+
+  harness.state.fetchImplementation = async () => jsonResponse([durableRow]);
+  const publicResult = await harness.invoke();
+  assert.equal(publicResult.status, 200);
+  assert.deepEqual(JSON.parse(JSON.stringify(publicResult.body.alerts)), [
+    {
+      alertType: payload.alertType,
+      marketQuestion: payload.marketQuestion,
+      reason: payload.reason,
+      severity: payload.severity,
+      createdAt: payload.sourceEventAt,
+    },
+  ]);
+  assert.equal(publicResult.body.alerts[0].marketQuestion, durableRow.market_question);
+  assert.equal(publicResult.body.alerts[0].reason, durableRow.reason);
+  assert.equal(isUtf8RoundTripWellFormed(publicResult.body.alerts[0].marketQuestion), true);
+  assert.equal(isUtf8RoundTripWellFormed(publicResult.body.alerts[0].reason), true);
+  assert.equal(
+    harness.state.requests[0][0].searchParams.get("select"),
+    "alert_type,market_question,reason,severity,source,created_at"
+  );
+});
+
 test("executes the checked-in query, sanitation, filtering, and public projection", async () => {
   const harness = createHarness();
   const createdAt = "2026-06-20T12:00:00.000Z";
@@ -239,6 +357,10 @@ test("executes the checked-in query, sanitation, filtering, and public projectio
         severity: " HIGH ",
         source: "private-worker-source",
         created_at: createdAt,
+        event_id: `pbp_${"a".repeat(40)}`,
+        payload_fingerprint: "b".repeat(64),
+        protocol_version: 2,
+        source_event_at: createdAt,
       },
       {
         alert_type: "",
