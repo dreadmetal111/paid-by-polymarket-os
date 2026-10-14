@@ -73,8 +73,8 @@ function isBoundedText(value, maxLength, { optional = false } = {}) {
   if (value === null && optional) return true;
   return (
     typeof value === "string" &&
-    Array.from(value).length > 0 &&
-    Array.from(value).length <= maxLength &&
+    value.length > 0 &&
+    value.length <= maxLength &&
     value === value.trim() &&
     !hasUnpairedSurrogate(value) &&
     !/[\u0000-\u001f\u007f]/.test(value)

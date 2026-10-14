@@ -410,10 +410,15 @@ function sanitizePublicAlertTextV2(value, maxLength) {
   const text = toWellFormedPublicAlertText(redactSensitivePublicText(value))
     .replace(/\s+/g, " ")
     .trim();
-  const scalars = Array.from(text);
-  if (scalars.length <= maxLength) return text;
+  if (text.length <= maxLength) return text;
   const suffix = "...";
-  return `${scalars.slice(0, maxLength - suffix.length).join("").trimEnd()}${suffix}`;
+  const prefixBudget = maxLength - suffix.length;
+  let prefix = "";
+  for (const scalar of text) {
+    if (prefix.length + scalar.length > prefixBudget) break;
+    prefix += scalar;
+  }
+  return `${prefix.trimEnd()}${suffix}`;
 }
 
 function sanitizeOptionalPublicAlertTextV2(value, maxLength) {

@@ -194,6 +194,10 @@ ID are reused, and delivery stops after five attempts or 15 minutes. See
 `docs/guarded-alert-delivery-runbook.md` from the repository root for release and
 rollback order.
 
+Guarded V2 questions and reasons are canonicalized to the public feed's 280 and
+400 UTF-16 code-unit limits. When truncation is needed, the worker keeps whole
+Unicode scalars and reserves three code units for the ASCII `...` suffix.
+
 ## Beginner-Safe Notes
 
 - The real env file must be named `alert-worker.env`.

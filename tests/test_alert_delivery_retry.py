@@ -661,30 +661,60 @@ class AlertDeliveryRetryTests(unittest.TestCase):
             "d8ca986a372a986422898ca7105e25224118dde907255094bcf14b03d34b57cd",
         )
 
-    def test_v2_public_text_budget_reserves_suffix_and_counts_unicode_scalars(self) -> None:
+    def test_v2_public_text_budget_reserves_suffix_in_utf16_code_units(self) -> None:
         for field, input_key, limit in (
             ("marketQuestion", "question", 280),
             ("reason", "message", 400),
         ):
-            for character in ("x", "\U0001f680"):
+            exact_values = (
+                "x" * limit,
+                "\U0001f680" * (limit // 2),
+                "x" * (limit - 2) + "\U0001f680",
+            )
+            one_over_values = (
+                "x" * (limit + 1),
+                "\U0001f680" * (limit // 2) + "x",
+                "x" * (limit - 1) + "\U0001f680",
+            )
+            for value in exact_values:
                 alert = {
                     "alert_type": "probability_movement",
                     "question": "Question",
                     "message": "Reason",
                     "severity": "high",
                 }
-                with self.subTest(field=field, character=character, boundary="exact"):
-                    alert[input_key] = character * limit
+                with self.subTest(field=field, value=value[-4:], boundary="exact"):
+                    alert[input_key] = value
                     result = worker.build_canonical_render_public_fields_v2(alert)[field]
-                    self.assertEqual(len(result), limit)
+                    self.assertEqual(worker.utf16_code_unit_length(result), limit)
                     self.assertFalse(result.endswith("..."))
 
-                with self.subTest(field=field, character=character, boundary="truncated"):
-                    alert[input_key] = character * (limit + 1)
+            for value in one_over_values:
+                alert = {
+                    "alert_type": "probability_movement",
+                    "question": "Question",
+                    "message": "Reason",
+                    "severity": "high",
+                }
+                with self.subTest(field=field, value=value[-4:], boundary="one-over"):
+                    alert[input_key] = value
                     result = worker.build_canonical_render_public_fields_v2(alert)[field]
-                    self.assertEqual(len(result), limit)
+                    self.assertLessEqual(worker.utf16_code_unit_length(result), limit)
                     self.assertTrue(result.endswith("..."))
-                    self.assertEqual(result[:-3], character * (limit - 3))
+
+            boundary_input = "a" + "\U0001f680" * (limit - 1)
+            alert = {
+                "alert_type": "probability_movement",
+                "question": "Question",
+                "message": "Reason",
+                "severity": "high",
+                input_key: boundary_input,
+            }
+            boundary_result = worker.build_canonical_render_public_fields_v2(alert)[field]
+            expected = "a" + "\U0001f680" * ((limit - 4) // 2) + "..."
+            self.assertEqual(boundary_result, expected)
+            self.assertEqual(worker.utf16_code_unit_length(boundary_result), limit)
+            self.assertFalse(any(0xD800 <= ord(char) <= 0xDFFF for char in boundary_result))
 
         canonical = worker.build_canonical_render_public_fields_v2({
             "alert_type": "probability_movement",
@@ -699,6 +729,50 @@ class AlertDeliveryRetryTests(unittest.TestCase):
             worker.sanitize_public_signal_text_v2("left\ufeffright", 280),
             "left right",
         )
+        self.assertEqual(
+            worker.sanitize_public_signal_text_v2("Short caf\u00e9 \U0001f680", 280),
+            "Short caf\u00e9 \U0001f680",
+        )
+
+    def test_v2_contract_rejects_raw_oversize_but_builder_enrolls_canonical_text(self) -> None:
+        source_event_at = worker.format_utc(SOURCE_TIME)
+        raw_payload = {
+            "alertType": "probability_movement",
+            "eventId": f"pbp_{'a' * 40}",
+            "expiresAt": worker.format_utc(SOURCE_TIME + timedelta(minutes=15)),
+            "marketQuestion": "a" + "\U0001f680" * 279,
+            "reason": "a" + "\U0001f680" * 399,
+            "schemaVersion": 2,
+            "severity": "high",
+            "source": "acer-alert-worker",
+            "sourceEventAt": source_event_at,
+        }
+        raw_payload["fingerprint"] = worker.fingerprint_render_delivery_payload(raw_payload)
+        self.assertFalse(worker.render_delivery_payload_has_valid_contract(raw_payload))
+
+        identity = worker.build_render_delivery_identity(
+            settings=self.settings,
+            alert_key="probability_movement:unicode-boundary:7",
+            alert_type=raw_payload["alertType"],
+            question=raw_payload["marketQuestion"],
+            message=raw_payload["reason"],
+            severity=raw_payload["severity"],
+            created_at=source_event_at,
+        )
+        prepared = worker.build_render_alert_payload_v2({
+            "alert_type": raw_payload["alertType"],
+            "question": raw_payload["marketQuestion"],
+            "message": raw_payload["reason"],
+            "severity": raw_payload["severity"],
+            "render_protocol_version": identity["version"],
+            "render_event_id": identity["event_id"],
+            "render_payload_fingerprint": identity["fingerprint"],
+            "render_source_event_at": identity["source_event_at"],
+            "render_expires_at": identity["expires_at"],
+        })
+        self.assertTrue(worker.render_delivery_payload_has_valid_contract(prepared))
+        self.assertEqual(prepared["marketQuestion"], "a" + "\U0001f680" * 138 + "...")
+        self.assertEqual(prepared["reason"], "a" + "\U0001f680" * 198 + "...")
 
     def test_v2_identity_is_validated_before_enrollment(self) -> None:
         with patch.object(worker, "fingerprint_render_delivery_payload", return_value="not-a-fingerprint"):

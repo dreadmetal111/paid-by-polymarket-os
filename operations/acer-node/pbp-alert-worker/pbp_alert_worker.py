@@ -1294,6 +1294,10 @@ def well_formed_unicode_scalars(value: str) -> str:
     return "".join(result)
 
 
+def utf16_code_unit_length(value: str) -> int:
+    return sum(2 if ord(character) > 0xFFFF else 1 for character in value)
+
+
 def sanitize_public_signal_text_v2(value: Any, limit: int, default: str = "") -> str:
     text = well_formed_unicode_scalars(
         redact_public_signal_text(value, collapse_whitespace=False)
@@ -1301,10 +1305,19 @@ def sanitize_public_signal_text_v2(value: Any, limit: int, default: str = "") ->
     text = ECMASCRIPT_WHITESPACE_PATTERN.sub(" ", text).strip(ECMASCRIPT_WHITESPACE)
     if not text:
         text = well_formed_unicode_scalars(default)
-    if len(text) <= limit:
+    if utf16_code_unit_length(text) <= limit:
         return text
     suffix = "..."
-    return text[: limit - len(suffix)].rstrip(" ") + suffix
+    prefix_budget = limit - len(suffix)
+    prefix: list[str] = []
+    prefix_units = 0
+    for character in text:
+        character_units = 2 if ord(character) > 0xFFFF else 1
+        if prefix_units + character_units > prefix_budget:
+            break
+        prefix.append(character)
+        prefix_units += character_units
+    return "".join(prefix).rstrip(" ") + suffix
 
 
 def normalize_public_signal_token(value: Any, limit: int, default: str) -> str:
@@ -1390,7 +1403,7 @@ def render_delivery_payload_has_valid_contract(payload: dict[str, Any]) -> bool:
             not isinstance(value, str)
             or not value
             or value != value.strip()
-            or len(value) > limit
+            or utf16_code_unit_length(value) > limit
             or any(ord(character) < 0x20 or ord(character) == 0x7F for character in value)
             or any(0xD800 <= ord(character) <= 0xDFFF for character in value)
         ):

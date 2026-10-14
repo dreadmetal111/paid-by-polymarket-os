@@ -209,20 +209,30 @@ test("validation accepts a canonical guarded event and rejects tampering", () =>
   );
 });
 
-test("V2 text bounds count Unicode scalars and reject unpaired surrogates", () => {
+test("V2 text bounds count UTF-16 code units and reject unpaired surrogates", () => {
   for (const [field, limit] of [["marketQuestion", 280], ["reason", 400]]) {
-    assert.doesNotThrow(() => validateAlertDeliveryV2(
-      makePayload({ [field]: "x".repeat(limit) }),
-      { now: NOW }
-    ));
-    assert.doesNotThrow(() => validateAlertDeliveryV2(
-      makePayload({ [field]: "🚀".repeat(limit) }),
-      { now: NOW }
-    ));
-    assert.throws(
-      () => validateAlertDeliveryV2(makePayload({ [field]: "🚀".repeat(limit + 1) }), { now: NOW }),
-      (error) => error.code === "invalid_payload"
-    );
+    for (const value of [
+      "x".repeat(limit),
+      "\u{1f680}".repeat(limit / 2),
+      `${"x".repeat(limit - 2)}\u{1f680}`,
+    ]) {
+      assert.equal(value.length, limit);
+      assert.doesNotThrow(() => validateAlertDeliveryV2(
+        makePayload({ [field]: value }),
+        { now: NOW }
+      ));
+    }
+    for (const value of [
+      "x".repeat(limit + 1),
+      `${"\u{1f680}".repeat(limit / 2)}x`,
+      `${"x".repeat(limit - 1)}\u{1f680}`,
+    ]) {
+      assert.equal(value.length, limit + 1);
+      assert.throws(
+        () => validateAlertDeliveryV2(makePayload({ [field]: value }), { now: NOW }),
+        (error) => error.code === "invalid_payload"
+      );
+    }
     assert.throws(
       () => validateAlertDeliveryV2(makePayload({ [field]: `safe\ud800text` }), { now: NOW }),
       (error) => error.code === "invalid_payload"
@@ -670,21 +680,24 @@ test("authenticated V2 route rejects every unsafe public field without reflectin
 test("authenticated V2 route admits canonical worker-style redacted Unicode payload", async () => {
   const harness = createAlertRouteHarness();
   const sourceEventAt = new Date(Date.now() - 1_000);
-  const reasonPrefix = 'Quoted "café" [redacted-url] Bearer [redacted] ';
+  const expectedQuestion = `a${"\u{1f680}".repeat(138)}...`;
+  const expectedReason = `a${"\u{1f680}".repeat(198)}...`;
   const payload = makePayload({
-    marketQuestion: `${"🚀".repeat(277)}...`,
-    reason: `${reasonPrefix}${"x".repeat(397 - Array.from(reasonPrefix).length)}...`,
+    marketQuestion: expectedQuestion,
+    reason: expectedReason,
     sourceEventAt: sourceEventAt.toISOString(),
     expiresAt: new Date(sourceEventAt.getTime() + 10 * 60 * 1000).toISOString(),
   });
-  assert.equal(Array.from(payload.marketQuestion).length, 280);
-  assert.equal(Array.from(payload.reason).length, 400);
+  assert.equal(payload.marketQuestion.length, 280);
+  assert.equal(payload.reason.length, 400);
   const result = await harness.invoke(payload);
   assert.equal(result.status, 201);
   assert.equal(harness.state.storeCalls.length, 1);
+  assert.equal(harness.state.storeCalls[0].payload.marketQuestion, expectedQuestion);
+  assert.equal(harness.state.storeCalls[0].payload.reason, expectedReason);
 
   for (const overrides of [
-    { marketQuestion: "🚀".repeat(281) },
+    { marketQuestion: `a${"\u{1f680}".repeat(279)}` },
     { reason: "x".repeat(401) },
     { marketQuestion: "safe\ud800text" },
   ]) {

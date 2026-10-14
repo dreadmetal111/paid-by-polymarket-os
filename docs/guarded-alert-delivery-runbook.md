@@ -21,6 +21,10 @@ must retain NULL V2 identity fields and remain unenrolled.
   acknowledgements are retryable. Other 4xx responses are permanent.
 - Every retry reuses the persisted event ID, source time, expiry, canonical
   payload, and fingerprint. Attempt state is committed before network I/O.
+- Canonical V2 `marketQuestion` and `reason` text uses the existing public-feed
+  limits of 280 and 400 UTF-16 code units. Truncation reserves three code units
+  for the ASCII `...` suffix and keeps only complete Unicode scalars, so stored
+  V2 text is already safe for the unchanged legacy public projection.
 - Supabase's full nullable unique index is the durable concurrency/redeploy
   boundary. PostgreSQL still permits multiple legacy `NULL` values. The receiver
   uses `on_conflict=event_id` with `resolution=ignore-duplicates`; it never
