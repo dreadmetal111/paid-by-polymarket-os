@@ -1,10 +1,12 @@
 # Public Beta Launch Checklist
 
+> **Current status (2026-10-21): historical checklist; needs revalidation.** The earlier `Go`, QA, and proof-count statements below record prior public-beta evidence. They do not clear the current customer pilot after recovery. Use the [2026-10-21 pilot readiness gate](pilot-readiness-2026-10-21.md) for the current decision: deployment and activation are complete, fresh natural V2 durable-delivery proof is pending, and the customer pilot is not cleared.
+
 ## 1. Public Beta Status
 
-Public beta status: Go, with limited beta positioning.
+Historical public beta decision: Go, with limited beta positioning. This decision predates the current recovery gate and needs revalidation before any customer pilot.
 
-Paid by Polymarket is ready for a small public beta or soft launch. It is not ready for a major paid launch, broad marketing push, or official Builder Program reapplication yet.
+The historical assessment was that Paid by Polymarket was ready for a small public beta or soft launch, but not for a major paid launch, broad marketing push, or official Builder Program reapplication. Revalidate that assessment against the current gate before acting on it.
 
 ## 2. Current Public URL
 
@@ -34,7 +36,9 @@ Internal debug URL:
 
 [https://paid-by-polymarket-os.onrender.com/?debug=1](https://paid-by-polymarket-os.onrender.com/?debug=1)
 
-## 4. Final Public-Site QA Results
+## 4. Historical Public-Site QA Results — Revalidate
+
+These results were recorded previously. This documentation update did not rerun them; reverify pilot-critical journeys, forms, and mobile behavior when clearing the separate customer-pilot gate.
 
 - Homepage load: PASSED.
 - Why Paid by Polymarket section: PASSED.
@@ -50,7 +54,9 @@ Internal debug URL:
 - Mobile layout: PASSED.
 - Admin checker after interactions: PASSED.
 
-## 5. Current Proof Signals
+## 5. Historical Proof Signals — Revalidate
+
+These are earlier, undated lower-bound counts, not current evidence of recruited users, revenue, profitable demand, or buy-ready demand.
 
 - `waitlist.count`: 2+
 - `outboundClicks.count`: 3+
@@ -64,9 +70,9 @@ Internal debug URL:
 
 What these mean:
 
-- Waitlist count = early demand.
-- Outbound clicks = users opening Polymarket markets from PBP.
-- Alert signals = live intelligence layer is active.
+- Waitlist count = an earlier interest signal, not proof of demand, revenue, or purchase intent.
+- Outbound clicks = recorded market opens, not a count of unique or recruited users.
+- Alert signal count = stored records; it does not prove worker health, source freshness, or new V2 delivery.
 - Feedback count = qualitative beta feedback and user confusion signal.
 
 Do not include real emails or private data in public updates, screenshots, logs, or launch posts.
@@ -152,9 +158,9 @@ Safe language:
 - Avoid paid ads until the value proposition is clearer.
 - Collect feedback before Builder reapplication.
 
-## 13. Final Decision
+## 13. Historical Decision — Superseded for Current Pilot Clearance
 
-Decision: GO for limited public beta / soft launch.
+Historical decision: GO for limited public beta / soft launch. For current status, see the [2026-10-21 pilot readiness gate](pilot-readiness-2026-10-21.md); the customer pilot is not cleared.
 
 Not ready for:
 

@@ -2,6 +2,8 @@
 
 Simple daily and weekly operating checklist for Paid by Polymarket OS and PBP Alerts. Use this to verify the system without dumping private waitlist data.
 
+> **Current status (2026-10-21): operational checklist; milestone history needs revalidation.** Deployment and activation are complete, but fresh natural V2 durable-delivery proof is pending and the customer pilot is not cleared. Use the [2026-10-21 pilot readiness gate](pilot-readiness-2026-10-21.md) for the current decision. Completing routine checks below does not by itself close either pending gate.
+
 ## 1. Daily Admin Check
 
 - Check the protected admin status endpoint: `GET /api/admin/status`
@@ -106,7 +108,9 @@ Invoke-RestMethod -Method Get -Uri "https://paid-by-polymarket-os.onrender.com/a
 - Any Render, Supabase, or Acer reliability issues?
 - What should be improved next?
 
-## 12. Current Milestone Status
+## 12. Historical Implementation Milestones — Revalidate
+
+These milestones record shipped implementation work. They are not live-health attestations or current customer-pilot clearance.
 
 - v0.1 Alerts landing/waitlist UI live
 - v0.2 Backend waitlist route live
@@ -121,6 +125,6 @@ Invoke-RestMethod -Method Get -Uri "https://paid-by-polymarket-os.onrender.com/a
 - v1.1 Admin checker includes alert status live
 - v1.2 Acer alert worker to Render alert bridge live
 - v1.3 Homepage displays live sanitized alert signals live
-- v1.4 Public live alert feed status badge live
+- v1.4 Public saved-alert feed status UI shipped; it reports saved-alert retrieval state and is not a live receiver or worker health badge
 - v1.5 Public beta feedback collection live
 - v1.6 Advanced/internal demo sections hidden from normal public beta live
