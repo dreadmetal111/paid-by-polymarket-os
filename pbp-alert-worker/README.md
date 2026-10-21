@@ -151,6 +151,15 @@ All config lives in `alert-worker.env`.
 | `DISCORD_WEBHOOK_URL` | blank | Discord webhook secret |
 | `PBP_DISCORD_ENABLED` | `true` | Set `false` to store alerts without sending |
 | `PBP_MAX_DISCORD_ALERTS_PER_CYCLE` | `10` | Discord send cap per cycle |
+| `PBP_ALERT_MAX_PUBLIC_ALERTS_PER_CYCLE` | `5` | Combined legacy/V2 Render send budget per cycle (hard-capped at 50) |
+| `PBP_RENDER_ALERT_INGEST_URL` | blank | Render internal alert receiver URL |
+| `PBP_ALERT_INGEST_SECRET` | blank | Private bearer secret shared with the receiver |
+| `PBP_ALERT_DELIVERY_V2_ENABLED` | `false` | Enroll only newly created alerts in guarded retry delivery |
+| `PBP_ALERT_RETRY_MAX_ATTEMPTS` | `5` | Guarded delivery attempt cap (bounded 1-10) |
+| `PBP_ALERT_RETRY_TTL_SECONDS` | `900` | Original-event lifetime (bounded 60-900 seconds) |
+| `PBP_ALERT_RETRY_INITIAL_BACKOFF_SECONDS` | `30` | Initial retry delay (bounded 5-300 seconds) |
+| `PBP_ALERT_RETRY_MAX_BACKOFF_SECONDS` | `300` | Exponential backoff cap (bounded 5-300 seconds) |
+| `PBP_ALERT_RETRY_FUTURE_SKEW_SECONDS` | `60` | Maximum admitted source-clock lead (bounded 0-60 seconds to match Render) |
 | `PBP_ALERT_ON_FIRST_RUN` | `false` | First run builds a baseline instead of notifying |
 | `PBP_ALERT_COOLDOWN_MINUTES` | `60` | Per-market cooldown for movement/spike alerts |
 | `PBP_MIN_NEW_MARKET_VOLUME_24H` | `100000` | New high-volume market threshold |
@@ -168,6 +177,26 @@ All config lives in `alert-worker.env`.
 - `alerts` - generated alert objects and Discord send state
 
 The database is local state. It is safe to delete if you want a fresh baseline, but doing so removes alert history.
+
+## Guarded Render Delivery
+
+Keep `PBP_ALERT_DELIVERY_V2_ENABLED=false` until the additive Supabase columns,
+unique index, and Render receiver have been deployed and admitted first. When
+enabled, only alerts created after activation receive a V2 event identity. Old
+rows, including historical `render_status='failed'` rows, remain legacy rows and
+are not enrolled or replayed.
+
+Each guarded attempt commits its attempt number and next-attempt time before the
+network request. Retryable transport ambiguity, HTTP 408/429, invalid success
+acknowledgements, and HTTP 5xx use 30/60/120/240/300-second bounded backoff.
+Other HTTP 4xx responses are permanent. The original event time and stable event
+ID are reused, and delivery stops after five attempts or 15 minutes. See
+`docs/guarded-alert-delivery-runbook.md` from the repository root for release and
+rollback order.
+
+Guarded V2 questions and reasons are canonicalized to the public feed's 280 and
+400 UTF-16 code-unit limits. When truncation is needed, the worker keeps whole
+Unicode scalars and reserves three code units for the ASCII `...` suffix.
 
 ## Beginner-Safe Notes
 

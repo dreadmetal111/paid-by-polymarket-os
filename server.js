@@ -4,6 +4,12 @@ import crypto from "crypto";
 import fs from "fs/promises";
 import path from "path";
 import { fileURLToPath } from "url";
+import {
+  AlertDeliveryV2Error,
+  assertCanonicalAlertDeliveryV2PublicFields,
+  storeAlertDeliveryV2,
+  validateAlertDeliveryV2,
+} from "./alert-delivery-v2.js";
 
 const app = express();
 
@@ -378,6 +384,48 @@ function sanitizeOptionalPublicAlertText(value, maxLength) {
   return text || null;
 }
 
+function toWellFormedPublicAlertText(value) {
+  const text = String(value || "");
+  let result = "";
+  for (let index = 0; index < text.length; index += 1) {
+    const unit = text.charCodeAt(index);
+    if (unit >= 0xd800 && unit <= 0xdbff) {
+      const next = text.charCodeAt(index + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        result += text[index] + text[index + 1];
+        index += 1;
+      } else {
+        result += "\ufffd";
+      }
+    } else if (unit >= 0xdc00 && unit <= 0xdfff) {
+      result += "\ufffd";
+    } else {
+      result += text[index];
+    }
+  }
+  return result;
+}
+
+function sanitizePublicAlertTextV2(value, maxLength) {
+  const text = toWellFormedPublicAlertText(redactSensitivePublicText(value))
+    .replace(/\s+/g, " ")
+    .trim();
+  if (text.length <= maxLength) return text;
+  const suffix = "...";
+  const prefixBudget = maxLength - suffix.length;
+  let prefix = "";
+  for (const scalar of text) {
+    if (prefix.length + scalar.length > prefixBudget) break;
+    prefix += scalar;
+  }
+  return `${prefix.trimEnd()}${suffix}`;
+}
+
+function sanitizeOptionalPublicAlertTextV2(value, maxLength) {
+  const text = sanitizePublicAlertTextV2(value, maxLength);
+  return text || null;
+}
+
 function normalizeAlertType(value) {
   return sanitizePublicAlertText(value, 80)
     .toLowerCase()
@@ -413,6 +461,18 @@ function normalizeAlertSignalInput(body) {
     reason: sanitizeOptionalPublicAlertText(body?.reason, 400),
     severity: normalizeAlertSeverity(body?.severity),
     source: normalizeAlertSource(body?.source),
+  };
+}
+
+function normalizeAlertSignalInputV2(body) {
+  const normalized = normalizeAlertSignalInput(body);
+  return {
+    ...normalized,
+    marketQuestion: sanitizePublicAlertTextV2(
+      body?.marketQuestion ?? body?.market_question,
+      280
+    ),
+    reason: sanitizeOptionalPublicAlertTextV2(body?.reason, 400),
   };
 }
 
@@ -1125,6 +1185,13 @@ function getSupabaseAlertSignalConfig() {
     supabaseUrl,
     serviceRoleKey,
     table: ALERT_SIGNALS_TABLE,
+  };
+}
+
+function getAlertDeliveryV2Config() {
+  return {
+    ...getSupabaseAlertSignalConfig(),
+    admitted: envFlag("PBP_ALERT_INGEST_V2_ENABLED"),
   };
 }
 
@@ -5822,6 +5889,61 @@ app.post("/api/trade/submit-signed", async (req, res) => {
 
 app.post("/api/internal/alerts", async (req, res) => {
   if (!authorizeAlertIngestRequest(req, res)) return;
+
+  const guardedDeliveryKeys = [
+    "schemaVersion",
+    "eventId",
+    "fingerprint",
+    "sourceEventAt",
+    "expiresAt",
+    "schema_version",
+    "protocol_version",
+    "event_id",
+    "payload_fingerprint",
+    "source_event_at",
+    "expires_at",
+  ];
+  const isGuardedDelivery = !!(
+    req.body &&
+    typeof req.body === "object" &&
+    guardedDeliveryKeys.some((key) => Object.hasOwn(req.body, key))
+  );
+
+  if (isGuardedDelivery) {
+    const config = getAlertDeliveryV2Config();
+    if (!config.admitted) {
+      return res.status(503).json({
+        ok: false,
+        code: "protocol_not_admitted",
+        error: "Guarded alert ingestion is not enabled.",
+      });
+    }
+
+    try {
+      const payload = validateAlertDeliveryV2(req.body);
+      assertCanonicalAlertDeliveryV2PublicFields(
+        payload,
+        normalizeAlertSignalInputV2(req.body)
+      );
+      const result = await storeAlertDeliveryV2({ payload, config });
+      return res.status(result.status === "created" ? 201 : 200).json({
+        ok: true,
+        protocolVersion: 2,
+        status: result.status,
+        eventId: payload.eventId,
+      });
+    } catch (error) {
+      const guardedError = error instanceof AlertDeliveryV2Error
+        ? error
+        : new AlertDeliveryV2Error("internal_failure", 500);
+      console.error(`[alert-delivery-v2] ingest_failed:${guardedError.code}`);
+      return res.status(guardedError.status).json({
+        ok: false,
+        code: guardedError.code,
+        error: "Guarded alert delivery failed.",
+      });
+    }
+  }
 
   try {
     const alertSignal = normalizeAlertSignalInput(req.body);
