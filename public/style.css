@@ -1128,6 +1128,14 @@ button:active {
   justify-content: flex-end;
 }
 
+.pbp-latest-alert-status {
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: var(--radius-sm);
+  background: rgba(2, 8, 23, 0.44);
+  margin: 0 0 14px;
+  padding: 10px 12px;
+}
+
 .pbp-example-alert {
   background: rgba(2, 8, 23, 0.58);
 }

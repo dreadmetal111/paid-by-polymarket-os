@@ -124,6 +124,7 @@ let marketPageLinksBound = false;
 let polymarketBrowserModulesPromise = null;
 let latestAlertSignalsFallbackHtml = "";
 let latestAlertSignalTimestamp = "";
+let latestAlertSignalsLastCheckedAt = "";
 let publicConfig = {
   discordInviteEnabled: false,
   discordInviteUrl: "",
@@ -753,6 +754,7 @@ function getLatestAlertSignalsElements() {
   return {
     list: document.getElementById("pbpLatestAlertSignalsList"),
     badge: document.getElementById("pbpLatestAlertSignalsBadge"),
+    status: document.getElementById("pbpLatestAlertSignalsStatus"),
   };
 }
 
@@ -761,8 +763,8 @@ function captureLatestAlertSignalsFallback(list) {
   latestAlertSignalsFallbackHtml = list.innerHTML;
 }
 
-function restoreLatestAlertSignalsFallback() {
-  const { list, badge } = getLatestAlertSignalsElements();
+function restoreLatestAlertSignalsFallback(state = "initial", checkedAt = "") {
+  const { list, badge, status } = getLatestAlertSignalsElements();
   if (!list) return;
 
   captureLatestAlertSignalsFallback(list);
@@ -770,9 +772,23 @@ function restoreLatestAlertSignalsFallback() {
     list.innerHTML = latestAlertSignalsFallbackHtml;
   }
   if (badge) {
-    badge.textContent = "Example alerts shown";
+    badge.textContent = state === "empty"
+      ? "No saved alerts returned"
+      : state === "unavailable"
+        ? "Saved alerts unavailable"
+        : "Checking saved alerts";
     badge.classList.remove("live");
     badge.classList.add("soft");
+  }
+  if (status) {
+    const checkedLabel = checkedAt
+      ? new Date(checkedAt).toLocaleString()
+      : "not completed yet";
+    status.textContent = state === "empty"
+      ? "No saved alerts returned. Example alerts shown below."
+      : state === "unavailable"
+        ? `Could not load saved alerts. Example alerts shown below. Last attempt: ${checkedLabel}.`
+        : "Checking saved alerts. Example alerts shown below.";
   }
   latestAlertSignalTimestamp = "";
   updateMarketIntelligenceStrip();
@@ -798,18 +814,61 @@ function getAlertSeverityClass(value) {
   return "low";
 }
 
-function formatLatestAlertTimestamp(value) {
-  if (!value) return "Recent alert";
+function getLatestAlertPublicationMeta(value, nowMs = Date.now()) {
+  if (typeof value !== "string") {
+    return { timestamp: "", label: "Publication time unavailable" };
+  }
+
+  const parts = value.match(
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(Z|([+-])(\d{2}):(\d{2}))$/
+  );
+  if (!parts) return { timestamp: "", label: "Publication time unavailable" };
+
+  const year = Number(parts[1]);
+  const month = Number(parts[2]);
+  const day = Number(parts[3]);
+  const hour = Number(parts[4]);
+  const minute = Number(parts[5]);
+  const second = Number(parts[6]);
+  const offsetHour = parts[10] === undefined ? 0 : Number(parts[10]);
+  const offsetMinute = parts[11] === undefined ? 0 : Number(parts[11]);
+  const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const daysInMonth = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+  if (
+    month < 1 || month > 12 ||
+    day < 1 || day > daysInMonth[month - 1] ||
+    hour > 23 || minute > 59 || second > 59 ||
+    offsetHour > 23 || offsetMinute > 59
+  ) {
+    return { timestamp: "", label: "Publication time unavailable" };
+  }
 
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "Recent alert";
 
-  return new Intl.DateTimeFormat(undefined, {
+  const timestamp = date.getTime();
+  if (!Number.isFinite(timestamp)) {
+    return { timestamp: "", label: "Publication time unavailable" };
+  }
+  if (timestamp > nowMs) {
+    return { timestamp: "", label: "Publication time is in the future (unverified)" };
+  }
+
+  return {
+    timestamp: value,
+    instantMs: timestamp,
+    label: `Published ${new Intl.DateTimeFormat(undefined, {
+      year: "numeric",
     month: "short",
     day: "numeric",
     hour: "numeric",
     minute: "2-digit",
-  }).format(date);
+    }).format(date)}`,
+  };
+}
+
+function formatLatestAlertTimestamp(value, nowMs = Date.now()) {
+  return getLatestAlertPublicationMeta(value, nowMs).label;
 }
 
 function normalizeLatestAlertSignal(alert) {
@@ -826,7 +885,7 @@ function normalizeLatestAlertSignal(alert) {
   };
 }
 
-function renderLatestAlertSignalCard(alert) {
+function renderLatestAlertSignalCard(alert, nowMs = Date.now()) {
   const normalized = normalizeLatestAlertSignal(alert);
   const severityHtml = normalized.severity
     ? `
@@ -842,7 +901,7 @@ function renderLatestAlertSignalCard(alert) {
     <div class="alert-item pbp-example-alert pbp-live-alert">
       <div class="pbp-example-alert-topline">
         <span class="pbp-alert-type">${escapeHtml(normalized.alertType)}</span>
-        <span class="alert-time">${escapeHtml(formatLatestAlertTimestamp(normalized.createdAt))}</span>
+        <span class="alert-time">${escapeHtml(formatLatestAlertTimestamp(normalized.createdAt, nowMs))}</span>
       </div>
       <div class="alert-message">${escapeHtml(normalized.marketQuestion)}</div>
       <div class="alert-time">Reason: ${escapeHtml(normalized.reason)}</div>
@@ -852,41 +911,92 @@ function renderLatestAlertSignalCard(alert) {
 }
 
 async function loadLatestAlertSignals() {
-  const { list, badge } = getLatestAlertSignalsElements();
+  const { list, badge, status } = getLatestAlertSignalsElements();
   if (!list) return;
 
   captureLatestAlertSignalsFallback(list);
+  if (badge) {
+    badge.textContent = "Checking saved alerts";
+    badge.classList.remove("live");
+    badge.classList.add("soft");
+  }
+  if (status) {
+    status.textContent = "Checking saved alerts. Example alerts shown below.";
+  }
+
+  const controller = typeof AbortController === "function" ? new AbortController() : null;
+  let deadlineId = null;
+  const deadline = typeof window.setTimeout === "function"
+    ? new Promise((_, reject) => {
+        deadlineId = window.setTimeout(() => {
+          controller?.abort();
+          reject(new Error("Recent alerts request timed out"));
+        }, 8000);
+      })
+    : null;
 
   try {
-    const res = await fetch("/api/alerts/recent", {
-      headers: { Accept: "application/json" },
-    });
-    const data = await res.json();
+    const request = (async () => {
+      const res = await fetch("/api/alerts/recent", {
+        headers: { Accept: "application/json" },
+        ...(controller ? { signal: controller.signal } : {}),
+      });
+      if (!res.ok) throw new Error("Recent alerts request failed");
+      return res.json();
+    })();
+    const data = deadline ? await Promise.race([request, deadline]) : await request;
 
-    if (!res.ok || !data.ok || !Array.isArray(data.alerts)) {
+    if (!data || data.ok !== true || !Array.isArray(data.alerts)) {
       throw new Error("Invalid recent alerts response");
     }
+    if (data.alerts.some((alert) => (
+      !alert ||
+      typeof alert !== "object" ||
+      !String(alert.marketQuestion ?? alert.market_question ?? "").trim()
+    ))) {
+      throw new Error("Invalid recent alerts shape");
+    }
 
-    const alerts = data.alerts
-      .filter((alert) => alert && (alert.marketQuestion || alert.market_question))
-      .slice(0, PBP_LATEST_ALERT_SIGNALS_LIMIT);
+    const alerts = data.alerts.slice(0, PBP_LATEST_ALERT_SIGNALS_LIMIT);
+    const checkedAt = new Date().toISOString();
+    const checkedAtMs = new Date(checkedAt).getTime();
+    latestAlertSignalsLastCheckedAt = checkedAt;
 
     if (!alerts.length) {
-      restoreLatestAlertSignalsFallback();
+      restoreLatestAlertSignalsFallback("empty", checkedAt);
       return;
     }
 
-    latestAlertSignalTimestamp = normalizeLatestAlertSignal(alerts[0]).createdAt || "";
-    list.innerHTML = alerts.map(renderLatestAlertSignalCard).join("");
+    const latestPublication = data.alerts.reduce((latest, alert) => {
+      const publication = getLatestAlertPublicationMeta(
+        normalizeLatestAlertSignal(alert).createdAt,
+        checkedAtMs
+      );
+      return publication.timestamp && publication.instantMs > latest.instantMs
+        ? publication
+        : latest;
+    }, { timestamp: "", instantMs: Number.NEGATIVE_INFINITY });
+    latestAlertSignalTimestamp = latestPublication.timestamp;
+    list.innerHTML = alerts.map((alert) => renderLatestAlertSignalCard(alert, checkedAtMs)).join("");
     if (badge) {
-      badge.textContent = "Live alerts active";
-      badge.classList.add("live");
-      badge.classList.remove("soft");
+      badge.textContent = "Stored alerts loaded";
+      badge.classList.remove("live");
+      badge.classList.add("soft");
+    }
+    if (status) {
+      const latestPublication = latestAlertSignalTimestamp
+        ? formatLatestAlertTimestamp(latestAlertSignalTimestamp, checkedAtMs).replace(/^Published /, "")
+        : "unavailable (timestamps were missing, invalid, or future-dated)";
+      status.textContent = `Latest publication: ${latestPublication}. Last successful check: ${new Date(checkedAt).toLocaleString()}. These are saved alerts.`;
     }
     updateMarketIntelligenceStrip();
   } catch {
     console.warn("Latest alert signals unavailable; showing static examples.");
-    restoreLatestAlertSignalsFallback();
+    restoreLatestAlertSignalsFallback("unavailable", new Date().toISOString());
+  } finally {
+    if (deadlineId !== null && typeof window.clearTimeout === "function") {
+      window.clearTimeout(deadlineId);
+    }
   }
 }
 
@@ -1115,7 +1225,7 @@ function updateMarketIntelligenceStrip() {
   if (latestSignalEl) {
     latestSignalEl.textContent = latestAlertSignalTimestamp
       ? formatLatestAlertTimestamp(latestAlertSignalTimestamp)
-      : "Awaiting signal";
+      : "Not available";
   }
 }
 

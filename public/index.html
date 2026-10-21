@@ -11,7 +11,7 @@
       name="description"
       content="House of Markets helps users discover grouped market opportunities, track event signals, and open real markets on Polymarket when they are ready."
     />
-    <link rel="stylesheet" href="/style.css?v=pbp-discord-beta-1" />
+    <link rel="stylesheet" href="/style.css?v=pilot-alert-status-1" />
   </head>
   <body>
     <header id="hero">
@@ -117,7 +117,7 @@
               <strong id="marketIntelEventCount">--</strong>
             </div>
             <div class="market-intelligence-metric">
-              <span class="meta-label">Latest Signal</span>
+              <span class="meta-label">Latest Alert Publication</span>
               <strong id="marketIntelLatestSignal">Loading</strong>
             </div>
             <div class="market-intelligence-metric market-intelligence-route">
@@ -134,7 +134,7 @@
             <p class="market-small">Public beta guide</p>
             <h2 id="pbpOverviewTitle">What you can do here</h2>
             <p class="alert-time">
-              Browse active markets, watch live alert signals, join the alerts beta, and send quick feedback while the product is still small.
+              Browse active markets, review saved alert signals, join the alerts beta, and send quick feedback while the product is still small.
             </p>
           </div>
 
@@ -241,11 +241,20 @@
                 <p class="market-small">Public preview</p>
                 <h3>Latest Alert Signals</h3>
               </div>
-              <div class="pbp-alert-status-row" aria-live="polite">
-                <span id="pbpLatestAlertSignalsBadge" class="signal soft">Example alerts shown</span>
-                <span class="signal muted">Updates every 60s</span>
+              <div class="pbp-alert-status-row">
+                <span id="pbpLatestAlertSignalsBadge" class="signal soft">Checking saved alerts</span>
+                <span class="signal muted">Checks every 60s</span>
               </div>
             </div>
+
+            <p
+              id="pbpLatestAlertSignalsStatus"
+              class="pbp-latest-alert-status alert-time"
+              role="status"
+              aria-live="polite"
+            >
+              Checking saved alerts. Example alerts shown below.
+            </p>
 
             <div id="pbpLatestAlertSignalsList" class="alerts-list">
               <div class="alert-item pbp-example-alert">
@@ -593,6 +602,6 @@
       </section>
     </footer>
 
-    <script src="/app.js?v=pbp-discord-beta-1" type="module"></script>
+    <script src="/app.js?v=pilot-alert-status-1" type="module"></script>
   </body>
 </html>
