@@ -2,7 +2,7 @@
 
 Simple daily and weekly operating checklist for Paid by Polymarket OS and PBP Alerts. Use this to verify the system without dumping private waitlist data.
 
-> **Current status (2026-10-21): operational checklist; milestone history needs revalidation.** Deployment and activation are complete, but fresh natural V2 durable-delivery proof is pending and the customer pilot is not cleared. Use the [2026-10-21 pilot readiness gate](pilot-readiness-2026-10-21.md) for the current decision. Completing routine checks below does not by itself close either pending gate.
+> **Current status (2026-10-21): operational checklist; milestone history needs revalidation.** Deployment and activation are verified, and bounded natural V2 worker-to-durable-row-to-public-card delivery has now been correlated. The customer pilot is still **not cleared**: pilot-required write/journey evidence, actual release controls, backup/isolated-restore proof, and the owner availability/capacity decision remain open. Use the [2026-10-21 pilot readiness gate](pilot-readiness-2026-10-21.md) for the evidence limits and current decision. Completing routine checks below does not itself authorize outreach, trading, paid action, production changes, release approval, or pilot admission.
 
 ## 1. Daily Admin Check
 

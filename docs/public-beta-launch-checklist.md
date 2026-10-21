@@ -1,6 +1,6 @@
 # Public Beta Launch Checklist
 
-> **Current status (2026-10-21): historical checklist; needs revalidation.** The earlier `Go`, QA, and proof-count statements below record prior public-beta evidence. They do not clear the current customer pilot after recovery. Use the [2026-10-21 pilot readiness gate](pilot-readiness-2026-10-21.md) for the current decision: deployment and activation are complete, fresh natural V2 durable-delivery proof is pending, and the customer pilot is not cleared.
+> **Current status (2026-10-21): historical checklist; needs revalidation.** The earlier `Go`, QA, and proof-count statements below record prior public-beta evidence. They do not clear the current customer pilot after recovery. Deployment/activation and bounded natural V2 worker-to-durable-row-to-public-card delivery are now verified, but pilot-required write/journey evidence, actual release controls, backup/isolated-restore proof, and the owner availability/capacity decision remain open. Use the [2026-10-21 pilot readiness gate](pilot-readiness-2026-10-21.md) for the evidence limits and current decision. Customer pilot admission remains **not cleared**, and this checklist authorizes no outreach, trading, paid action, production change, or release approval.
 
 ## 1. Public Beta Status
 
