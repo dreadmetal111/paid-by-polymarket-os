@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const sourcePath = path.join(TEST_DIR, "..", "public", "app.js");
 const appSource = readFileSync(sourcePath, "utf8");
+const indexSource = readFileSync(path.join(TEST_DIR, "..", "public", "index.html"), "utf8");
 
 function extractFunction(name) {
   const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -189,52 +190,81 @@ test("shows a loading state while the saved-alert request is pending", async () 
   await loading;
 });
 
-test("historical saved rows keep publication time separate from the successful check", async () => {
+test("synthetic legacy receipt-time rows use neutral alert time separate from the successful check", async () => {
   const harness = createHarness();
+  const legacyAlert = alertAt("2020-01-02T03:04:00.000Z", "Synthetic legacy receipt-time row");
+  assert.deepEqual(Object.keys(legacyAlert).sort(), [
+    "alertType",
+    "createdAt",
+    "marketQuestion",
+    "reason",
+    "severity",
+  ]);
   harness.state.fetchImplementation = async () => response({
     ok: true,
-    alerts: [alertAt("2020-01-02T03:04:00.000Z")],
+    alerts: [legacyAlert],
   });
 
   await harness.load();
 
   const badge = harness.elements.get("pbpLatestAlertSignalsBadge");
+  const html = harness.elements.get("pbpLatestAlertSignalsList").innerHTML;
   const status = harness.elements.get("pbpLatestAlertSignalsStatus").textContent;
+  const summary = harness.elements.get("marketIntelLatestSignal").textContent;
   assert.equal(badge.textContent, "Stored alerts loaded");
   assert.equal(badge.classList.contains("live"), false);
-  assert.match(status, /Latest publication:/);
+  assert.match(html, /Alert time: /);
+  assert.doesNotMatch(html, /publication time|receipt time|source time/i);
+  assert.match(status, /Latest alert time:/);
   assert.match(status, /Last successful check:/);
   assert.match(status, /These are saved alerts\.$/);
-  assert.match(harness.elements.get("marketIntelLatestSignal").textContent, /^Published /);
+  assert.doesNotMatch(status, /publication time|receipt time|source time/i);
+  assert.match(summary, /2020/);
+  assert.doesNotMatch(summary, /alert time|publication|receipt|source/i);
+  assert.match(indexSource, /<span class="meta-label">Latest Alert Time<\/span>/);
   assert.deepEqual({ ...harness.timestamps() }, {
     latestAlertSignalTimestamp: "2020-01-02T03:04:00.000Z",
     latestAlertSignalsLastCheckedAt: "2026-10-21T12:00:00.000Z",
   });
 });
 
-test("current saved rows render safely without making a liveness claim", async () => {
+test("synthetic V2 event-time rows use the same five fields without making a liveness claim", async () => {
   const harness = createHarness();
+  const v2Alert = alertAt(
+    "2026-10-21T11:59:00.000Z",
+    '<img src=x onerror="globalThis.compromised=true">'
+  );
+  assert.deepEqual(Object.keys(v2Alert).sort(), [
+    "alertType",
+    "createdAt",
+    "marketQuestion",
+    "reason",
+    "severity",
+  ]);
   harness.state.fetchImplementation = async () => response({
     ok: true,
-    alerts: [alertAt(
-      "2026-10-21T11:59:00.000Z",
-      '<img src=x onerror="globalThis.compromised=true">'
-    )],
+    alerts: [v2Alert],
   });
 
   await harness.load();
 
   const html = harness.elements.get("pbpLatestAlertSignalsList").innerHTML;
   const badge = harness.elements.get("pbpLatestAlertSignalsBadge");
-  assert.match(html, /Published/);
+  const status = harness.elements.get("pbpLatestAlertSignalsStatus").textContent;
+  const summary = harness.elements.get("marketIntelLatestSignal").textContent;
+  assert.match(html, /Alert time: /);
   assert.match(html, /&lt;img src=x onerror=&quot;/);
   assert.doesNotMatch(html, /<img/);
   assert.equal(vm.runInContext("globalThis.compromised", harness.context), undefined);
   assert.equal(badge.classList.contains("live"), false);
   assert.doesNotMatch(
-    `${badge.textContent} ${harness.elements.get("pbpLatestAlertSignalsStatus").textContent}`,
-    /live alerts active|healthy|worker|feed/i
+    `${badge.textContent} ${status}`,
+    /live alerts active|healthy|worker|feed|publication time|receipt time|source time/i
   );
+  assert.match(status, /Latest alert time:/);
+  assert.match(status, /Last successful check:/);
+  assert.match(summary, /2026/);
+  assert.doesNotMatch(summary, /alert time|publication|receipt|source/i);
 });
 
 test("a valid empty response is quiet, successful, and restores labeled examples", async () => {
@@ -281,7 +311,7 @@ test("HTTP, JSON, and response-shape failures are unavailable states", async (t)
   }
 });
 
-test("invalid and future timestamps never become the latest publication", async () => {
+test("invalid and future timestamps never become the latest alert time", async () => {
   const harness = createHarness();
   harness.state.fetchImplementation = async () => response({
     ok: true,
@@ -294,10 +324,10 @@ test("invalid and future timestamps never become the latest publication", async 
   await harness.load();
 
   const html = harness.elements.get("pbpLatestAlertSignalsList").innerHTML;
-  assert.match(html, /Publication time unavailable/);
-  assert.match(html, /Publication time is in the future \(unverified\)/);
+  assert.match(html, /Alert time unavailable/);
+  assert.match(html, /Alert time is in the future \(unverified\)/);
   assert.equal(harness.timestamps().latestAlertSignalTimestamp, "");
-  assert.match(harness.elements.get("pbpLatestAlertSignalsStatus").textContent, /Latest publication: unavailable/);
+  assert.match(harness.elements.get("pbpLatestAlertSignalsStatus").textContent, /Latest alert time: unavailable/);
   assert.equal(harness.elements.get("marketIntelLatestSignal").textContent, "Not available");
 });
 
@@ -325,12 +355,12 @@ test("impossible, coercible, zoneless, and invalid time or offset values stay un
 
       const html = harness.elements.get("pbpLatestAlertSignalsList").innerHTML;
       assert.ok(html.toLowerCase().includes(`${name} row`.toLowerCase()));
-      assert.match(html, /Publication time unavailable/);
+      assert.match(html, /Alert time unavailable/);
       assert.equal(harness.timestamps().latestAlertSignalTimestamp, "");
       assert.equal(harness.elements.get("marketIntelLatestSignal").textContent, "Not available");
       assert.match(
         harness.elements.get("pbpLatestAlertSignalsStatus").textContent,
-        /^Latest publication: unavailable/
+        /^Latest alert time: unavailable/
       );
     });
   }
@@ -354,10 +384,10 @@ test("valid leap-day and Supabase microsecond UTC forms populate cards and the s
 
       const html = harness.elements.get("pbpLatestAlertSignalsList").innerHTML;
       assert.ok(html.toLowerCase().includes(`${name} row`.toLowerCase()));
-      assert.match(html, /Published/);
-      assert.doesNotMatch(html, /Publication time unavailable|unverified/);
+      assert.match(html, /Alert time: /);
+      assert.doesNotMatch(html, /Alert time unavailable|unverified/);
       assert.equal(harness.timestamps().latestAlertSignalTimestamp, createdAt);
-      assert.match(harness.elements.get("marketIntelLatestSignal").textContent, /^Published /);
+      assert.doesNotMatch(harness.elements.get("marketIntelLatestSignal").textContent, /^Alert time: /);
       assert.match(
         harness.elements.get("pbpLatestAlertSignalsStatus").textContent,
         /Last successful check: .* These are saved alerts\.$/
@@ -366,7 +396,7 @@ test("valid leap-day and Supabase microsecond UTC forms populate cards and the s
   }
 });
 
-test("mixed invalid and current valid rows select the latest genuine publication", async () => {
+test("mixed invalid and current valid rows select the latest genuine alert time", async () => {
   const harness = createHarness();
   harness.state.fetchImplementation = async () => response({
     ok: true,
@@ -380,13 +410,13 @@ test("mixed invalid and current valid rows select the latest genuine publication
   await harness.load();
 
   const html = harness.elements.get("pbpLatestAlertSignalsList").innerHTML;
-  assert.match(html, /Impossible newest-looking row[\s\S]*Publication time unavailable|Publication time unavailable[\s\S]*Impossible newest-looking row/);
+  assert.match(html, /Impossible newest-looking row[\s\S]*Alert time unavailable|Alert time unavailable[\s\S]*Impossible newest-looking row/);
   assert.match(html, /Current valid row/);
   assert.deepEqual({ ...harness.timestamps() }, {
     latestAlertSignalTimestamp: "2026-10-21T11:59:00.654321+00:00",
     latestAlertSignalsLastCheckedAt: "2026-10-21T12:00:00.000Z",
   });
-  assert.match(harness.elements.get("marketIntelLatestSignal").textContent, /^Published /);
+  assert.doesNotMatch(harness.elements.get("marketIntelLatestSignal").textContent, /^Alert time: /);
   assert.doesNotMatch(harness.elements.get("marketIntelLatestSignal").textContent, /unavailable|unverified/i);
 });
 
@@ -409,8 +439,15 @@ test("success to error to success clears stale state and recovers", async () => 
 
   harness.setNow("2026-10-21T12:02:00.000Z");
   await harness.load();
-  assert.match(harness.elements.get("pbpLatestAlertSignalsList").innerHTML, /Recovered saved row/);
-  assert.doesNotMatch(harness.elements.get("pbpLatestAlertSignalsList").innerHTML, /First saved row/);
+  const recoveredHtml = harness.elements.get("pbpLatestAlertSignalsList").innerHTML;
+  const recoveredStatus = harness.elements.get("pbpLatestAlertSignalsStatus").textContent;
+  const recoveredSummary = harness.elements.get("marketIntelLatestSignal").textContent;
+  assert.match(recoveredHtml, /Recovered saved row/);
+  assert.match(recoveredHtml, /Alert time: /);
+  assert.doesNotMatch(recoveredHtml, /First saved row|publication time|receipt time|source time/i);
+  assert.match(recoveredStatus, /^Latest alert time: .* Last successful check: /);
+  assert.match(recoveredSummary, /2025/);
+  assert.doesNotMatch(recoveredSummary, /alert time|publication|receipt|source/i);
   assert.equal(harness.elements.get("pbpLatestAlertSignalsBadge").textContent, "Stored alerts loaded");
   assert.equal(harness.timestamps().latestAlertSignalsLastCheckedAt, "2026-10-21T12:02:00.000Z");
 });

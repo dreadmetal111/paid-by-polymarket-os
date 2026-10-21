@@ -816,13 +816,13 @@ function getAlertSeverityClass(value) {
 
 function getLatestAlertPublicationMeta(value, nowMs = Date.now()) {
   if (typeof value !== "string") {
-    return { timestamp: "", label: "Publication time unavailable" };
+    return { timestamp: "", label: "Alert time unavailable" };
   }
 
   const parts = value.match(
     /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(Z|([+-])(\d{2}):(\d{2}))$/
   );
-  if (!parts) return { timestamp: "", label: "Publication time unavailable" };
+  if (!parts) return { timestamp: "", label: "Alert time unavailable" };
 
   const year = Number(parts[1]);
   const month = Number(parts[2]);
@@ -841,23 +841,23 @@ function getLatestAlertPublicationMeta(value, nowMs = Date.now()) {
     hour > 23 || minute > 59 || second > 59 ||
     offsetHour > 23 || offsetMinute > 59
   ) {
-    return { timestamp: "", label: "Publication time unavailable" };
+    return { timestamp: "", label: "Alert time unavailable" };
   }
 
   const date = new Date(value);
 
   const timestamp = date.getTime();
   if (!Number.isFinite(timestamp)) {
-    return { timestamp: "", label: "Publication time unavailable" };
+    return { timestamp: "", label: "Alert time unavailable" };
   }
   if (timestamp > nowMs) {
-    return { timestamp: "", label: "Publication time is in the future (unverified)" };
+    return { timestamp: "", label: "Alert time is in the future (unverified)" };
   }
 
   return {
     timestamp: value,
     instantMs: timestamp,
-    label: `Published ${new Intl.DateTimeFormat(undefined, {
+    label: `Alert time: ${new Intl.DateTimeFormat(undefined, {
       year: "numeric",
     month: "short",
     day: "numeric",
@@ -985,9 +985,9 @@ async function loadLatestAlertSignals() {
     }
     if (status) {
       const latestPublication = latestAlertSignalTimestamp
-        ? formatLatestAlertTimestamp(latestAlertSignalTimestamp, checkedAtMs).replace(/^Published /, "")
+        ? formatLatestAlertTimestamp(latestAlertSignalTimestamp, checkedAtMs).replace(/^Alert time: /, "")
         : "unavailable (timestamps were missing, invalid, or future-dated)";
-      status.textContent = `Latest publication: ${latestPublication}. Last successful check: ${new Date(checkedAt).toLocaleString()}. These are saved alerts.`;
+      status.textContent = `Latest alert time: ${latestPublication}. Last successful check: ${new Date(checkedAt).toLocaleString()}. These are saved alerts.`;
     }
     updateMarketIntelligenceStrip();
   } catch {
@@ -1224,7 +1224,7 @@ function updateMarketIntelligenceStrip() {
   }
   if (latestSignalEl) {
     latestSignalEl.textContent = latestAlertSignalTimestamp
-      ? formatLatestAlertTimestamp(latestAlertSignalTimestamp)
+      ? formatLatestAlertTimestamp(latestAlertSignalTimestamp).replace(/^Alert time: /, "")
       : "Not available";
   }
 }
