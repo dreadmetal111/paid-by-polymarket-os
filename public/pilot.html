@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <meta name="description" content="Owner-only House of Markets read-only discovery rehearsal.">
+    <title>Discovery rehearsal | House of Markets</title>
+    <link rel="stylesheet" href="/pilot.css">
+    <script src="/pilot.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#marketBoard">Skip to market discovery</a>
+
+    <header class="site-header">
+      <a class="brand" href="/pilot.html" aria-label="House of Markets discovery rehearsal home">
+        <span class="brand-mark" aria-hidden="true">HM</span>
+        <span><strong>House of Markets</strong><small>Read-only discovery rehearsal</small></span>
+      </a>
+      <span class="rehearsal-badge">Owner-only · not admitted</span>
+    </header>
+
+    <main>
+      <section class="hero" aria-labelledby="pageTitle">
+        <div>
+          <p class="eyebrow">Small owner rehearsal</p>
+          <h1 id="pageTitle">Find the market signal worth understanding.</h1>
+          <p class="hero-copy">Scan public market prices and saved alert explanations. This view is read-only: no account, tracking, notification, or trading action is available here.</p>
+        </div>
+        <button id="refreshButton" class="refresh-button" type="button">Refresh data</button>
+      </section>
+
+      <aside class="task-guide" aria-labelledby="taskGuideTitle">
+        <div>
+          <p class="eyebrow">Three-task guide</p>
+          <h2 id="taskGuideTitle">Try the whole read in a few minutes</h2>
+        </div>
+        <ol>
+          <li><span>1</span>Find one interesting market, filter by its actual category, then return to All.</li>
+          <li><span>2</span>Open its details. Compare probability, movement, volume, and liquidity; say why it stood out. Close it.</li>
+          <li><span>3</span>Read a saved alert and explain why it was saved. Keep Alert time separate from Last successful check.</li>
+        </ol>
+      </aside>
+
+      <section id="marketBoard" class="panel" aria-labelledby="marketTitle">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Market discovery</p>
+            <h2 id="marketTitle">Active market scan</h2>
+            <p>YES probability is price-derived implied probability, not forecast confidence. Activity figures describe the feed; they do not promise returns or ranking performance.</p>
+          </div>
+          <div class="time-stack" aria-label="Market data timing">
+            <span>API data timestamp</span>
+            <strong id="marketDataTime">Unavailable</strong>
+            <span>Last successful check</span>
+            <strong id="marketCheckTime">Not checked yet</strong>
+          </div>
+        </div>
+
+        <div id="marketStatus" class="source-status" role="status" aria-live="polite">Loading markets…</div>
+        <div id="marketRetention" class="retention-note" hidden>Showing last-known market data.</div>
+
+        <div class="filter-wrap" aria-labelledby="categoryLabel">
+          <span id="categoryLabel">Category in shown markets</span>
+          <div id="categoryFilters" class="category-filters" role="group" aria-labelledby="categoryLabel"></div>
+        </div>
+
+        <div id="marketResults" class="market-grid" aria-live="polite" aria-busy="true"></div>
+      </section>
+
+      <section class="panel alerts-panel" aria-labelledby="alertsTitle">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Saved alerts</p>
+            <h2 id="alertsTitle">Why a signal was kept</h2>
+            <p>These are stored public alert records when available—not live notifications, examples, universal coverage, or worker-health proof.</p>
+          </div>
+          <div class="time-stack" aria-label="Alert data timing">
+            <span>API data timestamp</span>
+            <strong id="alertDataTime">Unavailable</strong>
+            <span>Last successful check</span>
+            <strong id="alertCheckTime">Not checked yet</strong>
+          </div>
+        </div>
+
+        <div id="alertStatus" class="source-status" role="status" aria-live="polite">Loading saved alerts…</div>
+        <div id="alertRetention" class="retention-note" hidden>Showing last-known saved alerts.</div>
+        <div id="alertResults" class="alert-list" aria-live="polite" aria-busy="true"></div>
+      </section>
+
+      <aside class="review-prompt" aria-labelledby="reviewTitle">
+        <p class="eyebrow">Manual review prompt</p>
+        <h2 id="reviewTitle">Before you leave</h2>
+        <p>Could you explain the selected market without calling its price a confidence score? What made the saved alert understandable—or confusing? Would this scan be useful enough to revisit?</p>
+      </aside>
+    </main>
+
+    <footer>
+      <p>Rehearsal only. Pilot admission, release, recovery, and availability remain pending review. Production is unchanged.</p>
+    </footer>
+
+    <div id="detailBackdrop" class="dialog-backdrop" hidden>
+      <section id="marketDetail" class="detail-dialog" role="dialog" aria-modal="true" aria-labelledby="detailTitle" aria-describedby="detailIntro" tabindex="-1">
+        <div class="detail-topline">
+          <span id="detailCategory" class="category-pill"></span>
+          <button id="detailClose" class="icon-button" type="button" aria-label="Close market details">Close</button>
+        </div>
+        <p id="detailEvent" class="event-title"></p>
+        <h2 id="detailTitle"></h2>
+        <p id="detailIntro" class="detail-intro">Compare the price-derived probability with the available activity figures.</p>
+        <div id="detailMetrics" class="detail-metrics"></div>
+        <div class="why-panel">
+          <h3>Why it may stand out</h3>
+          <p id="detailWhy"></p>
+        </div>
+        <p id="detailTime" class="detail-time"></p>
+        <p class="detail-caveat">A market price can change and is not a forecast guarantee, recommendation, or promise of returns.</p>
+      </section>
+    </div>
+  </body>
+</html>
